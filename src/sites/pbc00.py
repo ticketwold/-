@@ -38,7 +38,16 @@ class Pbc00Adapter(SiteAdapter):
     "bet_slip": ".bet-slip, .betslip, #betSlip",
     "stake_input": "input[name='stake'], input.bet-amount, #betAmount",
     "bet_confirm": ".btn-bet, .confirm-bet, #placeBet",
+    # 10벳 진입 버튼/메뉴 (사이트마다 다를 수 있음)
+    "tenbet_entry": (
+      "a:has-text('10벳'), button:has-text('10벳'), "
+      "a:has-text('10BET'), button:has-text('10BET'), "
+      "a:has-text('10bet'), .tenbet, .btn-10bet, "
+      "[data-provider='10bet'], [data-game='10bet']"
+    ),
   }
+
+  DEFAULT_NAV_TEXTS = ["10벳", "10BET", "10bet", "10 벳", "텐벳"]
 
   def __init__(
     self,
@@ -50,6 +59,7 @@ class Pbc00Adapter(SiteAdapter):
     cookies_path: str = "",
     headless: bool = False,
     selectors: dict[str, str] | None = None,
+    navigation_texts: list[str] | None = None,
     **kwargs,
   ):
     super().__init__(name, **kwargs)
@@ -60,6 +70,7 @@ class Pbc00Adapter(SiteAdapter):
     self.cookies_path = cookies_path
     self.headless = headless
     self.selectors = {**self.DEFAULT_SELECTORS, **(selectors or {})}
+    self.navigation_texts = navigation_texts or self.DEFAULT_NAV_TEXTS
     self._browser = None
     self._page = None
     self._playwright = None
@@ -126,6 +137,8 @@ class Pbc00Adapter(SiteAdapter):
       if self.username and self.password:
         await self._login()
 
+      await self._navigate_to_tenbet()
+
       self._logged_in = True
       logger.info("[%s] 연결 완료", self.name)
       return True
@@ -180,6 +193,111 @@ class Pbc00Adapter(SiteAdapter):
       await page.context.storage_state(path=self.cookies_path)
       logger.info("[%s] 세션 저장: %s", self.name, self.cookies_path)
 
+  async def _navigate_to_tenbet(self) -> bool:
+    """10벳 스포츠북 메뉴 진입 — 경기 목록이 표시되는 화면으로 이동."""
+    page = self._page
+    logger.info("[%s] 10벳 메뉴 진입 시도...", self.name)
+
+    # 1) CSS 셀렉터로 클릭
+    tenbet_sel = self.selectors.get("tenbet_entry", "")
+    for sel in tenbet_sel.split(", "):
+      sel = sel.strip()
+      if not sel:
+        continue
+      try:
+        loc = page.locator(sel)
+        if await loc.count() > 0:
+          await loc.first.click(timeout=5000)
+          await page.wait_for_timeout(3000)
+          logger.info("[%s] 10벳 진입 (셀렉터: %s)", self.name, sel)
+          await self._wait_for_match_content()
+          return True
+      except Exception as e:
+        logger.debug("[%s] 셀렉터 실패 %s: %s", self.name, sel, e)
+
+    # 2) 텍스트로 클릭 (메인 페이지 + iframe)
+    for text in self.navigation_texts:
+      clicked = await self._click_by_text(text)
+      if clicked:
+        logger.info("[%s] 10벳 진입 (텍스트: %s)", self.name, text)
+        await self._wait_for_match_content()
+        return True
+
+    # 3) iframe 내부 탐색
+    for frame in page.frames:
+      if frame == page.main_frame:
+        continue
+      for text in self.navigation_texts:
+        try:
+          loc = frame.get_by_text(text, exact=False)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=5000)
+            await page.wait_for_timeout(3000)
+            logger.info("[%s] 10벳 진입 (iframe, 텍스트: %s)", self.name, text)
+            await self._wait_for_match_content()
+            return True
+        except Exception:
+          pass
+
+    logger.warning(
+      "[%s] 10벳 메뉴를 찾지 못했습니다. "
+      "settings.yaml 의 selectors.tenbet_entry 를 확인하세요.",
+      self.name,
+    )
+    return False
+
+  async def _click_by_text(self, text: str) -> bool:
+    """페이지 및 iframe에서 텍스트 클릭."""
+    page = self._page
+    targets = [page] + [f for f in page.frames if f != page.main_frame]
+
+    for target in targets:
+      try:
+        loc = target.get_by_text(text, exact=False)
+        if await loc.count() > 0:
+          await loc.first.click(timeout=5000)
+          await page.wait_for_timeout(2000)
+          return True
+      except Exception:
+        pass
+
+      try:
+        loc = target.get_by_role("link", name=re.compile(text, re.I))
+        if await loc.count() > 0:
+          await loc.first.click(timeout=5000)
+          await page.wait_for_timeout(2000)
+          return True
+      except Exception:
+        pass
+
+    return False
+
+  async def _wait_for_match_content(self, timeout_ms: int = 15000) -> None:
+    """경기 목록 또는 배당 요소가 로드될 때까지 대기."""
+    page = self._page
+    wait_selectors = [
+      self.selectors.get("match_row", "").split(", ")[0],
+      ".odds", "[class*='odds']", "[class*='match']",
+      "table", ".game-list", ".event",
+    ]
+    for sel in wait_selectors:
+      if not sel or not sel.strip():
+        continue
+      try:
+        await page.wait_for_selector(sel.strip(), timeout=timeout_ms)
+        logger.debug("[%s] 콘텐츠 로드 확인: %s", self.name, sel)
+        return
+      except Exception:
+        pass
+
+    await page.wait_for_timeout(3000)
+
+  def _active_pages(self) -> list:
+    """스크래핑 대상 페이지 목록 (메인 + iframe)."""
+    if not self._page:
+      return []
+    return [self._page] + [f for f in self._page.frames if f != self._page.main_frame]
+
   async def disconnect(self) -> None:
     if self._browser:
       await self._browser.close()
@@ -194,8 +312,22 @@ class Pbc00Adapter(SiteAdapter):
     self._captured_api_data.clear()
 
     url = self._build_url()
-    await self._page.goto(url, wait_until="networkidle", timeout=60000)
+    await self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
     await self._page.wait_for_timeout(2000)
+
+    if self.username and self.password:
+      await self._login()
+
+    await self._navigate_to_tenbet()
+    await self._page.wait_for_timeout(3000)
+
+    # 페이지 스크린샷 (디버그용)
+    try:
+      Path("config").mkdir(exist_ok=True)
+      await self._page.screenshot(path="config/pbc00_debug.png", full_page=True)
+      logger.debug("[%s] 스크린샷 저장: config/pbc00_debug.png", self.name)
+    except Exception:
+      pass
 
     # 1) API 캡처 데이터에서 파싱 시도
     api_results = self._parse_api_data()
@@ -333,9 +465,20 @@ class Pbc00Adapter(SiteAdapter):
     return round(value, 3)  # 유럽식
 
   async def _scrape_dom(self) -> list[MatchOdds]:
-    """DOM에서 배당 스크래핑."""
+    """DOM에서 배당 스크래핑 (메인 페이지 + iframe)."""
     results: list[MatchOdds] = []
-    page = self._page
+
+    for target in self._active_pages():
+      page_results = await self._scrape_dom_from_page(target)
+      if page_results:
+        results.extend(page_results)
+        logger.info("[%s] DOM %d개 마켓 (frame: %s)", self.name, len(page_results), target.url[:60])
+
+    return results
+
+  async def _scrape_dom_from_page(self, page) -> list[MatchOdds]:
+    """단일 페이지/iframe에서 배당 스크래핑."""
+    results: list[MatchOdds] = []
 
     for row_sel in self.selectors["match_row"].split(", "):
       rows = page.locator(row_sel)
@@ -466,9 +609,26 @@ class Pbc00Adapter(SiteAdapter):
     if not self._page:
       return {}
 
+    await self._navigate_to_tenbet()
+    await self._page.wait_for_timeout(3000)
+
+    # 10벳 관련 클릭 가능 요소 수집
+    clickable_texts: list[str] = []
+    for text in self.navigation_texts + ["스포츠", "축구", "Soccer", "Football"]:
+      for target in self._active_pages():
+        try:
+          loc = target.get_by_text(text, exact=False)
+          count = await loc.count()
+          if count > 0:
+            clickable_texts.append(f"{text} (x{count})")
+        except Exception:
+          pass
+
     discovery = {
       "url": self._page.url,
       "title": await self._page.title(),
+      "frames": [f.url for f in self._page.frames],
+      "tenbet_clickable": clickable_texts,
       "api_calls": [
         {"url": c["url"], "sample": json.dumps(c["data"], ensure_ascii=False)[:500]}
         for c in self._captured_api_data[:20]

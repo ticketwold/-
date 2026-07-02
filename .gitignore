@@ -4,6 +4,7 @@ __pycache__/
 .env
 config/settings.yaml
 config/pbc00_session.json
+config/pbc00_debug.png
 .venv/
 venv/
 scripts/*.png

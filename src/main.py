@@ -54,6 +54,7 @@ def create_adapter(config):
       page_url=getattr(config, "page_url", ""),
       cookies_path=config.cookies_path,
       headless=config.headless,
+      navigation_texts=getattr(config, "navigation_texts", None),
       selectors=config.selectors or None,
     )
 
