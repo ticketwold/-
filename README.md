@@ -19,13 +19,35 @@
 
 ## 설치
 
-```bash
+### Windows
+
+```powershell
+# 1. 프로젝트 폴더로 이동 (git clone 한 위치)
+cd C:\Users\user\경로\프로젝트폴더
+
+# 2. 설정 파일 생성 (아래 중 하나)
+Copy-Item config\settings.yaml.example config\settings.yaml
+# 또는
+.\scripts\setup.ps1
+
+# 3. 패키지 설치
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 playwright install chromium
-
-cp config/settings.yaml.example config/settings.yaml
 ```
+
+### macOS / Linux
+
+```bash
+cd /path/to/project
+cp config/settings.yaml.example config/settings.yaml
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+playwright install chromium
+```
+
+> **주의**: `cp` 또는 `Copy-Item`은 **프로젝트 루트 폴더**에서 실행해야 합니다.
+> `C:\Users\user` 같은 홈 폴더에서는 `config` 폴더가 없어 오류가 납니다.
 
 ## 사용법
 
