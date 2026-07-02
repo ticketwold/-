@@ -22,9 +22,12 @@ def normalize_team(name: str) -> str:
   return re.sub(r"\s+", " ", name).strip()
 
 
-def match_key(home_team: str, away_team: str) -> str:
-  """두 팀명으로 고유 매칭 키 생성 (순서 무관)."""
+def match_key(home_team: str, away_team: str, sport: str = "") -> str:
+  """두 팀명(+종목)으로 고유 매칭 키 생성 (순서 무관)."""
   teams = sorted([normalize_team(home_team), normalize_team(away_team)])
+  sport_key = sport.strip().lower()
+  if sport_key:
+    return f"{sport_key}|{teams[0]}|{teams[1]}"
   return f"{teams[0]}|{teams[1]}"
 
 

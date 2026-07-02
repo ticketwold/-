@@ -56,7 +56,7 @@ class ArbitrageCalculator:
   ) -> dict[str, list[MatchOdds]]:
     index: dict[str, list[MatchOdds]] = {}
     for mo in odds_list:
-      key = match_key(mo.match.home_team, mo.match.away_team)
+      key = match_key(mo.match.home_team, mo.match.away_team, mo.match.sport)
       index.setdefault(key, []).append(mo)
     return index
 

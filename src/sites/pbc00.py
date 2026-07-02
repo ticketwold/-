@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlparse, parse_qs
 
 from ..models.match import Match, MatchOdds
 from ..models.odds import MarketType, Odds, Outcome
+from ..utils.sports import SUPPORTED_SPORT_KEYS, default_sport_pages, get_sport
 from .base import SiteAdapter
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ class Pbc00Adapter(SiteAdapter):
     navigation_clicks: list[str] | None = None,
     selectors: dict[str, str] | None = None,
     navigation_texts: list[str] | None = None,
+    sport_pages: dict[str, dict] | None = None,
     **kwargs,
   ):
     super().__init__(name, **kwargs)
@@ -98,6 +100,8 @@ class Pbc00Adapter(SiteAdapter):
     self.game_child_seq = game_child_seq
     self.event = event
     self.page_url = page_url or self.DEFAULT_GAME_URL
+    self.sport_pages = self._merge_sport_pages(sport_pages)
+    self._current_sport = "football"
     self.cookies_path = cookies_path
     self.headless = headless
     self.manual_login = manual_login
@@ -115,8 +119,74 @@ class Pbc00Adapter(SiteAdapter):
     self._captured_api_data: list[dict] = []
     self._balance = 0.0
 
-  def _build_url(self, event: str | None = None) -> str:
+  def _merge_sport_pages(self, overrides: dict[str, dict] | None) -> dict[str, dict]:
+    """기본 종목 URL + settings.yaml sport_pages 병합."""
+    base_url = self.base_url or "https://pbc00.com"
+    merged = default_sport_pages(base_url)
+
+    # 레거시 단일 page_url/gamecode → football에 반영
+    if self.page_url and self.page_url != self.DEFAULT_GAME_URL:
+      merged["football"]["page_url"] = self.page_url
+    if self.gamecode:
+      merged["football"]["gamecode"] = self.gamecode
+    if self.game_child_seq:
+      merged["football"]["game_child_seq"] = self.game_child_seq
+    if self.event:
+      merged["football"]["event"] = self.event
+    if merged["football"]["page_url"]:
+      merged["football"]["enabled"] = True
+
+    for sport_key, page_cfg in (overrides or {}).items():
+      if sport_key not in merged:
+        merged[sport_key] = {
+          "enabled": True,
+          "gamecode": "",
+          "game_child_seq": "",
+          "event": "N",
+          "page_url": "",
+        }
+      if isinstance(page_cfg, dict):
+        merged[sport_key].update({k: v for k, v in page_cfg.items() if v is not None})
+      else:
+        merged[sport_key].update(page_cfg.model_dump(exclude_none=True))
+
+    return merged
+
+  def _sport_page_config(self, sport: str) -> dict | None:
+    """종목별 페이지 설정. URL이 없으면 None."""
+    cfg = self.sport_pages.get(sport)
+    if not cfg or not cfg.get("enabled", True):
+      return None
+
+    page_url = (cfg.get("page_url") or "").strip()
+    gamecode = (cfg.get("gamecode") or "").strip()
+    game_child_seq = (cfg.get("game_child_seq") or "").strip()
+    event = cfg.get("event") or "N"
+
+    if not page_url and gamecode and game_child_seq:
+      base = self.base_url.rstrip("/") if self.base_url else "https://pbc00.com"
+      page_url = (
+        f"{base}/game/newDetail/0"
+        f"?gamecode={gamecode}&game_child_seq={game_child_seq}&event={event}"
+      )
+
+    if not page_url:
+      return None
+
+    return {
+      "gamecode": gamecode,
+      "game_child_seq": game_child_seq,
+      "event": event,
+      "page_url": page_url,
+    }
+
+  def _build_url(self, event: str | None = None, sport: str | None = None) -> str:
     """필수 게임 URL 생성."""
+    sport_key = sport or self._current_sport
+    page_cfg = self._sport_page_config(sport_key)
+    if page_cfg:
+      return page_cfg["page_url"]
+
     if self.page_url and not event:
       return self.page_url
     params = {
@@ -127,9 +197,11 @@ class Pbc00Adapter(SiteAdapter):
     base = self.base_url.rstrip("/") if self.base_url else "https://pbc00.com"
     return f"{base}/game/newDetail/0?{urlencode(params)}"
 
-  async def _goto_game_page(self) -> None:
+  async def _goto_game_page(self, sport: str | None = None) -> None:
     """10벳 게임 URL로 접속 (이 URL 자체가 10벳 경기 목록)."""
-    game_url = self._build_url()
+    if sport:
+      self._current_sport = sport
+    game_url = self._build_url(sport=sport)
     logger.info("[%s] 10벳 URL 접속: %s", self.name, game_url)
 
     # networkidle 은 배팅 사이트에서 무한 대기 → domcontentloaded 사용
@@ -188,7 +260,11 @@ class Pbc00Adapter(SiteAdapter):
       self._page.on("response", self._on_response)
 
       # ★ 반드시 게임 URL로 진입 (로그인도 이 페이지에서)
-      await self._goto_game_page()
+      first_sport = next(
+        (s for s in SUPPORTED_SPORT_KEYS if self._sport_page_config(s)),
+        "football",
+      )
+      await self._goto_game_page(sport=first_sport)
 
       if await self._is_cloudflare_blocked():
         logger.error(
@@ -733,14 +809,43 @@ class Pbc00Adapter(SiteAdapter):
     if not self._page:
       return []
 
+    target_sports = sports or SUPPORTED_SPORT_KEYS
+    all_results: list[MatchOdds] = []
+
+    for sport in target_sports:
+      if sport not in self.sport_pages and not self._sport_page_config(sport):
+        sport_def = get_sport(sport)
+        if sport_def and not sport_def.pbc00_page_url(self.base_url or "https://pbc00.com"):
+          logger.debug("[%s] %s: pbc00 URL 미설정 — 건너뜀", self.name, sport)
+          continue
+
+      page_cfg = self._sport_page_config(sport)
+      if not page_cfg:
+        logger.warning(
+          "[%s] %s: sport_pages에 gamecode/page_url을 설정하세요",
+          self.name, sport,
+        )
+        continue
+
+      sport_odds = await self._fetch_odds_for_sport(sport)
+      all_results.extend(sport_odds)
+      logger.info("[%s] %s: %d개 마켓", self.name, sport, len(sport_odds))
+
+    if not all_results:
+      logger.warning("[%s] 배당 데이터를 찾지 못했습니다", self.name)
+
+    return all_results
+
+  async def _fetch_odds_for_sport(self, sport: str) -> list[MatchOdds]:
+    """단일 종목 페이지에서 배당 수집."""
+    self._current_sport = sport
     self._captured_api_data.clear()
 
-    # 매번 게임 URL로 접속
-    await self._goto_game_page()
+    await self._goto_game_page(sport=sport)
 
     if not await self._is_logged_in():
       await self._ensure_logged_in()
-      await self._goto_game_page()
+      await self._goto_game_page(sport=sport)
 
     if not self.skip_tenbet_navigation:
       await self._navigate_to_tenbet()
@@ -748,42 +853,38 @@ class Pbc00Adapter(SiteAdapter):
     await self._wait_for_content_load()
     await self._page.wait_for_timeout(2000)
 
-    # 페이지 스크린샷 (디버그용)
     try:
       Path("config").mkdir(exist_ok=True)
-      await self._page.screenshot(path="config/pbc00_debug.png", full_page=True)
-      logger.debug("[%s] 스크린샷 저장: config/pbc00_debug.png", self.name)
+      await self._page.screenshot(
+        path=f"config/pbc00_debug_{sport}.png", full_page=True,
+      )
+      logger.debug("[%s] 스크린샷: config/pbc00_debug_%s.png", self.name, sport)
     except Exception:
       pass
 
-    # 1) API 캡처 데이터에서 파싱 시도
     api_results = self._parse_api_data()
     if api_results:
-      logger.info("[%s] API에서 %d개 마켓 파싱", self.name, len(api_results))
+      logger.info("[%s] %s API %d개 마켓", self.name, sport, len(api_results))
       return api_results
 
-    # 2) DOM 스크래핑
     dom_results = await self._scrape_dom()
     if dom_results:
-      logger.info("[%s] DOM에서 %d개 마켓 파싱", self.name, len(dom_results))
+      logger.info("[%s] %s DOM %d개 마켓", self.name, sport, len(dom_results))
       return dom_results
 
-    # 3) 텍스트 기반 범용 스크래핑
     generic = await self._scrape_dom_generic()
     if generic:
-      logger.info("[%s] 텍스트 파싱 %d개 마켓", self.name, len(generic))
+      logger.info("[%s] %s 텍스트 %d개 마켓", self.name, sport, len(generic))
       return generic
 
-    logger.warning("[%s] 배당 데이터를 찾지 못했습니다", self.name)
-    await self._save_debug_screenshot("no_odds")
+    await self._save_debug_screenshot(f"no_odds_{sport}")
     await self._dump_clickable_elements()
-    # 캡처된 API URL 목록 저장 (디버그)
     api_urls = [c["url"] for c in self._captured_api_data]
-    path = Path("config/pbc00_api_urls.json")
+    path = Path(f"config/pbc00_api_urls_{sport}.json")
     path.parent.mkdir(exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
       json.dump(api_urls, f, ensure_ascii=False, indent=2)
-    logger.info("[%s] API URL %d개 저장: %s", self.name, len(api_urls), path)
+    logger.info("[%s] %s API URL %d개 저장: %s", self.name, sport, len(api_urls), path)
     return []
 
   def _parse_api_data(self) -> list[MatchOdds]:
@@ -857,7 +958,7 @@ class Pbc00Adapter(SiteAdapter):
     match_id = str(item.get("id") or item.get("matchId") or item.get("gameId") or f"pbc_{home}_{away}")
     match = Match(
       match_id=f"pbc00_{match_id}",
-      sport="football",
+      sport=self._current_sport,
       home_team=str(home),
       away_team=str(away),
       league=str(item.get("league", item.get("leagueName", ""))),
@@ -944,7 +1045,7 @@ class Pbc00Adapter(SiteAdapter):
 
           match = Match(
             match_id=f"pbc00_dom_{i}",
-            sport="football",
+            sport=self._current_sport,
             home_team=home,
             away_team=away,
           )
@@ -1000,7 +1101,7 @@ class Pbc00Adapter(SiteAdapter):
 
         match = Match(
           match_id=f"pbc00_txt_{i}",
-          sport="football",
+          sport=self._current_sport,
           home_team=home,
           away_team=away.split()[0] if len(away) > 30 else away,
         )

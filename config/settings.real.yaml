@@ -26,10 +26,35 @@ site_b:
   cookies_path: "config/pbc00_session.json"
   username: ""
   password: ""
+  sport_pages:
+    football:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+    baseball:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+    basketball:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+    esports:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+    tennis:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
 
 sports:
   - football
+  - baseball
   - basketball
+  - esports
+  - tennis
 
 markets:
   - moneyline

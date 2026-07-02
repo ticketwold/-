@@ -9,6 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
+class SportPageConfig(BaseModel):
+  """pbc00 등 종목별 게임 페이지 설정."""
+
+  model_config = ConfigDict(extra="allow")
+
+  enabled: bool = True
+  gamecode: str = ""
+  game_child_seq: str = ""
+  event: str = "N"
+  page_url: str = ""
+
+
 class SiteConfig(BaseModel):
   model_config = ConfigDict(extra="allow")
 
@@ -39,6 +51,8 @@ class SiteConfig(BaseModel):
   tenbet_wait_seconds: int = 120
   navigation_clicks: list[str] = Field(default_factory=list)
   selectors: dict[str, str] = Field(default_factory=dict)
+  # 종목별 pbc00 URL (football, baseball, basketball, esports, tennis)
+  sport_pages: dict[str, SportPageConfig] = Field(default_factory=dict)
 
 
 class AppConfig(BaseSettings):
@@ -50,7 +64,9 @@ class AppConfig(BaseSettings):
   log_level: str = "INFO"
   site_a: SiteConfig = Field(default_factory=lambda: SiteConfig(name="SiteA"))
   site_b: SiteConfig = Field(default_factory=lambda: SiteConfig(name="SiteB"))
-  sports: list[str] = Field(default_factory=lambda: ["football", "basketball"])
+  sports: list[str] = Field(
+    default_factory=lambda: ["football", "baseball", "basketball", "esports", "tennis"]
+  )
   markets: list[str] = Field(default_factory=lambda: ["moneyline", "over_under"])
 
 

@@ -17,12 +17,13 @@ site_a:
   username: ""
   password: ""
 
-# ★ 이 URL = 10벳 경기 목록 (별도 10벳 메뉴 클릭 불필요)
+# ★ 종목별 10벳 URL (각 URL = 해당 종목 경기 목록)
 site_b:
   name: "PBC00"
   enabled: true
   base_url: "https://pbc00.com"
   adapter: pbc00
+  # 레거시 단일 URL (football에 자동 반영됨)
   page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
   gamecode: "19"
   game_child_seq: "3659"
@@ -36,10 +37,45 @@ site_b:
   manual_tenbet: false
   login_wait_seconds: 180
   selectors: {}
+  sport_pages:
+    football:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+    baseball:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+      event: "N"
+      page_url: ""
+    basketball:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+      event: "N"
+      page_url: ""
+    esports:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+      event: "N"
+      page_url: ""
+    tennis:
+      enabled: false
+      gamecode: ""
+      game_child_seq: ""
+      event: "N"
+      page_url: ""
 
+# 모니터링할 종목 (pbc00 URL이 설정된 종목만 수집됨)
 sports:
   - football
+  - baseball
   - basketball
+  - esports
+  - tennis
 
 markets:
   - moneyline

@@ -9,16 +9,12 @@ import aiohttp
 from ..models.match import Match, MatchOdds
 from ..models.odds import MarketType, Odds, Outcome
 from ..utils.odds_convert import american_to_decimal
+from ..utils.sports import PINNACLE_SPORT_IDS, normalize_sport_key
 from .base import SiteAdapter
 
 logger = logging.getLogger(__name__)
 
-SPORT_IDS = {
-  "football": 29,
-  "soccer": 29,
-  "basketball": 4,
-  "tennis": 33,
-}
+SPORT_IDS = PINNACLE_SPORT_IDS
 
 API_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
 CONFIG_URL = "https://www.pinnacle.com/config/app.json"
@@ -76,10 +72,19 @@ class PinnacleAdapter(SiteAdapter):
     if not self._session:
       return []
 
-    target_sports = sports or list(SPORT_IDS.keys())
-    sport_ids = list({
-      SPORT_IDS[s] for s in target_sports if s in SPORT_IDS
-    })
+    target_sports = sports or [
+      k for k in SPORT_IDS if k != "soccer"
+    ]
+    sport_ids: list[int] = []
+    seen: set[int] = set()
+    for raw in target_sports:
+      key = normalize_sport_key(raw)
+      if key not in SPORT_IDS:
+        continue
+      sid = SPORT_IDS[key]
+      if sid not in seen:
+        seen.add(sid)
+        sport_ids.append(sid)
 
     results: list[MatchOdds] = []
     for sport_id in sport_ids:
@@ -100,10 +105,10 @@ class PinnacleAdapter(SiteAdapter):
     async with self._session.get(markets_url, headers=self._headers()) as resp:
       markets = await resp.json()
 
-    matchup_map = self._build_matchup_map(matchups)
+    matchup_map = self._build_matchup_map(matchups, sport_id)
     return self._parse_markets(markets, matchup_map, sport_id)
 
-  def _build_matchup_map(self, matchups: list) -> dict:
+  def _build_matchup_map(self, matchups: list, sport_id: int) -> dict:
     """matchupId → 경기 정보 매핑."""
     result = {}
     for m in matchups:
@@ -136,7 +141,7 @@ class PinnacleAdapter(SiteAdapter):
         continue
 
       sport_name = m.get("league", {}).get("sport", {}).get("name", "")
-      sport_key = "football" if sport_name == "Soccer" else sport_name.lower()
+      sport_key = normalize_sport_key(sport_name, sport_id)
 
       start_time = None
       if m.get("startTime"):

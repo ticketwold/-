@@ -23,6 +23,7 @@ from src.sites.mock import MockSiteAdapter
 from src.sites.pbc00 import Pbc00Adapter
 from src.sites.pinnacle import PinnacleAdapter
 from src.sites.playwright_adapter import PlaywrightSiteAdapter
+from src.utils.sports import SPORTS, SUPPORTED_SPORT_KEYS
 
 console = Console()
 
@@ -46,12 +47,17 @@ def create_adapter(config):
     )
 
   if config.adapter == "pbc00":
+    sport_pages = {
+      k: (v.model_dump() if hasattr(v, "model_dump") else v)
+      for k, v in (getattr(config, "sport_pages", None) or {}).items()
+    }
     return Pbc00Adapter(
       **common,
       gamecode=config.gamecode,
       game_child_seq=config.game_child_seq,
       event=getattr(config, "event", "N"),
       page_url=getattr(config, "page_url", ""),
+      sport_pages=sport_pages or None,
       cookies_path=config.cookies_path,
       headless=config.headless,
       manual_login=getattr(config, "manual_login", True),
@@ -590,8 +596,33 @@ async def _run_discover(site_cfg):
   await adapter.disconnect()
 
 
+@cli.command("list-sports")
+def list_sports():
+  """지원 종목 및 pbc00 URL 설정 상태."""
+  table = Table(title="지원 종목")
+  table.add_column("키", style="cyan")
+  table.add_column("한글")
+  table.add_column("Pinnacle ID", justify="right")
+  table.add_column("pbc00 URL", style="dim")
+
+  for key in SUPPORTED_SPORT_KEYS:
+    sport = SPORTS[key]
+    url = sport.pbc00_page_url()
+    status = url if url else "[미설정 — sport_pages에 입력]"
+    table.add_row(key, sport.label_ko, str(sport.pinnacle_id), status)
+
+  console.print(table)
+  console.print(
+    "\n[dim]야구/농구/e스포츠/테니스 pbc00 URL은 사이트에서 10벳 링크 복사 후 "
+    "config/settings.yaml → site_b.sport_pages 에 입력하세요.[/dim]"
+  )
+
+
 @cli.command()
-@click.option("--sport", "-s", default="football", help="스포츠 (football, basketball)")
+@click.option(
+  "--sport", "-s", default="football",
+  help="스포츠 (football, baseball, basketball, esports, tennis)",
+)
 @click.option("--limit", "-l", default=10, type=int, help="표시할 경기 수")
 def pinnacle(sport, limit):
   """Pinnacle 배당 조회 테스트."""

@@ -147,3 +147,29 @@ class TestArbitrageCalculator:
     )
     opps = strict_calc.find_opportunities([a_odds], [b_odds])
     assert len(opps) == 0
+
+  def test_different_sports_not_matched(self, calculator):
+    fb_match = Match(
+      match_id="fb", sport="football",
+      home_team="Lakers", away_team="Celtics",
+    )
+    bb_match = Match(
+      match_id="bb", sport="basketball",
+      home_team="Lakers", away_team="Celtics",
+    )
+    a_odds = MatchOdds(
+      match=fb_match, site="SiteA", market_type=MarketType.MONEYLINE,
+      odds=[
+        Odds(outcome=Outcome.HOME, value=2.2, site="SiteA"),
+        Odds(outcome=Outcome.AWAY, value=1.7, site="SiteA"),
+      ],
+    )
+    b_odds = MatchOdds(
+      match=bb_match, site="SiteB", market_type=MarketType.MONEYLINE,
+      odds=[
+        Odds(outcome=Outcome.HOME, value=1.7, site="SiteB"),
+        Odds(outcome=Outcome.AWAY, value=2.2, site="SiteB"),
+      ],
+    )
+    opps = calculator.find_opportunities([a_odds], [b_odds])
+    assert len(opps) == 0
