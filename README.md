@@ -1,153 +1,140 @@
 # 양방배팅 (Arbitrage Betting) 자동화 프로그램
 
-A사이트와 B사이트의 배당을 실시간으로 비교하여, 양방배팅 조건에 맞으면 자동으로 배팅을 실행하는 프로그램입니다.
+**Pinnacle** (A사이트)과 **pbc00.com** (B사이트)의 배당을 실시간으로 비교하여, 양방배팅 조건에 맞으면 자동으로 배팅을 실행하는 프로그램입니다.
+
+## 연동 사이트
+
+| 사이트 | 어댑터 | 방식 | 상태 |
+|--------|--------|------|------|
+| [Pinnacle](https://www.pinnacle.com/ko/) | `pinnacle` | Guest API (자동) | ✅ 동작 확인 |
+| [pbc00.com](https://pbc00.com) | `pbc00` | Playwright (브라우저) | ⚠️ 로컬 PC 필요 |
 
 ## 주요 기능
 
-- **실시간 배당 모니터링**: 두 사이트의 배당을 주기적으로 비교
-- **양방배팅 자동 탐지**: 수익률이 설정값 이상일 때 기회 자동 감지
+- **실시간 배당 모니터링**: Pinnacle API + pbc00 브라우저 스크래핑
+- **크로스 사이트 경기 매칭**: 팀명 정규화로 사이트 간 동일 경기 자동 매칭
+- **양방배팅 자동 탐지**: 2-way, 3-way, 오버/언더 마켓 지원
 - **최적 배팅금 계산**: 확정 수익을 위한 사이트별 배팅 금액 자동 산출
-- **자동 배팅 실행**: 조건 충족 시 양쪽 사이트에 동시 배팅
-- **드라이런 모드**: 실제 배팅 없이 시뮬레이션 가능
-- **확장 가능한 어댑터**: 사이트별 커스텀 연동 지원
-
-## 양방배팅 원리
-
-두 사이트의 배당을 조합하여 **어떤 결과가 나와도 수익**이 나도록 배팅하는 전략입니다.
-
-```
-수익 조건: (1/배당A) + (1/배당B) < 1
-
-예시:
-  A사이트 홈승 2.10  →  B사이트 원정승 2.10
-  합산 확률: 1/2.10 + 1/2.10 = 0.952 < 1  ✓ 양방 가능
-  수익률: (1 - 0.952) × 100 = 4.8%
-```
-
-## 프로젝트 구조
-
-```
-├── config/
-│   └── settings.yaml.example   # 설정 파일 예시
-├── src/
-│   ├── main.py                 # CLI 진입점
-│   ├── config.py               # 설정 로더
-│   ├── models/                 # 데이터 모델
-│   ├── core/
-│   │   ├── calculator.py       # 양방배팅 계산기
-│   │   ├── monitor.py          # 실시간 모니터링
-│   │   └── executor.py         # 자동 배팅 실행
-│   └── sites/
-│       ├── base.py             # 사이트 어댑터 인터페이스
-│       ├── mock.py             # 테스트용 Mock 어댑터
-│       └── playwright_adapter.py  # 실제 사이트 연동 템플릿
-└── tests/
-```
+- **드라이런 모드**: 실제 배팅 없이 시뮬레이션
 
 ## 설치
 
 ```bash
 pip install -r requirements.txt
-
-# 실제 사이트 연동 시 (Playwright)
+pip install -r requirements-dev.txt
 playwright install chromium
+
+cp config/settings.yaml.example config/settings.yaml
 ```
 
 ## 사용법
 
-### 1. 설정 파일 준비
+### Pinnacle 배당 확인
 
 ```bash
-cp config/settings.yaml.example config/settings.yaml
-# settings.yaml 에서 사이트 정보, 수익률 기준 등 수정
+python3 -m src.main pinnacle --sport football --limit 10
 ```
 
-### 2. 양방배팅 계산기 (수동)
+### 1회 양방 스캔 (Pinnacle vs pbc00)
 
 ```bash
-python -m src.main calc 2.10 2.10 --stake 100000
+python3 -m src.main scan
 ```
 
-### 3. 1회 스캔
+### 실시간 모니터링
 
 ```bash
-python -m src.main scan
+python3 -m src.main monitor --dry-run --min-profit 0.5
 ```
 
-### 4. 실시간 모니터링 + 자동 배팅
+### pbc00 사이트 구조 탐색 (로컬 PC)
 
 ```bash
-# 드라이런 (시뮬레이션)
-python -m src.main monitor --dry-run
-
-# 옵션 지정
-python -m src.main monitor --interval 3 --min-profit 1.0 --dry-run
+python3 -m src.main discover
 ```
 
-## 설정 항목
-
-| 항목 | 설명 | 기본값 |
-|------|------|--------|
-| `poll_interval` | 배당 조회 간격 (초) | 2.0 |
-| `min_profit_margin` | 최소 수익률 (%) | 0.5 |
-| `total_stake` | 총 투자 금액 (원) | 100,000 |
-| `dry_run` | 시뮬레이션 모드 | true |
-| `max_concurrent_bets` | 최대 동시 배팅 수 | 3 |
-
-## 실제 사이트 연동 방법
-
-현재는 Mock 어댑터로 동작합니다. 실제 A/B 사이트를 연동하려면:
-
-### 1. Playwright 어댑터 확장
-
-`src/sites/` 에 사이트별 클래스를 생성합니다:
-
-```python
-from .playwright_adapter import PlaywrightSiteAdapter
-
-class SiteAAdapter(PlaywrightSiteAdapter):
-    async def _login(self):
-        await self._page.fill("#username", self.username)
-        await self._page.fill("#password", self.password)
-        await self._page.click("#login-btn")
-
-    async def fetch_odds(self, sports=None):
-        # 사이트의 배당 페이지에서 데이터 추출
-        ...
-
-    async def place_bet(self, match_id, outcome, odds, stake, **kwargs):
-        # 배팅 슬립에 금액 입력 후 확인
-        ...
-```
-
-### 2. 설정 변경
+## 설정 (`config/settings.yaml`)
 
 ```yaml
 site_a:
-  adapter: playwright
-  base_url: "https://your-site-a.com"
+  name: "Pinnacle"
+  adapter: pinnacle
+  base_url: "https://www.pinnacle.com/ko/"
+  skip_live: true
+  league_filter: []  # 예: ["EPL", "NBA"]
+
+site_b:
+  name: "PBC00"
+  adapter: pbc00
+  base_url: "https://pbc00.com"
+  gamecode: "19"
+  game_child_seq: "3659"
+  headless: false
+  cookies_path: "config/pbc00_session.json"
   username: "your_id"
   password: "your_password"
 ```
 
-### 3. 경기 매칭
+## pbc00.com 연동 가이드
 
-두 사이트의 경기명이 다를 수 있으므로, 팀명 정규화/매칭 로직 추가가 필요합니다.
+pbc00.com은 **Cloudflare 보호**가 있어 서버 환경에서는 접근이 차단됩니다. **로컬 PC에서** 아래 순서로 설정하세요.
 
-## 주의사항
+### 1단계: 사이트 구조 탐색
 
-- **법적 리스크**: 자동 배팅은 일부 국가/사이트에서 불법이거나 약관 위반일 수 있습니다.
-- **계정 제한**: 양방배팅이 감지되면 계정이 제한될 수 있습니다.
-- **배당 변동**: 배팅 실행 중 배당이 변경되면 손실이 발생할 수 있습니다.
-- **반쪽 배팅**: 한쪽만 배팅 성공 시 헷징 로직이 필요합니다 (현재 미구현).
-- **반드시 드라이런으로 충분히 테스트**한 후 실제 배팅을 진행하세요.
+```bash
+python3 -m src.main discover
+```
+
+`config/pbc00_selectors.json`에 API URL과 DOM 셀렉터가 저장됩니다.
+
+### 2단계: 로그인 세션 저장
+
+1. `headless: false`로 설정
+2. `username`, `password` 입력
+3. `discover` 또는 `scan` 실행 시 브라우저가 열리면 로그인
+4. 세션이 `config/pbc00_session.json`에 자동 저장
+
+### 3단계: 셀렉터 조정
+
+탐색 결과를 보고 `settings.yaml`의 `selectors`를 실제 사이트에 맞게 수정:
+
+```yaml
+selectors:
+  match_row: ".실제-경기-행-셀렉터"
+  home_team: ".홈팀-셀렉터"
+  away_team: ".원정팀-셀렉터"
+  odds_home: ".홈배당-셀렉터"
+```
+
+## Pinnacle API
+
+- API 키는 `pinnacle.com/config/app.json`에서 자동 획득
+- 미국식 배당 → 유럽식(소수) 배당 자동 변환
+- 축구(29), 농구(4) 등 스포츠 ID 자동 매핑
+- 자동 배팅은 계정 로그인 세션 구현 후 가능 (현재 수동 배팅 권장)
+
+## 양방배팅 원리
+
+```
+수익 조건: (1/배당A) + (1/배당B) < 1
+
+예시:
+  Pinnacle 홈승 2.10  +  PBC00 원정승 2.10
+  합산: 1/2.10 + 1/2.10 = 0.952 < 1  →  수익률 4.8%
+```
 
 ## 테스트
 
 ```bash
-pip install -r requirements-dev.txt
-pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
+
+## 주의사항
+
+- 자동 배팅은 사이트 약관 위반 및 **계정 제한** 위험이 있습니다
+- Pinnacle은 양방배팅에 관대하지만, pbc00은 제한될 수 있습니다
+- 배팅 실행 중 배당 변경 시 손실 가능
+- **반드시 dry_run으로 테스트** 후 실제 배팅 진행
 
 ## 라이선스
 

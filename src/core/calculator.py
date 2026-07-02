@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Awaitable, Callable, Optional, Union
 
+from ..utils.match_matcher import match_key
 from ..models.arbitrage import ArbitrageOpportunity, BetAllocation
 from ..models.match import Match, MatchOdds
 from ..models.odds import MarketType, Outcome
@@ -22,27 +23,42 @@ class ArbitrageCalculator:
     site_a_odds: list[MatchOdds],
     site_b_odds: list[MatchOdds],
   ) -> list[ArbitrageOpportunity]:
-    """두 사이트의 배당을 비교하여 양방배팅 기회를 탐색."""
+    """두 사이트의 배당을 비교하여 양방배팅 기회를 탐색.
+
+    사이트별 match_id가 다르므로 팀명 기반 match_key로 매칭합니다.
+    """
     opportunities: list[ArbitrageOpportunity] = []
 
-    a_by_match = {mo.match.match_id: mo for mo in site_a_odds}
-    b_by_match = {mo.match.match_id: mo for mo in site_b_odds}
+    a_index = self._index_by_match_key(site_a_odds)
+    b_index = self._index_by_match_key(site_b_odds)
 
-    common_ids = set(a_by_match.keys()) & set(b_by_match.keys())
+    common_keys = set(a_index.keys()) & set(b_index.keys())
+    logger.debug("공통 경기 %d건 매칭", len(common_keys))
 
-    for match_id in common_ids:
-      a_odds = a_by_match[match_id]
-      b_odds = b_by_match[match_id]
+    for key in common_keys:
+      for a_odds in a_index[key]:
+        for b_odds in b_index[key]:
+          if a_odds.market_type != b_odds.market_type:
+            continue
+          if a_odds.market_type == MarketType.OVER_UNDER:
+            if a_odds.line != b_odds.line:
+              continue
 
-      if a_odds.market_type != b_odds.market_type:
-        continue
-
-      opp = self._check_match(a_odds, b_odds)
-      if opp and opp.profit_margin >= self.min_profit_margin:
-        opportunities.append(opp)
+          opp = self._check_match(a_odds, b_odds)
+          if opp and opp.profit_margin >= self.min_profit_margin:
+            opportunities.append(opp)
 
     opportunities.sort(key=lambda o: o.profit_margin, reverse=True)
     return opportunities
+
+  def _index_by_match_key(
+    self, odds_list: list[MatchOdds]
+  ) -> dict[str, list[MatchOdds]]:
+    index: dict[str, list[MatchOdds]] = {}
+    for mo in odds_list:
+      key = match_key(mo.match.home_team, mo.match.away_team)
+      index.setdefault(key, []).append(mo)
+    return index
 
   def _check_match(
     self, a_odds: MatchOdds, b_odds: MatchOdds

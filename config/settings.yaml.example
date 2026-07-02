@@ -1,50 +1,40 @@
-# 양방배팅 프로그램 설정 예시
-# 이 파일을 settings.yaml 로 복사한 후 값을 수정하세요.
+# 양방배팅 프로그램 설정
+# cp config/settings.yaml.example config/settings.yaml 후 수정
 
-# 모니터링 간격 (초)
-poll_interval: 2.0
-
-# 최소 수익률 (%) - 이 값 이상일 때만 배팅
+poll_interval: 3.0
 min_profit_margin: 0.5
-
-# 총 투자 금액 (원)
 total_stake: 100000
-
-# 최대 동시 배팅 수
 max_concurrent_bets: 3
-
-# 드라이런 모드 (true: 실제 배팅 없이 시뮬레이션)
 dry_run: true
-
-# 로그 레벨: DEBUG, INFO, WARNING, ERROR
 log_level: INFO
 
-# A 사이트 설정
+# A사이트: Pinnacle (해외 배당 기준)
 site_a:
-  name: "SiteA"
+  name: "Pinnacle"
   enabled: true
-  # 실제 사이트 연동 시 아래 값 설정
-  base_url: "https://example-site-a.com"
-  username: ""
-  password: ""
-  # 어댑터 타입: mock, playwright, api
-  adapter: mock
+  base_url: "https://www.pinnacle.com/ko/"
+  adapter: pinnacle
+  skip_live: true
+  league_filter: []  # 예: ["EPL", "La Liga", "NBA"]
 
-# B 사이트 설정
+# B사이트: pbc00.com (국내 사이트)
 site_b:
-  name: "SiteB"
+  name: "PBC00"
   enabled: true
-  base_url: "https://example-site-b.com"
+  base_url: "https://pbc00.com"
+  adapter: pbc00
+  gamecode: "19"
+  game_child_seq: "3659"
+  headless: false
+  cookies_path: "config/pbc00_session.json"
   username: ""
   password: ""
-  adapter: mock
+  selectors: {}
 
-# 매칭할 스포츠 종목
 sports:
   - football
   - basketball
 
-# 배팅 대상 마켓 타입
 markets:
-  - moneyline   # 승무패 (2-way 또는 3-way)
-  - over_under  # 오버/언더
+  - moneyline
+  - over_under

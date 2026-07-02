@@ -20,27 +20,44 @@ from src.core.calculator import ArbitrageCalculator
 from src.core.executor import BetExecutor
 from src.core.monitor import OddsMonitor
 from src.sites.mock import MockSiteAdapter
+from src.sites.pbc00 import Pbc00Adapter
+from src.sites.pinnacle import PinnacleAdapter
 from src.sites.playwright_adapter import PlaywrightSiteAdapter
 
 console = Console()
 
 
-def create_adapter(config, bias: float = 0.0):
+def create_adapter(config):
+  common = dict(
+    name=config.name,
+    base_url=config.base_url,
+    username=config.username,
+    password=config.password,
+  )
+
   if config.adapter == "mock":
-    return MockSiteAdapter(
-      name=config.name,
-      base_url=config.base_url,
-      username=config.username,
-      password=config.password,
-      bias=bias,
+    return MockSiteAdapter(**common)
+
+  if config.adapter == "pinnacle":
+    return PinnacleAdapter(
+      **common,
+      skip_live=config.skip_live,
+      league_filter=config.league_filter,
     )
+
+  if config.adapter == "pbc00":
+    return Pbc00Adapter(
+      **common,
+      gamecode=config.gamecode,
+      game_child_seq=config.game_child_seq,
+      cookies_path=config.cookies_path,
+      headless=config.headless,
+      selectors=config.selectors or None,
+    )
+
   if config.adapter == "playwright":
-    return PlaywrightSiteAdapter(
-      name=config.name,
-      base_url=config.base_url,
-      username=config.username,
-      password=config.password,
-    )
+    return PlaywrightSiteAdapter(**common)
+
   raise ValueError(f"알 수 없는 어댑터: {config.adapter}")
 
 
@@ -72,8 +89,8 @@ def monitor(config, dry_run, interval, min_profit):
 
 
 async def _run_monitor(cfg: AppConfig):
-  site_a = create_adapter(cfg.site_a, bias=0.05)
-  site_b = create_adapter(cfg.site_b, bias=-0.05)
+  site_a = create_adapter(cfg.site_a)
+  site_b = create_adapter(cfg.site_b)
 
   console.print(Panel(
     f"[bold]양방배팅 모니터링 시작[/bold]\n"
@@ -145,8 +162,8 @@ def scan(config):
 
 
 async def _run_scan(cfg: AppConfig):
-  site_a = create_adapter(cfg.site_a, bias=0.05)
-  site_b = create_adapter(cfg.site_b, bias=-0.05)
+  site_a = create_adapter(cfg.site_a)
+  site_b = create_adapter(cfg.site_b)
 
   await site_a.connect()
   await site_b.connect()
@@ -220,6 +237,93 @@ def calc(odds_a, odds_b, stake):
   table.add_row("B사이트 배팅금", f"{stakes[1]:,.0f}원")
   table.add_row("확정 수익", f"[green]{profit:,.0f}원[/green]")
   console.print(table)
+
+
+@cli.command()
+@click.option("--config", "-c", default=None, help="설정 파일 경로")
+def discover(config):
+  """pbc00 사이트 구조 탐색 (로컬 PC에서 실행)."""
+  cfg = load_config(config)
+  setup_logging(cfg.log_level)
+
+  if cfg.site_a.adapter == "pbc00":
+    site_cfg = cfg.site_a
+  elif cfg.site_b.adapter == "pbc00":
+    site_cfg = cfg.site_b
+  else:
+    console.print("[red]설정에서 site_a 또는 site_b의 adapter를 pbc00으로 설정하세요[/red]")
+    return
+
+  asyncio.run(_run_discover(site_cfg))
+
+
+async def _run_discover(site_cfg):
+  adapter = create_adapter(site_cfg)
+  connected = await adapter.connect()
+  if not connected:
+    console.print("[red]연결 실패 (Cloudflare 차단 가능)[/red]")
+    return
+
+  console.print("[bold]사이트 구조 탐색 중...[/bold]")
+  await adapter.fetch_odds()
+  result = await adapter.discover()
+
+  table = Table(title="탐색 결과")
+  table.add_column("항목")
+  table.add_column("값")
+  table.add_row("URL", result.get("url", ""))
+  table.add_row("Title", result.get("title", ""))
+  table.add_row("API 호출 수", str(len(result.get("api_calls", []))))
+  table.add_row("셀렉터 발견", str(len(result.get("selectors_found", {}))))
+  console.print(table)
+
+  if result.get("api_calls"):
+    console.print("\n[bold]캡처된 API:[/bold]")
+    for api in result["api_calls"][:5]:
+      console.print(f"  {api['url']}")
+      console.print(f"    {api['sample'][:200]}")
+
+  await adapter.disconnect()
+
+
+@cli.command()
+@click.option("--sport", "-s", default="football", help="스포츠 (football, basketball)")
+@click.option("--limit", "-l", default=10, type=int, help="표시할 경기 수")
+def pinnacle(sport, limit):
+  """Pinnacle 배당 조회 테스트."""
+  setup_logging("INFO")
+  asyncio.run(_run_pinnacle_test(sport, limit))
+
+
+async def _run_pinnacle_test(sport: str, limit: int):
+  adapter = PinnacleAdapter(name="Pinnacle")
+  await adapter.connect()
+
+  console.print(f"[bold]Pinnacle {sport} 배당 조회 중...[/bold]")
+  odds_list = await adapter.fetch_odds([sport])
+  console.print(f"총 {len(odds_list)}개 마켓")
+
+  ml = [o for o in odds_list if o.market_type.value == "moneyline"]
+  table = Table(title=f"승무패 배당 (상위 {limit}건)")
+  table.add_column("리그", style="dim")
+  table.add_column("경기", style="cyan")
+  table.add_column("홈", justify="right")
+  table.add_column("무", justify="right")
+  table.add_column("원정", justify="right")
+
+  for mo in ml[:limit]:
+    home = draw = away = "-"
+    for o in mo.odds:
+      if o.outcome.value == "home":
+        home = f"{o.value:.2f}"
+      elif o.outcome.value == "draw":
+        draw = f"{o.value:.2f}"
+      elif o.outcome.value == "away":
+        away = f"{o.value:.2f}"
+    table.add_row(mo.match.league, mo.match.display_name, home, draw, away)
+
+  console.print(table)
+  await adapter.disconnect()
 
 
 def _print_summary(executor: BetExecutor, monitor: OddsMonitor):

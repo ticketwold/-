@@ -5,17 +5,28 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
 class SiteConfig(BaseModel):
+  model_config = ConfigDict(extra="allow")
+
   name: str
   enabled: bool = True
   base_url: str = ""
   username: str = ""
   password: str = ""
   adapter: str = "mock"
+  # Pinnacle 전용
+  skip_live: bool = True
+  league_filter: list[str] = Field(default_factory=list)
+  # PBC00 전용
+  gamecode: str = "19"
+  game_child_seq: str = "3659"
+  cookies_path: str = ""
+  headless: bool = False
+  selectors: dict[str, str] = Field(default_factory=dict)
 
 
 class AppConfig(BaseSettings):
