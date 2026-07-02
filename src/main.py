@@ -239,6 +239,84 @@ def calc(odds_a, odds_b, stake):
   console.print(table)
 
 
+@cli.command("virtual-test")
+@click.option("--scans", "-n", default=15, type=int, help="스캔 횟수")
+def virtual_test(scans):
+  """가상배팅(드라이런) 테스트."""
+  setup_logging("INFO")
+  asyncio.run(_run_virtual_test(scans))
+
+
+async def _run_virtual_test(max_scans: int):
+  from pathlib import Path as P
+  test_cfg = P("config/settings.test.yaml")
+  cfg = load_config(str(test_cfg) if test_cfg.exists() else None)
+  cfg.dry_run = True
+
+  site_a = create_adapter(cfg.site_a)
+  site_b = create_adapter(cfg.site_b)
+  if hasattr(site_a, "bias"):
+    site_a.bias = 0.08
+  if hasattr(site_b, "bias"):
+    site_b.bias = -0.08
+
+  console.print(Panel(
+    "[bold]가상배팅 테스트 (Dry-Run)[/bold]\n"
+    f"A: {cfg.site_a.name} | B: {cfg.site_b.name}\n"
+    f"투자금: {cfg.total_stake:,.0f}원 | 스캔: {max_scans}회\n"
+    "실제 배팅 없음 - 시뮬레이션만 수행",
+    title="Virtual Bet Test",
+    border_style="cyan",
+  ))
+
+  await site_a.connect()
+  await site_b.connect()
+
+  calculator = ArbitrageCalculator(
+    min_profit_margin=cfg.min_profit_margin,
+    total_stake=cfg.total_stake,
+  )
+  executor = BetExecutor(site_a=site_a, site_b=site_b, dry_run=True)
+  simulated: list[dict] = []
+
+  async def on_opportunity(opp):
+    result = await executor.execute(opp)
+    if result["status"] == "simulated":
+      simulated.append(result)
+      console.print(Panel(opp.summary(), title=f"[green]가상배팅 #{len(simulated)}[/green]"))
+
+  monitor = OddsMonitor(
+    site_a=site_a, site_b=site_b, calculator=calculator,
+    poll_interval=1.0, sports=cfg.sports, on_opportunity=on_opportunity,
+  )
+
+  for i in range(max_scans):
+    console.print(f"[dim]스캔 {i + 1}/{max_scans}...[/dim]")
+    await monitor.scan_once()
+    await asyncio.sleep(1.0)
+
+  await site_a.disconnect()
+  await site_b.disconnect()
+
+  if simulated:
+    table = Table(title=f"가상배팅 결과 ({len(simulated)}건)")
+    table.add_column("경기", style="cyan")
+    table.add_column("수익률", justify="right", style="green")
+    table.add_column("확정수익", justify="right")
+    for bet in simulated[:10]:
+      table.add_row(bet["match"], f"{bet['profit_margin']:.2f}%", f"{bet['guaranteed_profit']:,.0f}원")
+    if len(simulated) > 10:
+      table.add_row("...", f"외 {len(simulated) - 10}건", "")
+    console.print(table)
+    total = sum(b["guaranteed_profit"] for b in simulated)
+    console.print(Panel(
+      f"가상배팅 {len(simulated)}건 | 총 확정수익 [green]{total:,.0f}원[/green]\n실제 배팅: 없음",
+      title="완료", border_style="green",
+    ))
+  else:
+    console.print("[yellow]양방배팅 기회 없음 - 다시 실행해 보세요[/yellow]")
+
+
 @cli.command()
 @click.option("--config", "-c", default=None, help="설정 파일 경로")
 def discover(config):
