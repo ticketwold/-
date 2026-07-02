@@ -1,0 +1,33 @@
+# 실제 Pinnacle + pbc00 가상배팅 테스트
+poll_interval: 3.0
+min_profit_margin: 0.1
+total_stake: 100000
+max_concurrent_bets: 5
+dry_run: true
+log_level: INFO
+
+site_a:
+  name: "Pinnacle"
+  adapter: pinnacle
+  base_url: "https://www.pinnacle.com/ko/"
+  skip_live: true
+  league_filter: []
+
+site_b:
+  name: "PBC00"
+  adapter: pbc00
+  base_url: "https://pbc00.com"
+  gamecode: "19"
+  game_child_seq: "3659"
+  headless: true
+  cookies_path: ""
+  username: ""
+  password: ""
+
+sports:
+  - football
+  - basketball
+
+markets:
+  - moneyline
+  - over_under

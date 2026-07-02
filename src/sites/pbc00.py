@@ -114,6 +114,7 @@ class Pbc00Adapter(SiteAdapter):
           "cookies_path에 로그인 세션을 저장하세요.",
           self.name,
         )
+        await self.disconnect()
         return False
 
       if self.username and self.password:

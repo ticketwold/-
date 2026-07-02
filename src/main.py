@@ -242,9 +242,137 @@ def calc(odds_a, odds_b, stake):
 @cli.command("virtual-test")
 @click.option("--scans", "-n", default=15, type=int, help="스캔 횟수")
 def virtual_test(scans):
-  """가상배팅(드라이런) 테스트."""
+  """Mock 사이트 가상배팅 (드라이런) 테스트."""
   setup_logging("INFO")
   asyncio.run(_run_virtual_test(scans))
+
+
+@cli.command("virtual-test-real")
+@click.option("--scans", "-n", default=3, type=int, help="스캔 횟수")
+@click.option("--config", "-c", default="config/settings.real.yaml", help="설정 파일")
+def virtual_test_real(scans, config):
+  """실제 Pinnacle + pbc00 가상배팅 (드라이런)."""
+  setup_logging("INFO")
+  asyncio.run(_run_real_virtual_test(scans, config))
+
+
+async def _run_real_virtual_test(max_scans: int, config_path: str):
+  cfg_path = Path(config_path)
+  cfg = load_config(str(cfg_path) if cfg_path.exists() else None)
+  cfg.dry_run = True
+
+  console.print(Panel(
+    "[bold]실제 사이트 가상배팅 (Dry-Run)[/bold]\n"
+    f"A: {cfg.site_a.name} ({cfg.site_a.adapter})\n"
+    f"B: {cfg.site_b.name} ({cfg.site_b.adapter})\n"
+    f"투자금: {cfg.total_stake:,.0f}원 | 최소수익률: {cfg.min_profit_margin}%\n"
+    "실제 배팅 없음 - 시뮬레이션만",
+    title="Real Virtual Bet Test",
+    border_style="cyan",
+  ))
+
+  site_a = create_adapter(cfg.site_a)
+  site_b = create_adapter(cfg.site_b)
+
+  console.print("[bold]사이트 연결 중...[/bold]")
+  ok_a = await site_a.connect()
+  ok_b = await site_b.connect()
+  console.print(f"  {cfg.site_a.name}: {'[green]OK[/green]' if ok_a else '[red]FAIL[/red]'}")
+  console.print(f"  {cfg.site_b.name}: {'[green]OK[/green]' if ok_b else '[red]FAIL[/red]'}")
+
+  if not ok_a and not ok_b:
+    console.print("[red]두 사이트 모두 연결 실패[/red]")
+    return
+
+  calculator = ArbitrageCalculator(
+    min_profit_margin=cfg.min_profit_margin,
+    total_stake=cfg.total_stake,
+  )
+  executor = BetExecutor(site_a=site_a, site_b=site_b, dry_run=True)
+  simulated: list[dict] = []
+
+  async def on_opportunity(opp):
+    result = await executor.execute(opp)
+    if result["status"] == "simulated":
+      simulated.append({**result, "market": opp.market_type.value})
+      console.print(Panel(opp.summary(), title=f"[green]가상배팅 #{len(simulated)}[/green]"))
+
+  for i in range(max_scans):
+    console.print(f"\n[bold]스캔 {i + 1}/{max_scans}[/bold]")
+    odds_a = await site_a.fetch_odds(cfg.sports) if ok_a else []
+    odds_b = await site_b.fetch_odds(cfg.sports) if ok_b else []
+    console.print(f"  {cfg.site_a.name}: {len(odds_a)}마켓 | {cfg.site_b.name}: {len(odds_b)}마켓")
+
+    if not ok_b:
+      console.print("[yellow]pbc00 미연결 - Pinnacle 배당만 표시[/yellow]")
+      _show_pinnacle_sample(odds_a)
+      break
+
+    from src.utils.match_matcher import match_key
+    keys_a = {match_key(mo.match.home_team, mo.match.away_team) for mo in odds_a}
+    keys_b = {match_key(mo.match.home_team, mo.match.away_team) for mo in odds_b}
+    common = keys_a & keys_b
+    console.print(f"  공통 경기: {len(common)}건")
+    if common:
+      for k in list(common)[:3]:
+        console.print(f"    · {k.replace('|', ' vs ')}")
+
+    opportunities = calculator.find_opportunities(odds_a, odds_b)
+    if opportunities:
+      for opp in opportunities:
+        await on_opportunity(opp)
+    else:
+      console.print("  [yellow]양방배팅 기회 없음[/yellow]")
+
+    if i < max_scans - 1:
+      await asyncio.sleep(cfg.poll_interval)
+
+  if ok_a:
+    await site_a.disconnect()
+  if ok_b:
+    await site_b.disconnect()
+
+  if simulated:
+    table = Table(title=f"가상배팅 결과 ({len(simulated)}건)")
+    table.add_column("경기", style="cyan")
+    table.add_column("수익률", justify="right", style="green")
+    table.add_column("확정수익", justify="right")
+    table.add_column("배팅")
+    for bet in simulated:
+      detail = " | ".join(
+        f"{b['site']}:{b['outcome']}@{b['odds']:.2f}"
+        for b in bet.get("bets", [])
+      )
+      table.add_row(bet["match"], f"{bet['profit_margin']:.2f}%",
+                    f"{bet['guaranteed_profit']:,.0f}원", detail)
+    console.print(table)
+    total = sum(b["guaranteed_profit"] for b in simulated)
+    console.print(Panel(
+      f"가상배팅 {len(simulated)}건 | 확정수익 [green]{total:,.0f}원[/green]\n실제 배팅: 없음",
+      title="완료", border_style="green",
+    ))
+  elif ok_b:
+    console.print("[yellow]양방배팅 기회가 없었습니다.[/yellow]")
+
+
+def _show_pinnacle_sample(odds_a):
+  ml = [o for o in odds_a if o.market_type.value == "moneyline"][:8]
+  if not ml:
+    return
+  table = Table(title="Pinnacle 실시간 배당")
+  table.add_column("리그", style="dim")
+  table.add_column("경기", style="cyan")
+  table.add_column("홈", justify="right")
+  table.add_column("무", justify="right")
+  table.add_column("원정", justify="right")
+  for mo in ml:
+    h = d = a = "-"
+    for o in mo.odds:
+      if o.outcome.value == "home": h = f"{o.value:.2f}"
+      elif o.outcome.value == "draw": d = f"{o.value:.2f}"
+      elif o.outcome.value == "away": a = f"{o.value:.2f}"
+    table.add_row(mo.match.league, mo.match.display_name, h, d, a)
+  console.print(table)
 
 
 async def _run_virtual_test(max_scans: int):

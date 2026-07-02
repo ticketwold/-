@@ -3,5 +3,7 @@ __pycache__/
 .pytest_cache/
 .env
 config/settings.yaml
+config/pbc00_session.json
 .venv/
 venv/
+scripts/*.png
