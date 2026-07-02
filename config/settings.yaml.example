@@ -1,0 +1,50 @@
+# 양방배팅 프로그램 설정 예시
+# 이 파일을 settings.yaml 로 복사한 후 값을 수정하세요.
+
+# 모니터링 간격 (초)
+poll_interval: 2.0
+
+# 최소 수익률 (%) - 이 값 이상일 때만 배팅
+min_profit_margin: 0.5
+
+# 총 투자 금액 (원)
+total_stake: 100000
+
+# 최대 동시 배팅 수
+max_concurrent_bets: 3
+
+# 드라이런 모드 (true: 실제 배팅 없이 시뮬레이션)
+dry_run: true
+
+# 로그 레벨: DEBUG, INFO, WARNING, ERROR
+log_level: INFO
+
+# A 사이트 설정
+site_a:
+  name: "SiteA"
+  enabled: true
+  # 실제 사이트 연동 시 아래 값 설정
+  base_url: "https://example-site-a.com"
+  username: ""
+  password: ""
+  # 어댑터 타입: mock, playwright, api
+  adapter: mock
+
+# B 사이트 설정
+site_b:
+  name: "SiteB"
+  enabled: true
+  base_url: "https://example-site-b.com"
+  username: ""
+  password: ""
+  adapter: mock
+
+# 매칭할 스포츠 종목
+sports:
+  - football
+  - basketball
+
+# 배팅 대상 마켓 타입
+markets:
+  - moneyline   # 승무패 (2-way 또는 3-way)
+  - over_under  # 오버/언더
