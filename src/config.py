@@ -72,6 +72,62 @@ class AppConfig(BaseSettings):
   markets: list[str] = Field(default_factory=lambda: ["moneyline", "over_under"])
 
 
+_DEFAULT_SITE_A: dict = {
+  "name": "Pinnacle",
+  "adapter": "pinnacle",
+  "base_url": "https://www.pinnacle.com/ko/",
+  "skip_live": True,
+}
+
+_DEFAULT_SITE_B: dict = {
+  "name": "PBC00",
+  "adapter": "pbc00",
+  "base_url": "https://pbc00.com",
+  "page_url": (
+    "https://pbc00.com/game/newDetail/0"
+    "?gamecode=19&game_child_seq=3659&event=N"
+  ),
+  "gamecode": "19",
+  "game_child_seq": "3659",
+  "event": "N",
+  "cookies_path": "config/pbc00_session.json",
+  "manual_login": True,
+  "skip_tenbet_navigation": True,
+  "headless": False,
+}
+
+
+def _merge_dict(base: dict, override: dict | None) -> dict:
+  """중첩 dict 병합 (sport_pages 등)."""
+  if not override:
+    return dict(base)
+  merged = dict(base)
+  for key, value in override.items():
+    if (
+      key in merged
+      and isinstance(merged[key], dict)
+      and isinstance(value, dict)
+    ):
+      merged[key] = _merge_dict(merged[key], value)
+    else:
+      merged[key] = value
+  return merged
+
+
+def _normalize_config_data(data: dict) -> dict:
+  """부분 YAML도 기본 site 설정과 병합."""
+  normalized = dict(data)
+  normalized["site_a"] = _merge_dict(
+    _DEFAULT_SITE_A,
+    normalized.get("site_a") if isinstance(normalized.get("site_a"), dict) else None,
+  )
+  normalized["site_b"] = _merge_dict(
+    _DEFAULT_SITE_B,
+    normalized.get("site_b") if isinstance(normalized.get("site_b"), dict) else None,
+  )
+  return normalized
+
+
 def load_config(path: Optional[str] = None) -> AppConfig:
   """YAML 설정 파일 로드."""
   if path is None:
@@ -87,7 +143,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
   if path and Path(path).exists():
     with open(path, encoding="utf-8") as f:
       data = yaml.safe_load(f) or {}
-    return AppConfig(**data)
+    return AppConfig(**_normalize_config_data(data))
 
   return AppConfig()
 
