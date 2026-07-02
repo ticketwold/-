@@ -29,25 +29,24 @@ site_b:
   sport_pages:
     football:
       enabled: true
-      gamecode: "19"
-      game_child_seq: "3659"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["축구", "Soccer", "Football"]
     baseball:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["야구", "Baseball"]
     basketball:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["농구", "Basketball"]
     esports:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["e스포츠", "E스포츠", "Esports", "E-Sports"]
     tennis:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["테니스", "Tennis"]
 
 sports:
   - football

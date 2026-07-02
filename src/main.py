@@ -613,8 +613,8 @@ def list_sports():
 
   console.print(table)
   console.print(
-    "\n[dim]야구/농구/e스포츠/테니스 pbc00 URL은 사이트에서 10벳 링크 복사 후 "
-    "config/settings.yaml → site_b.sport_pages 에 입력하세요.[/dim]"
+    "\n[dim]pbc00는 동일 10벳 URL에서 nav_texts로 종목 탭을 클릭합니다. "
+    "탭 이름이 다르면 settings.yaml → site_b.sport_pages.*.nav_texts 를 수정하세요.[/dim]"
   )
 
 

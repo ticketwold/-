@@ -19,6 +19,8 @@ class SportPageConfig(BaseModel):
   game_child_seq: str = ""
   event: str = "N"
   page_url: str = ""
+  nav_text: str = ""
+  nav_texts: list[str] = Field(default_factory=list)
 
 
 class SiteConfig(BaseModel):

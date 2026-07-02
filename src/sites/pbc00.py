@@ -178,7 +178,38 @@ class Pbc00Adapter(SiteAdapter):
       "game_child_seq": game_child_seq,
       "event": event,
       "page_url": page_url,
+      "nav_texts": self._sport_nav_texts(sport),
     }
+
+  def _sport_nav_texts(self, sport: str) -> list[str]:
+    """종목 탭 클릭용 텍스트 (같은 URL 내 종목 전환)."""
+    cfg = self.sport_pages.get(sport, {})
+    custom = cfg.get("nav_texts") or []
+    if custom:
+      return list(custom)
+    nav_text = (cfg.get("nav_text") or "").strip()
+    if nav_text:
+      return [nav_text]
+    sport_def = get_sport(sport)
+    if sport_def and sport_def.pbc00_nav_texts:
+      return list(sport_def.pbc00_nav_texts)
+    return []
+
+  async def _navigate_to_sport_tab(self, sport: str) -> bool:
+    """10벳 페이지 내 종목 탭/메뉴 클릭."""
+    nav_texts = self._sport_nav_texts(sport)
+    if not nav_texts:
+      return True
+
+    for text in nav_texts:
+      if await self._click_by_text(text):
+        logger.info("[%s] %s 종목 탭 클릭: %s", self.name, sport, text)
+        await self._page.wait_for_timeout(2000)
+        await self._wait_for_content_load()
+        return True
+
+    logger.warning("[%s] %s 종목 탭을 찾지 못했습니다", self.name, sport)
+    return False
 
   def _build_url(self, event: str | None = None, sport: str | None = None) -> str:
     """필수 게임 URL 생성."""
@@ -812,43 +843,53 @@ class Pbc00Adapter(SiteAdapter):
     target_sports = sports or SUPPORTED_SPORT_KEYS
     all_results: list[MatchOdds] = []
 
+    # 동일 URL은 한 번만 로드하고 종목 탭만 전환
+    url_groups: dict[str, list[str]] = {}
     for sport in target_sports:
-      if sport not in self.sport_pages and not self._sport_page_config(sport):
+      page_cfg = self._sport_page_config(sport)
+      if not page_cfg:
         sport_def = get_sport(sport)
         if sport_def and not sport_def.pbc00_page_url(self.base_url or "https://pbc00.com"):
           logger.debug("[%s] %s: pbc00 URL 미설정 — 건너뜀", self.name, sport)
-          continue
-
-      page_cfg = self._sport_page_config(sport)
-      if not page_cfg:
-        logger.warning(
-          "[%s] %s: sport_pages에 gamecode/page_url을 설정하세요",
-          self.name, sport,
-        )
+        else:
+          logger.warning(
+            "[%s] %s: sport_pages에 gamecode/page_url을 설정하세요",
+            self.name, sport,
+          )
         continue
+      url_groups.setdefault(page_cfg["page_url"], []).append(sport)
 
-      sport_odds = await self._fetch_odds_for_sport(sport)
-      all_results.extend(sport_odds)
-      logger.info("[%s] %s: %d개 마켓", self.name, sport, len(sport_odds))
+    for sport_list in url_groups.values():
+      for i, sport in enumerate(sport_list):
+        sport_odds = await self._fetch_odds_for_sport(
+          sport, reload_page=(i == 0),
+        )
+        all_results.extend(sport_odds)
+        logger.info("[%s] %s: %d개 마켓", self.name, sport, len(sport_odds))
 
     if not all_results:
       logger.warning("[%s] 배당 데이터를 찾지 못했습니다", self.name)
 
     return all_results
 
-  async def _fetch_odds_for_sport(self, sport: str) -> list[MatchOdds]:
+  async def _fetch_odds_for_sport(
+    self, sport: str, reload_page: bool = True,
+  ) -> list[MatchOdds]:
     """단일 종목 페이지에서 배당 수집."""
     self._current_sport = sport
     self._captured_api_data.clear()
 
-    await self._goto_game_page(sport=sport)
-
-    if not await self._is_logged_in():
-      await self._ensure_logged_in()
+    if reload_page:
       await self._goto_game_page(sport=sport)
 
-    if not self.skip_tenbet_navigation:
-      await self._navigate_to_tenbet()
+      if not await self._is_logged_in():
+        await self._ensure_logged_in()
+        await self._goto_game_page(sport=sport)
+
+      if not self.skip_tenbet_navigation:
+        await self._navigate_to_tenbet()
+
+    await self._navigate_to_sport_tab(sport)
 
     await self._wait_for_content_load()
     await self._page.wait_for_timeout(2000)

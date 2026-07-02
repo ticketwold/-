@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+PBC00_GAMECODE = "19"
+PBC00_GAME_CHILD_SEQ = "3659"
+PBC00_EVENT = "N"
+PBC00_DEFAULT_PAGE_URL = (
+  "https://pbc00.com/game/newDetail/0"
+  f"?gamecode={PBC00_GAMECODE}&game_child_seq={PBC00_GAME_CHILD_SEQ}&event={PBC00_EVENT}"
+)
+
 
 @dataclass(frozen=True)
 class SportDefinition:
@@ -12,9 +20,10 @@ class SportDefinition:
   label_ko: str
   label_en: str
   pinnacle_id: int
-  pbc00_gamecode: str = ""
-  pbc00_game_child_seq: str = ""
-  pbc00_event: str = "N"
+  pbc00_gamecode: str = PBC00_GAMECODE
+  pbc00_game_child_seq: str = PBC00_GAME_CHILD_SEQ
+  pbc00_event: str = PBC00_EVENT
+  pbc00_nav_texts: tuple[str, ...] = ()
 
   def pbc00_page_url(self, base_url: str = "https://pbc00.com") -> str:
     if not self.pbc00_gamecode or not self.pbc00_game_child_seq:
@@ -34,41 +43,35 @@ SPORTS: dict[str, SportDefinition] = {
     label_ko="축구",
     label_en="Football",
     pinnacle_id=29,
-    pbc00_gamecode="19",
-    pbc00_game_child_seq="3659",
+    pbc00_nav_texts=("축구", "Soccer", "Football"),
   ),
   "baseball": SportDefinition(
     key="baseball",
     label_ko="야구",
     label_en="Baseball",
     pinnacle_id=3,
-    # pbc00 종목 URL은 사이트에서 확인 후 settings.yaml sport_pages에 입력
-    pbc00_gamecode="",
-    pbc00_game_child_seq="",
+    pbc00_nav_texts=("야구", "Baseball"),
   ),
   "basketball": SportDefinition(
     key="basketball",
     label_ko="농구",
     label_en="Basketball",
     pinnacle_id=4,
-    pbc00_gamecode="",
-    pbc00_game_child_seq="",
+    pbc00_nav_texts=("농구", "Basketball"),
   ),
   "esports": SportDefinition(
     key="esports",
     label_ko="e스포츠",
     label_en="Esports",
     pinnacle_id=12,
-    pbc00_gamecode="",
-    pbc00_game_child_seq="",
+    pbc00_nav_texts=("e스포츠", "E스포츠", "Esports", "E-Sports"),
   ),
   "tennis": SportDefinition(
     key="tennis",
     label_ko="테니스",
     label_en="Tennis",
     pinnacle_id=33,
-    pbc00_gamecode="",
-    pbc00_game_child_seq="",
+    pbc00_nav_texts=("테니스", "Tennis"),
   ),
 }
 
@@ -118,5 +121,6 @@ def default_sport_pages(base_url: str = "https://pbc00.com") -> dict[str, dict]:
       "game_child_seq": sport.pbc00_game_child_seq,
       "event": sport.pbc00_event,
       "page_url": url,
+      "nav_texts": list(sport.pbc00_nav_texts),
     }
   return pages

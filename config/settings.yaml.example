@@ -17,13 +17,12 @@ site_a:
   username: ""
   password: ""
 
-# ★ 종목별 10벳 URL (각 URL = 해당 종목 경기 목록)
+# ★ 10벳 공통 URL + 페이지 내 종목 탭(nav_texts)으로 전환
 site_b:
   name: "PBC00"
   enabled: true
   base_url: "https://pbc00.com"
   adapter: pbc00
-  # 레거시 단일 URL (football에 자동 반영됨)
   page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
   gamecode: "19"
   game_child_seq: "3659"
@@ -44,32 +43,36 @@ site_b:
       game_child_seq: "3659"
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["축구", "Soccer", "Football"]
     baseball:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
       event: "N"
-      page_url: ""
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["야구", "Baseball"]
     basketball:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
       event: "N"
-      page_url: ""
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["농구", "Basketball"]
     esports:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
       event: "N"
-      page_url: ""
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["e스포츠", "E스포츠", "Esports", "E-Sports"]
     tennis:
-      enabled: false
-      gamecode: ""
-      game_child_seq: ""
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
       event: "N"
-      page_url: ""
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["테니스", "Tennis"]
 
-# 모니터링할 종목 (pbc00 URL이 설정된 종목만 수집됨)
 sports:
   - football
   - baseball
