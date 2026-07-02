@@ -131,15 +131,28 @@ class Pbc00Adapter(SiteAdapter):
     """10벳 게임 URL로 접속 (이 URL 자체가 10벳 경기 목록)."""
     game_url = self._build_url()
     logger.info("[%s] 10벳 URL 접속: %s", self.name, game_url)
-    await self._page.goto(game_url, wait_until="networkidle", timeout=90000)
-    await self._page.wait_for_timeout(5000)
 
-    if "game/newDetail" not in self._page.url:
-      logger.warning("[%s] URL 리다이렉트 → 재접속", self.name)
-      await self._page.goto(game_url, wait_until="networkidle", timeout=90000)
-      await self._page.wait_for_timeout(3000)
+    # networkidle 은 배팅 사이트에서 무한 대기 → domcontentloaded 사용
+    try:
+      await self._page.goto(game_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception as e:
+      logger.warning("[%s] 페이지 로드 지연 (계속 진행): %s", self.name, e)
 
-    await self._wait_for_iframes()
+    await self._page.wait_for_timeout(3000)
+    logger.info("[%s] 현재 URL: %s", self.name, self._page.url)
+
+    # 리다이렉트 시 1회만 재시도 (짧은 타임아웃)
+    if "newDetail" not in self._page.url:
+      logger.info("[%s] URL 변경됨 — 재접속 1회 시도", self.name)
+      try:
+        await self._page.goto(game_url, wait_until="load", timeout=20000)
+        await self._page.wait_for_timeout(2000)
+        logger.info("[%s] 재접속 후 URL: %s", self.name, self._page.url)
+      except Exception as e:
+        logger.warning("[%s] 재접속 타임아웃 (화면 상태로 진행): %s", self.name, e)
+
+    logger.info("[%s] 페이지 로드 완료", self.name)
+    await self._wait_for_iframes(max_wait=8)
     await self._wait_for_content_load()
 
   async def connect(self) -> bool:
@@ -229,28 +242,34 @@ class Pbc00Adapter(SiteAdapter):
     except Exception:
       pass
 
-  async def _wait_for_iframes(self, max_wait: int = 15) -> None:
+  async def _wait_for_iframes(self, max_wait: int = 8) -> None:
     """10벳 콘텐츠 iframe 로드 대기."""
     for i in range(max_wait):
       frames = [f for f in self._page.frames if f != self._page.main_frame]
       if frames:
         logger.info("[%s] iframe %d개 로드됨", self.name, len(frames))
-        await self._page.wait_for_timeout(2000)
+        await self._page.wait_for_timeout(1500)
         return
+      if i % 3 == 0:
+        logger.debug("[%s] iframe 대기... (%d/%d)", self.name, i, max_wait)
       await self._page.wait_for_timeout(1000)
-    logger.debug("[%s] iframe 없음 (메인 페이지에서 스크래핑)", self.name)
+    logger.debug("[%s] iframe 없음 — 메인 페이지에서 진행", self.name)
 
   async def _wait_for_content_load(self) -> None:
     """경기 목록 로딩 대기 + 스크롤."""
-    for _ in range(3):
+    logger.info("[%s] 경기 목록 로딩 대기...", self.name)
+    for attempt in range(3):
       if await self._has_match_content():
+        logger.info("[%s] 경기 목록 확인됨", self.name)
         return
-      await self._page.wait_for_timeout(3000)
+      logger.debug("[%s] 로딩 대기 %d/3", self.name, attempt + 1)
+      await self._page.wait_for_timeout(2000)
       try:
         await self._page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
         await self._page.wait_for_timeout(1000)
       except Exception:
         pass
+    logger.debug("[%s] 경기 목록 자동 감지 실패 — 스크래핑 시도", self.name)
 
   async def _ensure_logged_in(self) -> bool:
     """로그인 보장 — 세션 있으면 스킵, 없으면 자동/수동 로그인."""
