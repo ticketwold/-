@@ -1,34 +1,51 @@
 # 양방배팅 프로그램 설정
-# cp config/settings.yaml.example config/settings.yaml 후 수정
+# 메모장으로 열어서 본인 정보 입력 후 저장
 
 poll_interval: 3.0
 min_profit_margin: 0.5
 total_stake: 100000
 max_concurrent_bets: 3
-dry_run: true
+dry_run: true          # true=가상배팅만, false=실제배팅(주의!)
 log_level: INFO
 
-# A사이트: Pinnacle (해외 배당 기준)
+# ─────────────────────────────────────────────
+# A사이트: Pinnacle
+# ─────────────────────────────────────────────
+# 배당 조회: 로그인 불필요 (자동 API)
+# 실제 배팅: username/password 필요 (현재 미지원, 수동 배팅)
 site_a:
   name: "Pinnacle"
   enabled: true
   base_url: "https://www.pinnacle.com/ko/"
   adapter: pinnacle
   skip_live: true
-  league_filter: []  # 예: ["EPL", "La Liga", "NBA"]
+  league_filter: []
+  username: ""          # 배당만 볼 때는 비워둬도 됨
+  password: ""          # 나중에 자동배팅 구현 시 사용
 
-# B사이트: pbc00.com (국내 사이트)
+# ─────────────────────────────────────────────
+# B사이트: pbc00.com
+# ─────────────────────────────────────────────
+# 아래 URL로 자동 접속:
+# https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N
 site_b:
   name: "PBC00"
   enabled: true
   base_url: "https://pbc00.com"
   adapter: pbc00
+
+  # 방법1: URL 파라미터 (현재 링크와 동일)
   gamecode: "19"
   game_child_seq: "3659"
-  headless: false
+  event: "N"
+
+  # 방법2: 전체 URL 직접 지정 (방법1 대신 사용 가능)
+  page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+
+  headless: false       # 반드시 false (브라우저 창 표시)
   cookies_path: "config/pbc00_session.json"
-  username: ""
-  password: ""
+  username: "여기에_pbc00_아이디"
+  password: "여기에_pbc00_비밀번호"
   selectors: {}
 
 sports:

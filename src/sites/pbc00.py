@@ -45,6 +45,8 @@ class Pbc00Adapter(SiteAdapter):
     name: str = "PBC00",
     gamecode: str = "19",
     game_child_seq: str = "3659",
+    event: str = "N",
+    page_url: str = "",
     cookies_path: str = "",
     headless: bool = False,
     selectors: dict[str, str] | None = None,
@@ -53,6 +55,8 @@ class Pbc00Adapter(SiteAdapter):
     super().__init__(name, **kwargs)
     self.gamecode = gamecode
     self.game_child_seq = game_child_seq
+    self.event = event
+    self.page_url = page_url
     self.cookies_path = cookies_path
     self.headless = headless
     self.selectors = {**self.DEFAULT_SELECTORS, **(selectors or {})}
@@ -62,11 +66,13 @@ class Pbc00Adapter(SiteAdapter):
     self._captured_api_data: list[dict] = []
     self._balance = 0.0
 
-  def _build_url(self, event: str = "N") -> str:
+  def _build_url(self, event: str | None = None) -> str:
+    if self.page_url:
+      return self.page_url
     params = {
       "gamecode": self.gamecode,
       "game_child_seq": self.game_child_seq,
-      "event": event,
+      "event": event or self.event,
     }
     base = self.base_url.rstrip("/") if self.base_url else "https://pbc00.com"
     return f"{base}/game/newDetail/0?{urlencode(params)}"

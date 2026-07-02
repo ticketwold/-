@@ -24,6 +24,8 @@ class SiteConfig(BaseModel):
   # PBC00 전용
   gamecode: str = "19"
   game_child_seq: str = "3659"
+  event: str = "N"
+  page_url: str = ""  # 전체 URL 직접 지정 시 우선 사용
   cookies_path: str = ""
   headless: bool = False
   selectors: dict[str, str] = Field(default_factory=dict)

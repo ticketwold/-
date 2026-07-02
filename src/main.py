@@ -50,6 +50,8 @@ def create_adapter(config):
       **common,
       gamecode=config.gamecode,
       game_child_seq=config.game_child_seq,
+      event=getattr(config, "event", "N"),
+      page_url=getattr(config, "page_url", ""),
       cookies_path=config.cookies_path,
       headless=config.headless,
       selectors=config.selectors or None,
