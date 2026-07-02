@@ -32,8 +32,11 @@ class SiteConfig(BaseModel):
   )
   headless: bool = False
   manual_login: bool = True
+  manual_tenbet: bool = True
   login_url: str = ""
   login_wait_seconds: int = 120
+  tenbet_wait_seconds: int = 120
+  navigation_clicks: list[str] = Field(default_factory=list)
   selectors: dict[str, str] = Field(default_factory=dict)
 
 

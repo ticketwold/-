@@ -55,8 +55,11 @@ def create_adapter(config):
       cookies_path=config.cookies_path,
       headless=config.headless,
       manual_login=getattr(config, "manual_login", True),
+      manual_tenbet=getattr(config, "manual_tenbet", True),
       login_url=getattr(config, "login_url", ""),
       login_wait_seconds=getattr(config, "login_wait_seconds", 120),
+      tenbet_wait_seconds=getattr(config, "tenbet_wait_seconds", 120),
+      navigation_clicks=getattr(config, "navigation_clicks", None) or [],
       navigation_texts=getattr(config, "navigation_texts", None),
       selectors=config.selectors or None,
     )
@@ -449,6 +452,48 @@ async def _run_virtual_test(max_scans: int):
     ))
   else:
     console.print("[yellow]양방배팅 기회 없음 - 다시 실행해 보세요[/yellow]")
+
+
+@cli.command("pbc00-setup")
+@click.option("--config", "-c", default=None, help="설정 파일 경로")
+def pbc00_setup(config):
+  """pbc00 초기 설정 — 로그인 + 10벳 수동 클릭 + 세션 저장."""
+  cfg = load_config(config)
+  setup_logging(cfg.log_level)
+  site_cfg = cfg.site_b if cfg.site_b.adapter == "pbc00" else cfg.site_a
+  if site_cfg.adapter != "pbc00":
+    console.print("[red]site_b.adapter 를 pbc00으로 설정하세요[/red]")
+    return
+  site_cfg.manual_login = True
+  site_cfg.manual_tenbet = True
+  site_cfg.headless = False
+  asyncio.run(_run_pbc00_setup(site_cfg))
+
+
+async def _run_pbc00_setup(site_cfg):
+  adapter = create_adapter(site_cfg)
+  console.print(Panel(
+    "[bold]pbc00 초기 설정[/bold]\n\n"
+    "단계 1: 브라우저에서 로그인\n"
+    "단계 2: 10벳 메뉴 클릭\n"
+    "단계 3: Enter → 세션 저장\n\n"
+    f"URL: {site_cfg.page_url or adapter._build_url()}",
+    title="PBC00 Setup",
+    border_style="cyan",
+  ))
+  ok = await adapter.connect()
+  if ok:
+    console.print("\n[bold]배당 테스트 중...[/bold]")
+    odds = await adapter.fetch_odds()
+    console.print(f"PBC00 배당: {len(odds)}개 마켓")
+    if odds:
+      for o in odds[:3]:
+        console.print(f"  · {o.match.display_name}")
+    console.print("\n[green]설정 완료![/green]")
+    console.print("  python -m src.main virtual-test-real --scans 3")
+  else:
+    console.print("[red]설정 실패[/red]")
+  await adapter.disconnect()
 
 
 @cli.command("pbc00-login")

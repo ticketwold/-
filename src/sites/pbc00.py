@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -67,7 +68,10 @@ class Pbc00Adapter(SiteAdapter):
     ),
   }
 
-  DEFAULT_NAV_TEXTS = ["10벳", "10BET", "10bet", "10 벳", "텐벳"]
+  DEFAULT_NAV_TEXTS = [
+    "10벳", "10BET", "10bet", "10 벳", "텐벳", "TEN BET", "TenBet",
+    "10 BET", "십벳", "스포츠", "Sports",
+  ]
 
   def __init__(
     self,
@@ -79,8 +83,11 @@ class Pbc00Adapter(SiteAdapter):
     cookies_path: str = "",
     headless: bool = False,
     manual_login: bool = True,
+    manual_tenbet: bool = True,
     login_url: str = "",
     login_wait_seconds: int = 120,
+    tenbet_wait_seconds: int = 120,
+    navigation_clicks: list[str] | None = None,
     selectors: dict[str, str] | None = None,
     navigation_texts: list[str] | None = None,
     **kwargs,
@@ -93,8 +100,11 @@ class Pbc00Adapter(SiteAdapter):
     self.cookies_path = cookies_path
     self.headless = headless
     self.manual_login = manual_login
+    self.manual_tenbet = manual_tenbet
     self.login_url = login_url  # 비어있으면 게임 URL에서 로그인
     self.login_wait_seconds = login_wait_seconds
+    self.tenbet_wait_seconds = tenbet_wait_seconds
+    self.navigation_clicks = navigation_clicks or []
     self.selectors = {**self.DEFAULT_SELECTORS, **(selectors or {})}
     self.navigation_texts = navigation_texts or self.DEFAULT_NAV_TEXTS
     self._browser = None
@@ -404,77 +414,218 @@ class Pbc00Adapter(SiteAdapter):
     page = self._page
     logger.info("[%s] 10벳 메뉴 진입 시도...", self.name)
 
-    # 1) CSS 셀렉터로 클릭
+    if await self._has_match_content():
+      logger.info("[%s] 이미 경기/배당 화면입니다", self.name)
+      return True
+
+    await self._dump_clickable_elements()
+
+    # 0) 설정된 navigation_clicks 순서대로 클릭
+    for click_text in self.navigation_clicks:
+      if await self._click_by_text(click_text):
+        logger.info("[%s] navigation_clicks: '%s' 클릭", self.name, click_text)
+        await page.wait_for_timeout(2000)
+
+    # 1) CSS 셀렉터
     tenbet_sel = self.selectors.get("tenbet_entry", "")
     for sel in tenbet_sel.split(", "):
       sel = sel.strip()
       if not sel:
         continue
       try:
-        loc = page.locator(sel)
-        if await loc.count() > 0:
-          await loc.first.click(timeout=5000)
-          await page.wait_for_timeout(3000)
-          logger.info("[%s] 10벳 진입 (셀렉터: %s)", self.name, sel)
-          await self._wait_for_match_content()
-          return True
+        for target in self._active_pages():
+          loc = target.locator(sel)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=5000)
+            await page.wait_for_timeout(3000)
+            logger.info("[%s] 10벳 진입 (셀렉터: %s)", self.name, sel)
+            await self._wait_for_match_content()
+            return True
       except Exception as e:
         logger.debug("[%s] 셀렉터 실패 %s: %s", self.name, sel, e)
 
-    # 2) 텍스트로 클릭 (메인 페이지 + iframe)
+    # 2) 텍스트/역할 기반 클릭
     for text in self.navigation_texts:
-      clicked = await self._click_by_text(text)
-      if clicked:
+      if await self._click_by_text(text):
         logger.info("[%s] 10벳 진입 (텍스트: %s)", self.name, text)
         await self._wait_for_match_content()
         return True
 
-    # 3) iframe 내부 탐색
-    for frame in page.frames:
-      if frame == page.main_frame:
-        continue
-      for text in self.navigation_texts:
-        try:
-          loc = frame.get_by_text(text, exact=False)
-          if await loc.count() > 0:
-            await loc.first.click(timeout=5000)
-            await page.wait_for_timeout(3000)
-            logger.info("[%s] 10벳 진입 (iframe, 텍스트: %s)", self.name, text)
-            await self._wait_for_match_content()
-            return True
-        except Exception:
-          pass
+    # 3) 이미지 alt / title 속성
+    if await self._click_by_alt_or_title():
+      await self._wait_for_match_content()
+      return True
+
+    # 4) JS로 10벳 관련 요소 탐색 클릭
+    if await self._click_tenbet_via_js():
+      await self._wait_for_match_content()
+      return True
+
+    # 5) 수동 클릭 대기
+    if self.manual_tenbet:
+      return await self._manual_tenbet_wait()
 
     logger.warning(
       "[%s] 10벳 메뉴를 찾지 못했습니다. "
-      "settings.yaml 의 selectors.tenbet_entry 를 확인하세요.",
+      "python -m src.main pbc00-setup 실행 후 "
+      "config/pbc00_elements.json 을 확인하세요.",
       self.name,
     )
+    await self._save_debug_screenshot("tenbet_not_found")
     return False
+
+  async def _click_by_alt_or_title(self) -> bool:
+    """img alt, title 속성으로 10벳 버튼 클릭."""
+    patterns = ["10벳", "10BET", "10bet", "10 bet", "tenbet"]
+    for target in self._active_pages():
+      for pat in patterns:
+        for attr in ["alt", "title", "aria-label"]:
+          try:
+            loc = target.locator(f"[{attr}*='{pat}' i]")
+            if await loc.count() > 0:
+              await loc.first.click(timeout=5000)
+              await self._page.wait_for_timeout(2000)
+              logger.info("[%s] 10벳 진입 (%s=%s)", self.name, attr, pat)
+              return True
+          except Exception:
+            pass
+    return False
+
+  async def _click_tenbet_via_js(self) -> bool:
+    """JavaScript로 10벳 관련 클릭 가능 요소 탐색."""
+    script = """
+    () => {
+      const keywords = ['10벳','10BET','10bet','10 벳','텐벳','tenbet','10 bet'];
+      const els = document.querySelectorAll('a, button, [onclick], [role="button"], img, div, span');
+      for (const el of els) {
+        const text = (el.innerText || el.alt || el.title || el.getAttribute('aria-label') || '').trim();
+        if (keywords.some(k => text.toLowerCase().includes(k.toLowerCase()))) {
+          el.click();
+          return text;
+        }
+      }
+      return null;
+    }
+    """
+    for target in self._active_pages():
+      try:
+        result = await target.evaluate(script)
+        if result:
+          logger.info("[%s] 10벳 JS 클릭: %s", self.name, result)
+          await self._page.wait_for_timeout(3000)
+          return True
+      except Exception:
+        pass
+    return False
+
+  async def _manual_tenbet_wait(self) -> bool:
+    """사용자가 브라우저에서 10벳을 직접 클릭할 때까지 대기."""
+    print()
+    print("=" * 60)
+    print("  [PBC00] 브라우저에서 10벳 메뉴를 직접 클릭해 주세요!")
+    print("  1) 게임 URL 페이지에서 10벳(10BET) 버튼/메뉴 클릭")
+    print("  2) 경기 목록이 보이면")
+    print("  3) 이 창으로 돌아와서 Enter 키 누르기")
+    print(f"  (최대 {self.tenbet_wait_seconds}초 대기)")
+    print("=" * 60)
+    print()
+
+    loop = asyncio.get_event_loop()
+    try:
+      await asyncio.wait_for(
+        loop.run_in_executor(None, input, "  ▶ 10벳 클릭 완료 후 Enter... "),
+        timeout=self.tenbet_wait_seconds,
+      )
+    except asyncio.TimeoutError:
+      logger.error("[%s] 10벳 수동 클릭 시간 초과", self.name)
+      return False
+
+    await self._save_session()
+    await self._save_debug_screenshot("after_tenbet_manual")
+    await self._dump_clickable_elements()
+    logger.info("[%s] 수동 10벳 진입 완료", self.name)
+    return True
+
+  async def _dump_clickable_elements(self) -> dict:
+    """페이지의 클릭 가능한 요소 목록 저장 (디버그용)."""
+    if not self._page:
+      return {}
+
+    elements: list[dict] = []
+    for target in self._active_pages():
+      frame_url = target.url if hasattr(target, "url") else "main"
+      try:
+        items = await target.evaluate("""
+          () => {
+            const results = [];
+            const els = document.querySelectorAll('a, button, [onclick], [role="button"], img');
+            for (const el of els) {
+              const text = (el.innerText || '').trim().slice(0, 80);
+              const alt = el.alt || '';
+              const title = el.title || '';
+              const cls = el.className || '';
+              const id = el.id || '';
+              if (text || alt || title) {
+                results.push({tag: el.tagName, text, alt, title, id,
+                  cls: typeof cls === 'string' ? cls.slice(0, 60) : ''});
+              }
+            }
+            return results.slice(0, 200);
+          }
+        """)
+        for item in items:
+          item["frame"] = frame_url[:80]
+          elements.append(item)
+      except Exception:
+        pass
+
+    output = {
+      "url": self._page.url,
+      "frames": [f.url for f in self._page.frames],
+      "elements": elements,
+      "tenbet_candidates": [
+        e for e in elements
+        if re.search(r"10|벳|bet|sport", f"{e.get('text','')}{e.get('alt','')}{e.get('title','')}", re.I)
+      ],
+    }
+
+    path = Path("config/pbc00_elements.json")
+    path.parent.mkdir(exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(output, f, ensure_ascii=False, indent=2)
+    logger.info("[%s] 페이지 요소 저장: %s (%d개)", self.name, path, len(elements))
+    return output
 
   async def _click_by_text(self, text: str) -> bool:
     """페이지 및 iframe에서 텍스트 클릭."""
     page = self._page
-    targets = [page] + [f for f in page.frames if f != page.main_frame]
+    targets = self._active_pages()
 
     for target in targets:
-      try:
-        loc = target.get_by_text(text, exact=False)
-        if await loc.count() > 0:
-          await loc.first.click(timeout=5000)
-          await page.wait_for_timeout(2000)
-          return True
-      except Exception:
-        pass
+      # 부분 일치 텍스트
+      for exact in [False, True]:
+        try:
+          loc = target.get_by_text(text, exact=exact)
+          count = await loc.count()
+          for i in range(min(count, 3)):
+            try:
+              await loc.nth(i).click(timeout=5000)
+              await page.wait_for_timeout(2000)
+              return True
+            except Exception:
+              pass
+        except Exception:
+          pass
 
-      try:
-        loc = target.get_by_role("link", name=re.compile(text, re.I))
-        if await loc.count() > 0:
-          await loc.first.click(timeout=5000)
-          await page.wait_for_timeout(2000)
-          return True
-      except Exception:
-        pass
+      for role in ["link", "button", "tab", "menuitem"]:
+        try:
+          loc = target.get_by_role(role, name=re.compile(re.escape(text), re.I))
+          if await loc.count() > 0:
+            await loc.first.click(timeout=5000)
+            await page.wait_for_timeout(2000)
+            return True
+        except Exception:
+          pass
 
     return False
 

@@ -45,19 +45,21 @@ site_b:
   username: "여기에_pbc00_아이디"
   password: "여기에_pbc00_비밀번호"
 
-  # 로그인: 게임 URL 페이지에서 직접 로그인 (main 페이지 사용 안 함)
+  # 로그인: 게임 URL 페이지에서 직접
   manual_login: true
+  manual_tenbet: true       # 10벳 자동 클릭 실패 시 수동 클릭 대기
   login_url: ""
   login_wait_seconds: 180
+  tenbet_wait_seconds: 180
 
-  # 10벳 메뉴 진입 (경기 목록이 나오는 화면)
+  # 10벳 메뉴 진입 (자동 클릭 순서, 필요 시 추가)
+  navigation_clicks: []
   navigation_texts:
     - "10벳"
     - "10BET"
     - "10bet"
 
   selectors:
-    # 10벳 버튼 셀렉터 (discover 실행 후 수정 가능)
     tenbet_entry: "a:has-text('10벳'), button:has-text('10벳'), a:has-text('10BET')"
 
 sports:
