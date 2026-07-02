@@ -17,10 +17,13 @@ site_b:
   name: "PBC00"
   adapter: pbc00
   base_url: "https://pbc00.com"
+  page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
   gamecode: "19"
   game_child_seq: "3659"
-  headless: true
-  cookies_path: ""
+  event: "N"
+  headless: false
+  manual_login: true
+  cookies_path: "config/pbc00_session.json"
   username: ""
   password: ""
 

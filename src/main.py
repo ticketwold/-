@@ -475,9 +475,11 @@ async def _run_pbc00_login(site_cfg):
   adapter = create_adapter(site_cfg)
   console.print(Panel(
     "[bold]pbc00 로그인[/bold]\n"
-    "1. 브라우저가 열리면 직접 로그인\n"
-    "2. 로그인 완료 시 세션 자동 저장\n"
-    f"3. 저장 위치: {site_cfg.cookies_path or 'config/pbc00_session.json'}",
+    f"게임 URL: {site_cfg.page_url or 'https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N'}\n\n"
+    "1. 브라우저가 위 URL로 열립니다\n"
+    "2. 해당 페이지에서 직접 로그인\n"
+    "3. 로그인 완료 시 세션 자동 저장\n"
+    f"4. 저장 위치: {site_cfg.cookies_path or 'config/pbc00_session.json'}",
     title="PBC00 Login",
     border_style="cyan",
   ))

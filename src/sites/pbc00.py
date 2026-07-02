@@ -25,6 +25,10 @@ class Pbc00Adapter(SiteAdapter):
     https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N
   """
 
+  DEFAULT_GAME_URL = (
+    "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+  )
+
   DEFAULT_SELECTORS = {
     "login_open": (
       "a:has-text('로그인'), button:has-text('로그인'), "
@@ -85,11 +89,11 @@ class Pbc00Adapter(SiteAdapter):
     self.gamecode = gamecode
     self.game_child_seq = game_child_seq
     self.event = event
-    self.page_url = page_url
+    self.page_url = page_url or self.DEFAULT_GAME_URL
     self.cookies_path = cookies_path
     self.headless = headless
     self.manual_login = manual_login
-    self.login_url = login_url or f"{self.base_url.rstrip('/')}/main" if self.base_url else "https://pbc00.com/main"
+    self.login_url = login_url  # 비어있으면 게임 URL에서 로그인
     self.login_wait_seconds = login_wait_seconds
     self.selectors = {**self.DEFAULT_SELECTORS, **(selectors or {})}
     self.navigation_texts = navigation_texts or self.DEFAULT_NAV_TEXTS
@@ -100,7 +104,8 @@ class Pbc00Adapter(SiteAdapter):
     self._balance = 0.0
 
   def _build_url(self, event: str | None = None) -> str:
-    if self.page_url:
+    """필수 게임 URL 생성."""
+    if self.page_url and not event:
       return self.page_url
     params = {
       "gamecode": self.gamecode,
@@ -109,6 +114,19 @@ class Pbc00Adapter(SiteAdapter):
     }
     base = self.base_url.rstrip("/") if self.base_url else "https://pbc00.com"
     return f"{base}/game/newDetail/0?{urlencode(params)}"
+
+  async def _goto_game_page(self) -> None:
+    """반드시 게임 URL로 접속."""
+    game_url = self._build_url()
+    logger.info("[%s] 게임 URL 접속: %s", self.name, game_url)
+    await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
+    await self._page.wait_for_timeout(3000)
+
+    # URL 파라미터가 맞는지 확인
+    if "game/newDetail" not in self._page.url:
+      logger.warning("[%s] URL 리다이렉트 감지 → 재접속", self.name)
+      await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
+      await self._page.wait_for_timeout(2000)
 
   async def connect(self) -> bool:
     try:
@@ -142,17 +160,8 @@ class Pbc00Adapter(SiteAdapter):
 
       self._page.on("response", self._on_response)
 
-      # 저장된 세션이 있으면 바로 게임 페이지로
-      if self.cookies_path and Path(self.cookies_path).exists():
-        url = self._build_url()
-        logger.info("[%s] 저장된 세션으로 접속: %s", self.name, url)
-        await self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
-      else:
-        # 로그인 페이지(/main)부터 시작
-        logger.info("[%s] 로그인 페이지 접속: %s", self.name, self.login_url)
-        await self._page.goto(self.login_url, wait_until="domcontentloaded", timeout=60000)
-
-      await self._page.wait_for_timeout(3000)
+      # ★ 반드시 게임 URL로 진입 (로그인도 이 페이지에서)
+      await self._goto_game_page()
 
       if await self._is_cloudflare_blocked():
         logger.error(
@@ -170,12 +179,8 @@ class Pbc00Adapter(SiteAdapter):
         await self._save_debug_screenshot("login_failed")
         return False
 
-      # 게임 페이지로 이동
-      game_url = self._build_url()
-      if self._page.url != game_url:
-        logger.info("[%s] 게임 페이지 이동: %s", self.name, game_url)
-        await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
-        await self._page.wait_for_timeout(2000)
+      # 로그인 후 게임 URL 유지 확인
+      await self._goto_game_page()
 
       await self._navigate_to_tenbet()
 
@@ -313,13 +318,17 @@ class Pbc00Adapter(SiteAdapter):
 
   async def _manual_login_wait(self) -> bool:
     """브라우저에서 사용자가 직접 로그인할 때까지 대기."""
+    game_url = self._build_url()
     print()
-    print("=" * 55)
-    print("  [PBC00] 브라우저에서 직접 로그인해 주세요!")
-    print("  1) 아이디 / 비밀번호 입력")
+    print("=" * 60)
+    print("  [PBC00] 이 URL에서 로그인해 주세요:")
+    print(f"  {game_url}")
+    print()
+    print("  1) 브라우저에서 아이디 / 비밀번호 입력")
     print("  2) 로그인 버튼 클릭")
-    print(f"  3) 최대 {self.login_wait_seconds}초 대기합니다...")
-    print("=" * 55)
+    print("  3) 로그인 후 10벳 메뉴가 보이면 성공")
+    print(f"  4) 최대 {self.login_wait_seconds}초 대기...")
+    print("=" * 60)
     print()
 
     await self._open_login_form()
@@ -508,12 +517,12 @@ class Pbc00Adapter(SiteAdapter):
 
     self._captured_api_data.clear()
 
-    url = self._build_url()
-    await self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    await self._page.wait_for_timeout(2000)
+    # 매번 게임 URL로 접속
+    await self._goto_game_page()
 
-    if self.username and self.password:
-      await self._login()
+    if not await self._is_logged_in():
+      await self._ensure_logged_in()
+      await self._goto_game_page()
 
     await self._navigate_to_tenbet()
     await self._page.wait_for_timeout(3000)
