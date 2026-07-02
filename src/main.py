@@ -55,7 +55,8 @@ def create_adapter(config):
       cookies_path=config.cookies_path,
       headless=config.headless,
       manual_login=getattr(config, "manual_login", True),
-      manual_tenbet=getattr(config, "manual_tenbet", True),
+      manual_tenbet=getattr(config, "manual_tenbet", False),
+      skip_tenbet_navigation=getattr(config, "skip_tenbet_navigation", True),
       login_url=getattr(config, "login_url", ""),
       login_wait_seconds=getattr(config, "login_wait_seconds", 120),
       tenbet_wait_seconds=getattr(config, "tenbet_wait_seconds", 120),
@@ -474,10 +475,11 @@ async def _run_pbc00_setup(site_cfg):
   adapter = create_adapter(site_cfg)
   console.print(Panel(
     "[bold]pbc00 초기 설정[/bold]\n\n"
-    "단계 1: 브라우저에서 로그인\n"
-    "단계 2: 10벳 메뉴 클릭\n"
-    "단계 3: Enter → 세션 저장\n\n"
-    f"URL: {site_cfg.page_url or adapter._build_url()}",
+    "이 URL이 10벳 경기 목록입니다 (추가 클릭 불필요):\n"
+    f"{site_cfg.page_url or 'https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N'}\n\n"
+    "1. 브라우저에서 로그인\n"
+    "2. 경기 목록이 보이면 Enter\n"
+    "3. 세션 저장",
     title="PBC00 Setup",
     border_style="cyan",
   ))

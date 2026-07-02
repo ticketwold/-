@@ -83,7 +83,8 @@ class Pbc00Adapter(SiteAdapter):
     cookies_path: str = "",
     headless: bool = False,
     manual_login: bool = True,
-    manual_tenbet: bool = True,
+    manual_tenbet: bool = False,
+    skip_tenbet_navigation: bool = True,
     login_url: str = "",
     login_wait_seconds: int = 120,
     tenbet_wait_seconds: int = 120,
@@ -101,6 +102,7 @@ class Pbc00Adapter(SiteAdapter):
     self.headless = headless
     self.manual_login = manual_login
     self.manual_tenbet = manual_tenbet
+    self.skip_tenbet_navigation = skip_tenbet_navigation
     self.login_url = login_url  # 비어있으면 게임 URL에서 로그인
     self.login_wait_seconds = login_wait_seconds
     self.tenbet_wait_seconds = tenbet_wait_seconds
@@ -126,17 +128,19 @@ class Pbc00Adapter(SiteAdapter):
     return f"{base}/game/newDetail/0?{urlencode(params)}"
 
   async def _goto_game_page(self) -> None:
-    """반드시 게임 URL로 접속."""
+    """10벳 게임 URL로 접속 (이 URL 자체가 10벳 경기 목록)."""
     game_url = self._build_url()
-    logger.info("[%s] 게임 URL 접속: %s", self.name, game_url)
-    await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
-    await self._page.wait_for_timeout(3000)
+    logger.info("[%s] 10벳 URL 접속: %s", self.name, game_url)
+    await self._page.goto(game_url, wait_until="networkidle", timeout=90000)
+    await self._page.wait_for_timeout(5000)
 
-    # URL 파라미터가 맞는지 확인
     if "game/newDetail" not in self._page.url:
-      logger.warning("[%s] URL 리다이렉트 감지 → 재접속", self.name)
-      await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
-      await self._page.wait_for_timeout(2000)
+      logger.warning("[%s] URL 리다이렉트 → 재접속", self.name)
+      await self._page.goto(game_url, wait_until="networkidle", timeout=90000)
+      await self._page.wait_for_timeout(3000)
+
+    await self._wait_for_iframes()
+    await self._wait_for_content_load()
 
   async def connect(self) -> bool:
     try:
@@ -192,7 +196,10 @@ class Pbc00Adapter(SiteAdapter):
       # 로그인 후 게임 URL 유지 확인
       await self._goto_game_page()
 
-      await self._navigate_to_tenbet()
+      if not self.skip_tenbet_navigation:
+        await self._navigate_to_tenbet()
+      else:
+        logger.info("[%s] 10벳 URL 직접 접속 — 추가 메뉴 클릭 없음", self.name)
 
       self._logged_in = True
       logger.info("[%s] 연결 완료", self.name)
@@ -210,20 +217,40 @@ class Pbc00Adapter(SiteAdapter):
     return "you have been blocked" in body.lower()
 
   async def _on_response(self, response) -> None:
-    """XHR/Fetch 응답에서 배당 API 데이터 캡처."""
-    url = response.url
-    keywords = ["odds", "game", "match", "event", "sport", "bet", "detail", "list"]
-    if not any(k in url.lower() for k in keywords):
-      return
+    """XHR/Fetch JSON 응답 캡처."""
     try:
       ct = response.headers.get("content-type", "")
       if "json" not in ct:
         return
       body = await response.json()
+      url = response.url
       self._captured_api_data.append({"url": url, "data": body})
-      logger.debug("[%s] API 캡처: %s", self.name, url)
+      logger.debug("[%s] API: %s", self.name, url[:100])
     except Exception:
       pass
+
+  async def _wait_for_iframes(self, max_wait: int = 15) -> None:
+    """10벳 콘텐츠 iframe 로드 대기."""
+    for i in range(max_wait):
+      frames = [f for f in self._page.frames if f != self._page.main_frame]
+      if frames:
+        logger.info("[%s] iframe %d개 로드됨", self.name, len(frames))
+        await self._page.wait_for_timeout(2000)
+        return
+      await self._page.wait_for_timeout(1000)
+    logger.debug("[%s] iframe 없음 (메인 페이지에서 스크래핑)", self.name)
+
+  async def _wait_for_content_load(self) -> None:
+    """경기 목록 로딩 대기 + 스크롤."""
+    for _ in range(3):
+      if await self._has_match_content():
+        return
+      await self._page.wait_for_timeout(3000)
+      try:
+        await self._page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+        await self._page.wait_for_timeout(1000)
+      except Exception:
+        pass
 
   async def _ensure_logged_in(self) -> bool:
     """로그인 보장 — 세션 있으면 스킵, 없으면 자동/수동 로그인."""
@@ -629,6 +656,27 @@ class Pbc00Adapter(SiteAdapter):
 
     return False
 
+  async def _has_match_content(self) -> bool:
+    """경기 목록/배당이 이미 로드됐는지 확인."""
+    checks = [
+      self.selectors.get("match_row", "").split(", ")[0],
+      ".odds", "[class*='odds']", "[class*='match']",
+      "table tbody tr", ".game-list",
+    ]
+    for target in self._active_pages():
+      for sel in checks:
+        sel = (sel or "").strip()
+        if not sel:
+          continue
+        try:
+          if await target.locator(sel).count() >= 2:
+            return True
+        except Exception:
+          pass
+    if len(self._captured_api_data) > 0:
+      return bool(self._parse_api_data())
+    return False
+
   async def _wait_for_match_content(self, timeout_ms: int = 15000) -> None:
     """경기 목록 또는 배당 요소가 로드될 때까지 대기."""
     page = self._page
@@ -675,8 +723,11 @@ class Pbc00Adapter(SiteAdapter):
       await self._ensure_logged_in()
       await self._goto_game_page()
 
-    await self._navigate_to_tenbet()
-    await self._page.wait_for_timeout(3000)
+    if not self.skip_tenbet_navigation:
+      await self._navigate_to_tenbet()
+
+    await self._wait_for_content_load()
+    await self._page.wait_for_timeout(2000)
 
     # 페이지 스크린샷 (디버그용)
     try:
@@ -692,13 +743,28 @@ class Pbc00Adapter(SiteAdapter):
       logger.info("[%s] API에서 %d개 마켓 파싱", self.name, len(api_results))
       return api_results
 
-    # 2) DOM 스크래핑 폴백
+    # 2) DOM 스크래핑
     dom_results = await self._scrape_dom()
     if dom_results:
       logger.info("[%s] DOM에서 %d개 마켓 파싱", self.name, len(dom_results))
       return dom_results
 
+    # 3) 텍스트 기반 범용 스크래핑
+    generic = await self._scrape_dom_generic()
+    if generic:
+      logger.info("[%s] 텍스트 파싱 %d개 마켓", self.name, len(generic))
+      return generic
+
     logger.warning("[%s] 배당 데이터를 찾지 못했습니다", self.name)
+    await self._save_debug_screenshot("no_odds")
+    await self._dump_clickable_elements()
+    # 캡처된 API URL 목록 저장 (디버그)
+    api_urls = [c["url"] for c in self._captured_api_data]
+    path = Path("config/pbc00_api_urls.json")
+    path.parent.mkdir(exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(api_urls, f, ensure_ascii=False, indent=2)
+    logger.info("[%s] API URL %d개 저장: %s", self.name, len(api_urls), path)
     return []
 
   def _parse_api_data(self) -> list[MatchOdds]:
@@ -727,6 +793,7 @@ class Pbc00Adapter(SiteAdapter):
         "homeTeam", "awayTeam", "home_team", "away_team",
         "homeName", "awayName", "teamHome", "teamAway",
         "home", "away", "odds", "homeOdds", "awayOdds",
+        "hTeam", "aTeam", "team_h", "team_a", "competitor",
       }
       if keys & match_indicators:
         return data
@@ -882,6 +949,51 @@ class Pbc00Adapter(SiteAdapter):
 
       if results:
         break
+
+    return results
+
+  async def _scrape_dom_generic(self) -> list[MatchOdds]:
+    """페이지 전체 텍스트에서 '팀 vs 팀' + 배당 패턴 탐색."""
+    results: list[MatchOdds] = []
+    vs_pattern = re.compile(
+      r"([^\n]{2,40}?)\s+(?:vs|VS|v\.s\.|대)\s+([^\n]{2,40})",
+      re.MULTILINE,
+    )
+    odds_pattern = re.compile(r"\b([1-9]\d*\.\d{2})\b")
+
+    for target in self._active_pages():
+      try:
+        text = await target.inner_text("body")
+      except Exception:
+        continue
+
+      for i, m in enumerate(vs_pattern.finditer(text)):
+        home = m.group(1).strip()
+        away = m.group(2).strip()
+        if len(home) < 2 or len(away) < 2:
+          continue
+
+        # vs 매치 이후 200자 안에서 배당 2개 찾기
+        snippet = text[m.end(): m.end() + 200]
+        odds_vals = [float(x) for x in odds_pattern.findall(snippet) if 1.01 <= float(x) <= 50.0]
+        if len(odds_vals) < 2:
+          continue
+
+        match = Match(
+          match_id=f"pbc00_txt_{i}",
+          sport="football",
+          home_team=home,
+          away_team=away.split()[0] if len(away) > 30 else away,
+        )
+        results.append(MatchOdds(
+          match=match,
+          site=self.name,
+          market_type=MarketType.MONEYLINE,
+          odds=[
+            Odds(outcome=Outcome.HOME, value=odds_vals[0], site=self.name),
+            Odds(outcome=Outcome.AWAY, value=odds_vals[1], site=self.name),
+          ],
+        ))
 
     return results
 

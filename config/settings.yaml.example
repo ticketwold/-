@@ -1,18 +1,12 @@
 # 양방배팅 프로그램 설정
-# 메모장으로 열어서 본인 정보 입력 후 저장
 
 poll_interval: 3.0
 min_profit_margin: 0.5
 total_stake: 100000
 max_concurrent_bets: 3
-dry_run: true          # true=가상배팅만, false=실제배팅(주의!)
+dry_run: true
 log_level: INFO
 
-# ─────────────────────────────────────────────
-# A사이트: Pinnacle
-# ─────────────────────────────────────────────
-# 배당 조회: 로그인 불필요 (자동 API)
-# 실제 배팅: username/password 필요 (현재 미지원, 수동 배팅)
 site_a:
   name: "Pinnacle"
   enabled: true
@@ -20,47 +14,28 @@ site_a:
   adapter: pinnacle
   skip_live: true
   league_filter: []
-  username: ""          # 배당만 볼 때는 비워둬도 됨
-  password: ""          # 나중에 자동배팅 구현 시 사용
+  username: ""
+  password: ""
 
-# ─────────────────────────────────────────────
-# B사이트: pbc00.com
-# ─────────────────────────────────────────────
-# 아래 URL로 자동 접속:
-# https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N
+# ★ 이 URL = 10벳 경기 목록 (별도 10벳 메뉴 클릭 불필요)
 site_b:
   name: "PBC00"
   enabled: true
   base_url: "https://pbc00.com"
   adapter: pbc00
-
-  # ★ 필수 게임 URL (반드시 이 링크로 접속)
   page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
   gamecode: "19"
   game_child_seq: "3659"
   event: "N"
-
   headless: false
   cookies_path: "config/pbc00_session.json"
   username: "여기에_pbc00_아이디"
   password: "여기에_pbc00_비밀번호"
-
-  # 로그인: 게임 URL 페이지에서 직접
   manual_login: true
-  manual_tenbet: true       # 10벳 자동 클릭 실패 시 수동 클릭 대기
-  login_url: ""
+  skip_tenbet_navigation: true
+  manual_tenbet: false
   login_wait_seconds: 180
-  tenbet_wait_seconds: 180
-
-  # 10벳 메뉴 진입 (자동 클릭 순서, 필요 시 추가)
-  navigation_clicks: []
-  navigation_texts:
-    - "10벳"
-    - "10BET"
-    - "10bet"
-
-  selectors:
-    tenbet_entry: "a:has-text('10벳'), button:has-text('10벳'), a:has-text('10BET')"
+  selectors: {}
 
 sports:
   - football

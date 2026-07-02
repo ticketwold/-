@@ -32,7 +32,8 @@ class SiteConfig(BaseModel):
   )
   headless: bool = False
   manual_login: bool = True
-  manual_tenbet: bool = True
+  manual_tenbet: bool = False
+  skip_tenbet_navigation: bool = True
   login_url: str = ""
   login_wait_seconds: int = 120
   tenbet_wait_seconds: int = 120
