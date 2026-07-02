@@ -26,9 +26,25 @@ class Pbc00Adapter(SiteAdapter):
   """
 
   DEFAULT_SELECTORS = {
-    "login_id": "input[name='id'], input[name='userId'], #userId, .login-id",
-    "login_pw": "input[name='password'], input[name='pw'], #password, .login-pw",
-    "login_btn": "button[type='submit'], .btn-login, #loginBtn",
+    "login_open": (
+      "a:has-text('로그인'), button:has-text('로그인'), "
+      ".btn-login, #login, .login-btn, [href*='login']"
+    ),
+    "login_id": (
+      "input[name='id'], input[name='userId'], input[name='userid'], "
+      "input[name='username'], input[name='memberId'], "
+      "#userId, #userid, #id, #username, .login-id, "
+      "input[placeholder*='아이디'], input[placeholder*='ID']"
+    ),
+    "login_pw": (
+      "input[name='password'], input[name='pw'], input[name='passwd'], "
+      "#password, #pw, #passwd, .login-pw, "
+      "input[type='password'], input[placeholder*='비밀번호']"
+    ),
+    "login_btn": (
+      "button[type='submit'], input[type='submit'], "
+      "button:has-text('로그인'), .btn-login-submit, #loginBtn, #btnLogin"
+    ),
     "match_row": ".game-list .item, .match-item, .game-row, tr.game",
     "home_team": ".home-team, .team-home, .home .name",
     "away_team": ".away-team, .team-away, .away .name",
@@ -58,6 +74,9 @@ class Pbc00Adapter(SiteAdapter):
     page_url: str = "",
     cookies_path: str = "",
     headless: bool = False,
+    manual_login: bool = True,
+    login_url: str = "",
+    login_wait_seconds: int = 120,
     selectors: dict[str, str] | None = None,
     navigation_texts: list[str] | None = None,
     **kwargs,
@@ -69,6 +88,9 @@ class Pbc00Adapter(SiteAdapter):
     self.page_url = page_url
     self.cookies_path = cookies_path
     self.headless = headless
+    self.manual_login = manual_login
+    self.login_url = login_url or f"{self.base_url.rstrip('/')}/main" if self.base_url else "https://pbc00.com/main"
+    self.login_wait_seconds = login_wait_seconds
     self.selectors = {**self.DEFAULT_SELECTORS, **(selectors or {})}
     self.navigation_texts = navigation_texts or self.DEFAULT_NAV_TEXTS
     self._browser = None
@@ -120,9 +142,16 @@ class Pbc00Adapter(SiteAdapter):
 
       self._page.on("response", self._on_response)
 
-      url = self._build_url()
-      logger.info("[%s] 페이지 접속: %s", self.name, url)
-      await self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
+      # 저장된 세션이 있으면 바로 게임 페이지로
+      if self.cookies_path and Path(self.cookies_path).exists():
+        url = self._build_url()
+        logger.info("[%s] 저장된 세션으로 접속: %s", self.name, url)
+        await self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
+      else:
+        # 로그인 페이지(/main)부터 시작
+        logger.info("[%s] 로그인 페이지 접속: %s", self.name, self.login_url)
+        await self._page.goto(self.login_url, wait_until="domcontentloaded", timeout=60000)
+
       await self._page.wait_for_timeout(3000)
 
       if await self._is_cloudflare_blocked():
@@ -134,8 +163,19 @@ class Pbc00Adapter(SiteAdapter):
         await self.disconnect()
         return False
 
-      if self.username and self.password:
-        await self._login()
+      logged_in = await self._ensure_logged_in()
+
+      if not logged_in:
+        logger.error("[%s] 로그인 실패", self.name)
+        await self._save_debug_screenshot("login_failed")
+        return False
+
+      # 게임 페이지로 이동
+      game_url = self._build_url()
+      if self._page.url != game_url:
+        logger.info("[%s] 게임 페이지 이동: %s", self.name, game_url)
+        await self._page.goto(game_url, wait_until="domcontentloaded", timeout=60000)
+        await self._page.wait_for_timeout(2000)
 
       await self._navigate_to_tenbet()
 
@@ -170,28 +210,185 @@ class Pbc00Adapter(SiteAdapter):
     except Exception:
       pass
 
-  async def _login(self) -> None:
-    """로그인 시도."""
+  async def _ensure_logged_in(self) -> bool:
+    """로그인 보장 — 세션 있으면 스킵, 없으면 자동/수동 로그인."""
+    if await self._is_logged_in():
+      logger.info("[%s] 이미 로그인됨", self.name)
+      await self._save_session()
+      return True
+
+    if self.manual_login:
+      return await self._manual_login_wait()
+
+    if self.username and self.password:
+      success = await self._auto_login()
+      if success:
+        await self._save_session()
+        return True
+
+    logger.warning("[%s] 자동 로그인 실패 → 수동 로그인 대기", self.name)
+    return await self._manual_login_wait()
+
+  async def _is_logged_in(self) -> bool:
+    """로그인 상태 확인."""
     page = self._page
-    for sel in self.selectors["login_id"].split(", "):
-      if await page.locator(sel).count() > 0:
-        await page.locator(sel).first.fill(self.username)
-        break
+    logout_keywords = ["로그아웃", "logout", "Logout", "마이페이지", "충전", "출금"]
+    for target in self._active_pages():
+      try:
+        body = await target.inner_text("body")
+        for kw in logout_keywords:
+          if kw in body:
+            return True
+      except Exception:
+        pass
 
-    for sel in self.selectors["login_pw"].split(", "):
-      if await page.locator(sel).count() > 0:
-        await page.locator(sel).first.fill(self.password)
-        break
+    # 로그인 폼이 없으면 로그인된 것으로 간주
+    for target in self._active_pages():
+      try:
+        pw_count = await target.locator("input[type='password']").count()
+        id_selectors = self.selectors["login_id"].split(", ")
+        id_count = 0
+        for sel in id_selectors:
+          id_count += await target.locator(sel.strip()).count()
+        if pw_count == 0 and id_count == 0:
+          return True
+      except Exception:
+        pass
 
-    for sel in self.selectors["login_btn"].split(", "):
-      if await page.locator(sel).count() > 0:
-        await page.locator(sel).first.click()
-        await page.wait_for_timeout(3000)
-        break
+    return False
 
-    if self.cookies_path:
-      await page.context.storage_state(path=self.cookies_path)
-      logger.info("[%s] 세션 저장: %s", self.name, self.cookies_path)
+  async def _open_login_form(self) -> None:
+    """로그인 버튼 클릭하여 로그인 폼 열기."""
+    for target in self._active_pages():
+      for sel in self.selectors.get("login_open", "").split(", "):
+        sel = sel.strip()
+        if not sel:
+          continue
+        try:
+          loc = target.locator(sel)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=3000)
+            await self._page.wait_for_timeout(1500)
+            logger.info("[%s] 로그인 폼 열기: %s", self.name, sel)
+            return
+        except Exception:
+          pass
+
+      for text in ["로그인", "LOGIN", "Login"]:
+        try:
+          loc = target.get_by_text(text, exact=True)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=3000)
+            await self._page.wait_for_timeout(1500)
+            return
+        except Exception:
+          pass
+
+  async def _auto_login(self) -> bool:
+    """자동 로그인 시도."""
+    logger.info("[%s] 자동 로그인 시도...", self.name)
+    await self._open_login_form()
+    await self._page.wait_for_timeout(1000)
+
+    filled_id = await self._fill_input(self.selectors["login_id"], self.username)
+    filled_pw = await self._fill_input(self.selectors["login_pw"], self.password)
+
+    if not filled_id or not filled_pw:
+      logger.warning("[%s] 로그인 입력창을 찾지 못함 (id=%s, pw=%s)", self.name, filled_id, filled_pw)
+      await self._save_debug_screenshot("login_form_not_found")
+      return False
+
+    clicked = await self._click_selector(self.selectors["login_btn"])
+    if not clicked:
+      # Enter 키로 제출 시도
+      for target in self._active_pages():
+        try:
+          await target.locator("input[type='password']").first.press("Enter")
+          break
+        except Exception:
+          pass
+
+    await self._page.wait_for_timeout(4000)
+    return await self._is_logged_in()
+
+  async def _manual_login_wait(self) -> bool:
+    """브라우저에서 사용자가 직접 로그인할 때까지 대기."""
+    print()
+    print("=" * 55)
+    print("  [PBC00] 브라우저에서 직접 로그인해 주세요!")
+    print("  1) 아이디 / 비밀번호 입력")
+    print("  2) 로그인 버튼 클릭")
+    print(f"  3) 최대 {self.login_wait_seconds}초 대기합니다...")
+    print("=" * 55)
+    print()
+
+    await self._open_login_form()
+
+    interval = 2
+    elapsed = 0
+    while elapsed < self.login_wait_seconds:
+      if await self._is_logged_in():
+        logger.info("[%s] 수동 로그인 성공!", self.name)
+        await self._save_session()
+        return True
+      await self._page.wait_for_timeout(interval * 1000)
+      elapsed += interval
+      if elapsed % 10 == 0:
+        print(f"  ... 로그인 대기 중 ({elapsed}/{self.login_wait_seconds}초)")
+
+    logger.error("[%s] 로그인 시간 초과", self.name)
+    return False
+
+  async def _fill_input(self, selector_str: str, value: str) -> bool:
+    """메인 페이지 + iframe에서 입력창 찾아 입력."""
+    for target in self._active_pages():
+      for sel in selector_str.split(", "):
+        sel = sel.strip()
+        if not sel:
+          continue
+        try:
+          loc = target.locator(sel)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=3000)
+            await loc.first.fill(value, timeout=3000)
+            return True
+        except Exception:
+          pass
+    return False
+
+  async def _click_selector(self, selector_str: str) -> bool:
+    for target in self._active_pages():
+      for sel in selector_str.split(", "):
+        sel = sel.strip()
+        if not sel:
+          continue
+        try:
+          loc = target.locator(sel)
+          if await loc.count() > 0:
+            await loc.first.click(timeout=5000)
+            return True
+        except Exception:
+          pass
+    return False
+
+  async def _save_session(self) -> None:
+    if self.cookies_path and self._page:
+      Path(self.cookies_path).parent.mkdir(parents=True, exist_ok=True)
+      await self._page.context.storage_state(path=self.cookies_path)
+      logger.info("[%s] 로그인 세션 저장: %s", self.name, self.cookies_path)
+
+  async def _save_debug_screenshot(self, name: str) -> None:
+    try:
+      Path("config").mkdir(exist_ok=True)
+      path = f"config/pbc00_{name}.png"
+      await self._page.screenshot(path=path, full_page=True)
+      logger.info("[%s] 스크린샷 저장: %s", self.name, path)
+    except Exception:
+      pass
+
+  async def _login(self) -> None:
+    """레거시 — _ensure_logged_in 사용."""
+    await self._ensure_logged_in()
 
   async def _navigate_to_tenbet(self) -> bool:
     """10벳 스포츠북 메뉴 진입 — 경기 목록이 표시되는 화면으로 이동."""

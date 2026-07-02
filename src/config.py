@@ -31,6 +31,9 @@ class SiteConfig(BaseModel):
     default_factory=lambda: ["10벳", "10BET", "10bet", "10 벳", "텐벳"]
   )
   headless: bool = False
+  manual_login: bool = True
+  login_url: str = ""
+  login_wait_seconds: int = 120
   selectors: dict[str, str] = Field(default_factory=dict)
 
 

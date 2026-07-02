@@ -54,6 +54,9 @@ def create_adapter(config):
       page_url=getattr(config, "page_url", ""),
       cookies_path=config.cookies_path,
       headless=config.headless,
+      manual_login=getattr(config, "manual_login", True),
+      login_url=getattr(config, "login_url", ""),
+      login_wait_seconds=getattr(config, "login_wait_seconds", 120),
       navigation_texts=getattr(config, "navigation_texts", None),
       selectors=config.selectors or None,
     )
@@ -446,6 +449,49 @@ async def _run_virtual_test(max_scans: int):
     ))
   else:
     console.print("[yellow]양방배팅 기회 없음 - 다시 실행해 보세요[/yellow]")
+
+
+@cli.command("pbc00-login")
+@click.option("--config", "-c", default=None, help="설정 파일 경로")
+@click.option("--wait", "-w", default=180, type=int, help="로그인 대기 시간(초)")
+def pbc00_login(config, wait):
+  """pbc00 수동 로그인 — 브라우저에서 직접 로그인 후 세션 저장."""
+  cfg = load_config(config)
+  setup_logging(cfg.log_level)
+
+  site_cfg = cfg.site_b if cfg.site_b.adapter == "pbc00" else cfg.site_a
+  if site_cfg.adapter != "pbc00":
+    console.print("[red]settings.yaml 에서 site_b.adapter 를 pbc00으로 설정하세요[/red]")
+    return
+
+  site_cfg.manual_login = True
+  site_cfg.login_wait_seconds = wait
+  site_cfg.headless = False
+
+  asyncio.run(_run_pbc00_login(site_cfg))
+
+
+async def _run_pbc00_login(site_cfg):
+  adapter = create_adapter(site_cfg)
+  console.print(Panel(
+    "[bold]pbc00 로그인[/bold]\n"
+    "1. 브라우저가 열리면 직접 로그인\n"
+    "2. 로그인 완료 시 세션 자동 저장\n"
+    f"3. 저장 위치: {site_cfg.cookies_path or 'config/pbc00_session.json'}",
+    title="PBC00 Login",
+    border_style="cyan",
+  ))
+
+  connected = await adapter.connect()
+  if connected:
+    console.print("[green]로그인 성공! 세션이 저장되었습니다.[/green]")
+    console.print("다음부터는 로그인 없이 실행됩니다:")
+    console.print("  python -m src.main virtual-test-real --scans 3")
+  else:
+    console.print("[red]로그인 실패[/red]")
+    console.print("config\\pbc00_login_failed.png 스크린샷을 확인하세요.")
+
+  await adapter.disconnect()
 
 
 @cli.command()
