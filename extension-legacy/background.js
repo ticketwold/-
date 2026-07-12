@@ -203,11 +203,28 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchJsonInFrame(tabId, frameId, url) {
+async function getAllFrameIdsForFetch(tabId, tabUrl) {
+  const candidates = await getBtiFrameCandidates(tabId, tabUrl);
+  const frames = await getAllTabFrames(tabId);
+  const ordered = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!seen.has(c.frameId)) { ordered.push(c.frameId); seen.add(c.frameId); }
+  }
+  for (const f of frames) {
+    if (f.frameId !== 0 && !seen.has(f.frameId)) { ordered.push(f.frameId); seen.add(f.frameId); }
+  }
+  if (!ordered.length) ordered.push(0);
+  return ordered;
+}
+
+async function fetchJsonInFrame(tabId, frameId, path) {
+  const apiPath = path.startsWith('http') ? path : path;
+
   try {
     const viaContent = await chrome.tabs.sendMessage(
       tabId,
-      { type: 'FETCH_BTI_JSON', url },
+      { type: 'FETCH_BTI_JSON', url: apiPath.startsWith('http') ? apiPath : null, path: apiPath.startsWith('http') ? null : apiPath },
       { frameId }
     );
     if (viaContent?.ok && viaContent.data !== undefined) return viaContent.data;
@@ -216,37 +233,35 @@ async function fetchJsonInFrame(tabId, frameId, url) {
   const results = await chrome.scripting.executeScript({
     target: { tabId, frameIds: [frameId] },
     world: 'MAIN',
-    func: async (fetchUrl) => {
+    func: async (p) => {
       try {
+        const fetchUrl = p.startsWith('http') ? p : (location.origin.replace(/\/$/, '') + p);
         const res = await fetch(fetchUrl, { credentials: 'include' });
-        if (!res.ok) return { error: String(res.status) };
+        if (!res.ok) return { error: String(res.status), url: fetchUrl };
         return await res.json();
       } catch (e) {
         return { error: e.message };
       }
     },
-    args: [url]
+    args: [apiPath]
   });
   const result = results?.[0]?.result;
-  if (!result || result.error) throw new Error(String(result?.error || '응답 없음'));
+  if (!result || result.error) throw new Error(String(result?.error || '응답 없음') + (result?.url ? ` @ ${result.url}` : ''));
   return result;
 }
 
-// BTI API 호출 — BTI iframe 컨텍스트에서 fetch (pbc00 로그인 쿠키)
+// BTI API 호출 — BTI iframe 컨텍스트에서 fetch (iframe location.origin 사용)
 async function fetchBtiViaTab(tabId, path, tabUrl) {
   let lastError = '응답 없음';
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await sleep(800);
-
-    const baseUrl = await resolveBtiApiOrigin(tabId, tabUrl);
-    const url = baseUrl + path;
-    const frameIds = await getBtiFrameIds(tabId, tabUrl);
+    if (attempt > 0) await sleep(1000);
+    const frameIds = await getAllFrameIdsForFetch(tabId, tabUrl);
 
     for (const frameId of frameIds) {
       try {
-        const data = await fetchJsonInFrame(tabId, frameId, url);
-        console.log('[BTI] API OK', path.slice(0, 60), 'frame=', frameId, 'base=', baseUrl);
+        const data = await fetchJsonInFrame(tabId, frameId, path);
+        console.log('[BTI] API OK', path.slice(0, 70), 'frame=', frameId);
         return data;
       } catch (e) {
         lastError = e.message;
@@ -326,6 +341,7 @@ async function diagBtiSearch() {
   const apiOrigin = await resolveBtiApiOrigin(btiTab.id, btiTab.url);
 
   let apiTest = { ok: false, error: 'not tried' };
+  let prematchTest = { ok: false, error: 'not tried' };
   try {
     const data = await fetchBtiViaTab(
       btiTab.id,
@@ -335,6 +351,17 @@ async function diagBtiSearch() {
     apiTest = { ok: true, count: Array.isArray(data) ? data.length : 0, type: Array.isArray(data) ? 'array' : typeof data };
   } catch (e) {
     apiTest = { ok: false, error: e.message };
+  }
+  try {
+    const pm = await fetchBtiViaTab(
+      btiTab.id,
+      '/api/eventlist/eu/sports/v2/1/upcoming/eventUpdates?marketTypeIds=ML0',
+      btiTab.url
+    );
+    const rows = extractEventlistRows(pm);
+    prematchTest = { ok: true, count: rows.length };
+  } catch (e) {
+    prematchTest = { ok: false, error: e.message };
   }
 
   const domEvents = await scrapeBtiDomFromTab(btiTab.id);
@@ -354,6 +381,7 @@ async function diagBtiSearch() {
     frameCount: frames.length,
     candidates: candidates.slice(0, 5).map((c) => ({ frameId: c.frameId, url: c.url.slice(0, 80), score: c.score })),
     apiTest,
+    prematchTest,
     domEventCount: domEvents.length,
     framePings
   };
@@ -695,107 +723,171 @@ async function getBtiLiveMatchups(btiTabId) {
   }
 }
 
-// BTI 프리매치 전체 경기 목록 + 배당 가져오기
-// 실제 BTI API: /api/eventlist/eu/sports/v2/{sportId}/upcoming/eventUpdates
-async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
-  // 실제 확인된 BTI 프리매치 API
-  // 응답: { data: [ [id, leagueId, leagueName, sportId, sportName, ..., teams, ..., eventName, startTime, ...], ... ] }
-  // 인덱스: [0]=이벤트ID, [2]=리그명, [3]=스포츠ID(문자열), [8]=팀배열, [10]=이벤트명, [11]=시작시간
-  // [8] 팀배열: [ [teamId, {KO:'팀명'}, 'Home'], [teamId, {KO:'팀명'}, 'Away'] ]
+// BTI eventlist 응답 행 추출 (포맷 변형 대응)
+function extractEventlistRows(rawData) {
+  if (!rawData) return [];
+  if (Array.isArray(rawData)) return rawData;
+  if (Array.isArray(rawData.data)) return rawData.data;
+  if (Array.isArray(rawData.events)) return rawData.events;
+  if (rawData.data && Array.isArray(rawData.data.events)) return rawData.data.events;
+  return [];
+}
 
-  // BTI 스포츠 ID (축구=1, 야구=6, 농구=7, 이스포츠=59, 테니스=2)
+function parseEventlistRow(row, btiSportId) {
+  const r = Array.isArray(row) ? row : Object.values(row);
+  if (!r || r.length < 8) return null;
+
+  const eventId = r[0];
+  if (!eventId) return null;
+  if (r[12] === true || r[13] === true) return null;
+
+  let home = '', away = '', homeKo = '', awayKo = '';
+  const teams = r[8];
+  if (Array.isArray(teams)) {
+    for (const t of teams) {
+      if (!Array.isArray(t) || t.length < 3) continue;
+      const nameObj = t[1];
+      const side = t[2];
+      let nameEn = '', nameKo = '';
+      if (nameObj && typeof nameObj === 'object') {
+        nameEn = nameObj.EN || '';
+        nameKo = nameObj.KO || '';
+      } else {
+        nameEn = String(nameObj || '');
+      }
+      const name = nameEn || nameKo;
+      if (side === 'Home') { home = name; homeKo = nameKo; }
+      else if (side === 'Away') { away = name; awayKo = nameKo; }
+    }
+  }
+
+  if (!home && r[10]) {
+    const parts = String(r[10]).split(' vs ');
+    if (parts.length >= 2) { home = parts[0].trim(); away = parts[1].trim(); }
+  }
+  if (!home) return null;
+
+  return {
+    id: String(eventId),
+    home, away, homeKo, awayKo,
+    sportId: BTI_TO_PIN_SPORT[btiSportId] || 0,
+    btiSportId,
+    league: r[2] || '',
+    markets: [],
+    rawRow: r,
+    startTime: r[11] || null
+  };
+}
+
+async function fetchBtiFeaturedPrematch(btiTabId, btiTabUrl) {
+  const path = `/api/sportscenter/carousels/featured-matches/markets?language=KO&customerLevel=0&selectedOptionId=0&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`;
+  const data = await fetchBtiViaTab(btiTabId, path, btiTabUrl);
+  if (!Array.isArray(data)) return [];
+
+  const result = [];
+  for (const event of data) {
+    if (!event.id || !event.markets?.length) continue;
+    if (event.markets.some((m) => m.IsLive)) continue;
+
+    let home = '', away = '';
+    const m0 = event.markets[0];
+    if (m0.Selections) {
+      const homeSel = m0.Selections.find((s) => s.Side === 'H' || s.Side === 'Home');
+      const awaySel = m0.Selections.find((s) => s.Side === 'A' || s.Side === 'Away');
+      if (homeSel) home = homeSel.Name || homeSel.TeamName || '';
+      if (awaySel) away = awaySel.Name || awaySel.TeamName || '';
+    }
+    if (!home && m0.EventName) {
+      const parts = m0.EventName.split(' vs ');
+      if (parts.length >= 2) { home = parts[0].trim(); away = parts[1].trim(); }
+    }
+    if (!home) continue;
+
+    const btiSportId = m0.SportId || 0;
+    result.push({
+      id: String(event.id),
+      home, away,
+      sportId: BTI_TO_PIN_SPORT[btiSportId] || 0,
+      btiSportId,
+      league: m0.LeagueName || '',
+      markets: event.markets,
+      startTime: event.StartDate || null,
+      _source: 'featured-matches'
+    });
+  }
+  return result;
+}
+
+let lastBtiPrematchDiag = { errors: [], sources: {}, apiOrigin: '' };
+
+// BTI 프리매치 전체 경기 목록 + 배당 가져오기
+async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
   const BTI_SPORT_IDS = [1, 6, 7, 59, 2];
-  // 종목별 마켓 타입 ID
   const MARKET_TYPE_MAP = {
-    1:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619%2CML167',  // 축구
-    6:  'ML0%2COU0%2CHC0%2CML619%2COU619%2CHC619',           // 야구
-    7:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619',           // 농구
-    59: 'ML587%2CML0%2COU0%2CHC0%2CML619%2COU619%2CHC619',   // 이스포츠
-    2:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619'            // 테니스
+    1:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619%2CML167',
+    6:  'ML0%2COU0%2CHC0%2CML619%2COU619%2CHC619',
+    7:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619',
+    59: 'ML587%2CML0%2COU0%2CHC0%2CML619%2COU619%2CHC619',
+    2:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619'
   };
 
   const allEvents = [];
+  const errors = [];
+  const sources = {};
+
+  try {
+    lastBtiPrematchDiag.apiOrigin = await resolveBtiApiOrigin(btiTabId, btiTabUrl);
+  } catch (_) {}
 
   for (const sportId of BTI_SPORT_IDS) {
-    try {
-      const marketTypeIds = MARKET_TYPE_MAP[sportId] || 'HC0%2COU0%2CML0';
-      const url = `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?becomeLiveIn=3&isAllMarkets=true&marketTypeIds=${marketTypeIds}`;
-      const rawData = await fetchBtiViaTab(btiTabId, url, btiTabUrl);
-
-      // 응답: { data: [...] }
-      const rows = rawData?.data;
-      if (!Array.isArray(rows) || rows.length === 0) continue;
-
-      for (const row of rows) {
-        // row는 배열 또는 숫자키 객체
-        const r = Array.isArray(row) ? row : Object.values(row);
-        if (!r || r.length < 12) continue;
-
-        const eventId = r[0];
-        if (!eventId) continue;
-
-        // 라이브 제외 (r[12] 또는 r[13] 중 isLive 플래그)
-        if (r[12] === true || r[13] === true) continue;
-
-        // 팀명 추출: r[8] = [ [teamId, {KO:'한국어명', EN:'영문명'}, 'Home'], ... ]
-        // 피나클 API가 영문만 반환하므로 EN 우선, KO는 폴백
-        let home = '', away = '', homeKo = '', awayKo = '';
-        const teams = r[8];
-        if (Array.isArray(teams)) {
-          for (const t of teams) {
-            if (!Array.isArray(t) || t.length < 3) continue;
-            const nameObj = t[1];
-            const side = t[2];
-            let nameEn = '', nameKo = '';
-            if (nameObj && typeof nameObj === 'object') {
-              nameEn = nameObj.EN || '';
-              nameKo = nameObj.KO || '';
-            } else {
-              nameEn = String(nameObj || '');
-            }
-            // EN 우선, 없으면 KO 사용
-            const name = nameEn || nameKo;
-            if (side === 'Home') { home = name; homeKo = nameKo; }
-            else if (side === 'Away') { away = name; awayKo = nameKo; }
-          }
+    const paths = [
+      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?becomeLiveIn=3&isAllMarkets=true&marketTypeIds=${MARKET_TYPE_MAP[sportId] || 'HC0%2COU0%2CML0'}`,
+      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?isAllMarkets=false&marketTypeIds=ML0%2COU0%2CHC0`,
+      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?marketTypeIds=ML0`
+    ];
+    let sportCount = 0;
+    for (const url of paths) {
+      try {
+        const rawData = await fetchBtiViaTab(btiTabId, url, btiTabUrl);
+        const rows = extractEventlistRows(rawData);
+        for (const row of rows) {
+          const ev = parseEventlistRow(row, sportId);
+          if (ev) { allEvents.push(ev); sportCount++; }
         }
-
-        // 폴백: 이벤트명에서 파싱
-        if (!home && r[10]) {
-          const parts = String(r[10]).split(' vs ');
-          if (parts.length >= 2) { home = parts[0].trim(); away = parts[1].trim(); }
+        if (sportCount > 0) {
+          sources[`sport${sportId}`] = `eventlist:${sportCount}`;
+          break;
         }
-
-        if (!home) continue;
-
-        const startTime = r[11] || null;
-        const leagueName = r[2] || '';
-
-        allEvents.push({
-          id: String(eventId),
-          home, away,
-          homeKo, awayKo, // 한국어 팀명 보존 (디버그용)
-          sportId: BTI_TO_PIN_SPORT[sportId] || 0,
-          btiSportId: sportId,
-          league: leagueName,
-          markets: [], // 배당은 별도 API로 가져오거나 이벤트 내 포함된 데이터 사용
-          rawRow: r,   // 원본 데이터 보존 (배당 파싱용)
-          startTime
-        });
+      } catch (e) {
+        errors.push(`sport${sportId}: ${e.message}`);
       }
-    } catch(e) {
-      console.error(`getBtiPrematchMatchups sportId=${sportId} error:`, e.message);
+    }
+  }
+
+  if (!allEvents.length) {
+    try {
+      const featured = await fetchBtiFeaturedPrematch(btiTabId, btiTabUrl);
+      if (featured.length) {
+        allEvents.push(...featured);
+        sources.featured = featured.length;
+        console.log('[BTI] 프리매치 featured-matches 폴백:', featured.length);
+      }
+    } catch (e) {
+      errors.push(`featured: ${e.message}`);
     }
   }
 
   if (!allEvents.length) {
     const domEvents = await scrapeBtiDomFromTab(btiTabId);
     if (domEvents.length) {
-      console.warn('[BTI] 프리매치 API 0건 — 현재 화면 DOM 폴백 사용');
-      return domEvents;
+      allEvents.push(...domEvents);
+      sources.dom = domEvents.length;
+      console.warn('[BTI] 프리매치 API 0건 — DOM 폴백:', domEvents.length);
     }
   }
 
+  lastBtiPrematchDiag = { errors: errors.slice(0, 8), sources, apiOrigin: lastBtiPrematchDiag.apiOrigin };
+  console.log('[BTI] 프리매치 수집:', allEvents.length, lastBtiPrematchDiag);
   return allEvents;
 }
 
@@ -1383,8 +1475,10 @@ async function runPrematchSearchOnce() {
   const pinTennis = pinMatchupsBySport[33] || [];
 
   const btiAll = await getBtiPrematchMatchups(btiTab.id, btiTab.url);
-  let btiApiOrigin = '';
-  try { btiApiOrigin = await resolveBtiApiOrigin(btiTab.id, btiTab.url); } catch (_) {}
+  let btiApiOrigin = lastBtiPrematchDiag.apiOrigin || '';
+  try {
+    if (!btiApiOrigin) btiApiOrigin = await resolveBtiApiOrigin(btiTab.id, btiTab.url);
+  } catch (_) {}
 
   // 양방 기회 탐색
   const allOpps = [
@@ -1409,6 +1503,8 @@ async function runPrematchSearchOnce() {
       pinTabFound: !!pinTab,
       btiApiOrigin,
       btiDomFallback: btiAll.some((e) => e._domFallback),
+      btiFetchErrors: lastBtiPrematchDiag.errors,
+      btiFetchSources: lastBtiPrematchDiag.sources,
       matched: allOpps.length
     }
   };

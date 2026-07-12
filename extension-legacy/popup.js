@@ -1637,11 +1637,12 @@ async function pollLoop() {
   ]);
 
   // BTI 기준점 변경 감지 (오버/언더 마켓일 때만)
-  if (bSlip && bSlip.marketKind === 'ou' && bSlip.line) {
-    const btiLineKey = `${bSlip.side}_${bSlip.line}`;
+  if (bSlip && bSlip.marketKind === 'ou' && bSlip.line != null) {
+    const bOu = normOuSide(bSlip.side);
+    const btiLineKey = `${bOu}_${bSlip.line}`;
     if (btiLineKey !== lastBtiLineKey) {
       lastBtiLineKey = btiLineKey;
-      addLog(`BTI 기준점 변경 감지: ${bSlip.side === 'u' ? '언더' : '오버'} ${bSlip.line} → 피나클 동기화 시도`, 'info');
+      addLog(`BTI 기준점 변경 감지: ${bOu === 'u' ? '언더' : '오버'} ${bSlip.line} → 피나클 동기화 시도`, 'info');
       // 배당판 클릭은 pinTab (배당판 iframe), 슬립 재읽기는 pinSlipTab
       const syncResult = await syncPinnacleToLine(pinTab, bSlip);
       if (syncResult === 'stop') {

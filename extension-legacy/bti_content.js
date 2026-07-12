@@ -553,9 +553,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'FETCH_BTI_JSON') {
-    fetch(msg.url, { credentials: 'include' })
+    const fetchUrl = msg.url || (location.origin.replace(/\/$/, '') + (msg.path || ''));
+    fetch(fetchUrl, { credentials: 'include' })
       .then((r) => {
-        if (!r.ok) throw new Error(String(r.status));
+        if (!r.ok) throw new Error(String(r.status) + ' @ ' + fetchUrl);
         return r.json();
       })
       .then((data) => sendResponse({ ok: true, data }))
