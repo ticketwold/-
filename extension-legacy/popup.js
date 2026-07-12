@@ -197,7 +197,7 @@ function marketsMatch(p, b) {
 // 피나클 계열 도메인 (eviran66, mervani99, auremi88 + 직접 pinnacle.com)
 const PINNACLE_PATTERNS = ['eviran66.com', 'mervani99.com', 'auremi88.com', 'pinnacle.com', 'eviran', 'mervani'];
 // BTI 계열 도메인 (prod188 포함 모든 bti-sports.io 서브도메인 + live8588.com AVA BTI + fxf774.com)
-const BTI_PATTERNS = ['bti-sports.io', 'bti-sports.com', 'indonesiawinner.com', 'live8588.com', 'fxf774.com'];
+const BTI_PATTERNS = ['bti-sports.io', 'bti-sports.com', 'indonesiawinner.com', 'live8588.com', 'fxf774.com', 'eviran66.com', 'auremi88.com'];
 // SBOBET 계열 도메인 (wg88ss.com 안 iframe: zzllrrcc33.com)
 const SBOBET_PATTERNS = ['zzllrrcc33.com', 'jjddgg.com', 'zzddqq.com', 'sports-sbomaind-play'];
 const SBOBET_WRAPPER_PATTERNS = ['wg88ss.com'];
@@ -224,6 +224,35 @@ function isPbcPinnacleUrl(url) {
   return m ? ['1','2','3','4','5'].includes(m[1]) : false;
 }
 function isBtiUrl(url) { return url && BTI_PATTERNS.some(p => url.includes(p)); }
+function isBtiFrameUrl(url) {
+  if (!url || url === 'about:blank') return false;
+  return isBtiUrl(url) || /sportsbook|asian-view|\/sports/i.test(url);
+}
+
+/** 배당 텍스트 파싱 — 1.8, 1.80, 2.525 모두 허용 */
+function parseOddsValue(txt) {
+  const t = String(txt || '').trim();
+  const n = parseFloat(t);
+  if (!n || n <= 1.01 || n >= 100) return null;
+  if (!/^\d+(\.\d{1,4})?$/.test(t)) return null;
+  return n;
+}
+
+async function getAllFrames(tabId) {
+  return new Promise((resolve) => {
+    chrome.webNavigation.getAllFrames({ tabId }, (frames) => resolve(frames || []));
+  });
+}
+
+async function readBtiSlipFromFrame(tabId, frameId) {
+  try {
+    const msg = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: 'READ_SLIP' }, { frameId }, (res) => resolve(res));
+    });
+    if (msg?.slip?.odds > 1) return msg.slip;
+  } catch (_) {}
+  return execInTab({ id: tabId, frameId }, btiReadSlipFn);
+}
 // pbc00.com URL에서 gamecode로 BTI/피나클 구분 (gamecode=19 → BTI, gamecode=1 → 피나클)
 function isPbcBtiUrl(url) {
   if (!url || !url.includes('pbc00.com')) return false;
@@ -237,64 +266,67 @@ function isPbcBtiUrl(url) {
 // ─── 탭 탐색 ─────────────────────────────────────────────────────────
 // 반환: { pinTab, pinSlipTab, btiTab }
 // pinTab/pinSlipTab: 피나클 슬립이 있는 mervani99.com iframe (pbc00.com wrapper)
-// btiTab: BTI 슬립 (직접 탭 또는 wg88ss.com wrapper 안 iframe)
+// btiTab: BTI 슬립 (직접 탭 또는 pbc00.com wrapper 안 iframe)
 async function findTabs() {
-  return new Promise(resolve => {
-    chrome.tabs.query({}, tabs => {
-      let pinTab = null, pinSlipTab = null, btiTab = null, sboTab = null;
+  const tabs = await chrome.tabs.query({});
+  let pinTab = null, pinSlipTab = null, btiTab = null, sboTab = null;
 
-      // 1. 직접 탭에서 피나클 찾기 (게임 페이지만, account 등 제외)
-      // 피나클 탭이 여러 개면 가장 마지막(최근) 탭 사용 (배당 버튼이 선택된 탭일 가능성 높음)
-      const allDirectPin = tabs.filter(t => isPinnacleGameUrl(t.url));
-      const directPin = allDirectPin.length > 0 ? allDirectPin[allDirectPin.length - 1] : null;
-      if (directPin) {
-        pinTab = { ...directPin, frameId: 0 };
-        pinSlipTab = { ...directPin, frameId: 0 };
+  const allDirectPin = tabs.filter(t => isPinnacleGameUrl(t.url));
+  const directPin = allDirectPin.length > 0 ? allDirectPin[allDirectPin.length - 1] : null;
+  if (directPin) {
+    pinTab = { ...directPin, frameId: 0 };
+    pinSlipTab = { ...directPin, frameId: 0 };
+  }
+
+  const directBti = tabs.find(t => isBtiUrl(t.url) && !t.url.includes('pbc00.com'));
+  if (directBti) btiTab = { ...directBti, frameId: 0 };
+
+  const directSbo = tabs.find(t => isSbobetUrl(t.url));
+  if (directSbo) sboTab = { ...directSbo, frameId: 0 };
+
+  const scorePbcBti = (url) => {
+    const m = url.match(/[?&]gamecode=(\d+)/);
+    return m && ['19', '20', '21', '22', '23'].includes(m[1]) ? 10 : 1;
+  };
+  const allPbcTabs = tabs
+    .filter(t => t.url && t.url.includes('pbc00.com'))
+    .sort((a, b) => scorePbcBti(b.url) - scorePbcBti(a.url));
+  const allWgTabs = tabs.filter(t => t.url && isSbobetWrapperUrl(t.url));
+
+  for (const wTab of [...allPbcTabs, ...allWgTabs]) {
+    const frames = await getAllFrames(wTab.id);
+    for (const frame of frames) {
+      if (isPinnacleGameUrl(frame.url) && !frame.url.includes('dp-iframe')) {
+        pinTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
+        pinSlipTab = pinTab;
       }
-
-      // 2. 직접 탭에서 BTI 찾기 (live8588.com 포함)
-      const directBti = tabs.find(t => isBtiUrl(t.url));
-      if (directBti) btiTab = { ...directBti, frameId: 0 };
-
-      // 3. 직접 탭에서 SBOBET 찾기 (zzllrrcc33.com 직접 탭)
-      const directSbo = tabs.find(t => isSbobetUrl(t.url));
-      if (directSbo) sboTab = { ...directSbo, frameId: 0 };
-
-      // 4. pbc00.com wrapper → 피나클/BTI iframe 탐색
-      const allPbcTabs = tabs.filter(t => t.url && t.url.includes('pbc00.com'));
-      // 5. wg88ss.com wrapper → SBOBET iframe 탐색
-      const allWgTabs = tabs.filter(t => t.url && isSbobetWrapperUrl(t.url));
-
-      const allWrapperTabs = [...allPbcTabs, ...allWgTabs];
-      if (!allWrapperTabs.length) return resolve({ pinTab, pinSlipTab, btiTab, sboTab });
-
-      let pending = allWrapperTabs.length;
-      const done = () => { pending--; if (pending === 0) resolve({ pinTab, pinSlipTab, btiTab, sboTab }); };
-
-      for (const wTab of allWrapperTabs) {
-        chrome.webNavigation.getAllFrames({ tabId: wTab.id }, frames => {
-          if (frames) {
-            for (const frame of frames) {
-              // 피나클 iframe 탐색
-              if (isPinnacleGameUrl(frame.url) && !frame.url.includes('dp-iframe')) {
-                pinTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-                pinSlipTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-              }
-              // BTI iframe 탐색 (bti-sports.io 서브도메인)
-              if (!btiTab && isBtiUrl(frame.url)) {
-                btiTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-              }
-              // SBOBET iframe 탐색 (zzllrrcc33.com)
-              if (!sboTab && isSbobetUrl(frame.url)) {
-                sboTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-              }
-            }
-          }
-          done();
-        });
+      if (!btiTab && isBtiFrameUrl(frame.url)) {
+        btiTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
       }
-    });
-  });
+      if (!sboTab && isSbobetUrl(frame.url)) {
+        sboTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
+      }
+    }
+  }
+
+  // BTI iframe URL 미매칭 시 — pbc00 모든 프레임에서 슬립 프로브
+  if (!btiTab && allPbcTabs.length) {
+    for (const pbc of allPbcTabs) {
+      const frames = await getAllFrames(pbc.id);
+      const ordered = [...frames].sort((a, b) => (a.frameId === 0 ? 1 : 0) - (b.frameId === 0 ? 1 : 0));
+      for (const frame of ordered) {
+        const slip = await readBtiSlipFromFrame(pbc.id, frame.frameId);
+        if (slip && slip.odds > 1) {
+          btiTab = { id: pbc.id, url: frame.url || pbc.url, frameId: frame.frameId };
+          cachedBtiSlip = slip;
+          break;
+        }
+      }
+      if (btiTab) break;
+    }
+  }
+
+  return { pinTab, pinSlipTab, btiTab, sboTab };
 }
 
 // ─── 마켓 매칭 키 생성 헬퍼 ──────────────────────────────────────────
@@ -812,6 +844,21 @@ function pinnaclePlaceBetFn(amount) {
 // title[2]: "[7:1] 라이브 핸디캡 라이브 베팅" (마켓명)
 // title[3]: "웨이취엔 드래곤스 vs 중신 브라더스" (이벤트명)
 function btiReadSlipFn() {
+  function parseOddsLocal(txt) {
+    const t = String(txt || '').trim();
+    const n = parseFloat(t);
+    if (!n || n <= 1.01 || n >= 100) return null;
+    if (!/^\d+(\.\d{1,4})?$/.test(t)) return null;
+    return n;
+  }
+  function parseTeamsLocal(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return { homeTeam: '', awayTeam: '' };
+    const parts = raw.split(/\s+vs\s+|\s+VS\s+|\s+v\s+/i).map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 2) return { homeTeam: parts[0], awayTeam: parts[1] };
+    return { homeTeam: '', awayTeam: '' };
+  }
+
   // ── 1. 슬립 카드 탐색 ──
   let betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
   let realCards = Array.from(betCards).filter(el =>
@@ -953,24 +1000,25 @@ function btiReadSlipFn() {
   // 방법 1: UpdateNotification span
   const updateSpans = card.querySelectorAll('[class*="UpdateNotification"]');
   for (const sp of updateSpans) {
-    const txt = sp.textContent.trim();
-    const n = parseFloat(txt);
-    if (n > 1.01 && n < 100 && /^\d+\.\d{2,4}$/.test(txt)) {
-      odds = n;
-      break;
-    }
+    const n = parseOddsLocal(sp.textContent);
+    if (n) { odds = n; break; }
   }
 
   // 방법 2: 슬립 카드 내 모든 span에서 배당 숫자 탐색
   if (!odds) {
     const allSpans = card.querySelectorAll('span');
     for (const sp of allSpans) {
-      const txt = sp.textContent.trim();
-      const n = parseFloat(txt);
-      if (n > 1.01 && n < 100 && /^\d+\.\d{2,4}$/.test(txt)) {
-        odds = n;
-        break;
-      }
+      const n = parseOddsLocal(sp.textContent);
+      if (n) { odds = n; break; }
+    }
+  }
+
+  // 방법 2b: @ 1.8 형태 (BTI 슬립 푸터)
+  if (!odds) {
+    const atM = card.textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+    if (atM) {
+      const n = parseOddsLocal(atM[1]);
+      if (n) odds = n;
     }
   }
 
@@ -997,14 +1045,11 @@ function btiReadSlipFn() {
         if (!btnText.includes(lineStr) && !ptsText.includes(lineStr)) continue;
       }
 
-      // 배당 숫자 추출: 버튼 텍스트 끝에서 소수점 2자리 숫자
-      // 스코어 배당(정수.00 형태) 제외: 실제 핵디캐프/OU 배당은 1.01~30 범위
-      const oddsMatch = btnText.match(/(\d+\.\d{2,4})$/);
+      // 배당 숫자 추출: 버튼 텍스트 끝에서 소수점 배당
+      const oddsMatch = btnText.match(/(\d+(?:\.\d{1,4})?)$/);
       if (!oddsMatch) continue;
-      const btnOdds = parseFloat(oddsMatch[1]);
-      // 스코어 배당 제외: 30 이상이거나 정수.00 형태
-      if (btnOdds <= 1.01 || btnOdds > 30) continue;
-      if (/^\d+\.00$/.test(oddsMatch[1])) continue; // 54.00, 33.00 등 제외
+      const btnOdds = parseOddsLocal(oddsMatch[1]);
+      if (!btnOdds) continue;
 
       odds = btnOdds;
       break;
@@ -1067,7 +1112,8 @@ function btiReadSlipFn() {
     ? `${period}_ah_${side}_${line}`
     : `${period}_ou_${side}_${line}`;
 
-  const parsedTeams = parseEventTeams(eventText);
+  const parsedTeams = parseTeamsLocal(eventText);
+  if (!odds || odds <= 1) return null;
   return {
     odds,
     marketKind: mktType,
@@ -1303,8 +1349,8 @@ function updateUI(pSlip, bSlip, profit) {
   const bOddsEl = document.getElementById('bOdds');
   const profitEl = document.getElementById('profit');
   const statusEl = document.getElementById('status');
-  if (pOddsEl) pOddsEl.textContent = pSlip ? pSlip.odds.toFixed(3) : '-';
-  if (bOddsEl) bOddsEl.textContent = bSlip ? bSlip.odds.toFixed(3) : '-';
+  if (pOddsEl) pOddsEl.textContent = (pSlip && pSlip.odds > 1) ? pSlip.odds.toFixed(3) : '-';
+  if (bOddsEl) bOddsEl.textContent = (bSlip && bSlip.odds > 1) ? bSlip.odds.toFixed(3) : '-';
   // 마켓 레이블 표시
   const pMktEl = document.getElementById('pMarket');
   const bMktEl = document.getElementById('bMarket');
@@ -2784,16 +2830,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── 봇 시작 전 슬립 미리보기 (2초마다) ──
   async function previewSlip() {
-    if (botRunning) return;  // 봇 실행 중이면 pollLoop에서 처리
+    if (botRunning) return;
     const { pinSlipTab, btiTab, sboTab } = await findTabs();
     const opponentTab = sboTab || btiTab;
     if (!pinSlipTab && !opponentTab) return;
     if (sboTab) { window._sboTabId = sboTab.id; window._sboFrameId = sboTab.frameId || 0; }
+
     const opponentReadFn = sboTab ? sbobetReadSlipFn : btiReadSlipFn;
-    const [pSlip, bSlip] = await Promise.all([
-      pinSlipTab ? execInTab(pinSlipTab, pinnacleReadSlipFn) : Promise.resolve(null),
-      opponentTab ? execInTab(opponentTab, opponentReadFn) : Promise.resolve(null)
-    ]);
+    let pSlip = cachedPinSlip;
+    let bSlip = sboTab ? cachedSboSlip : cachedBtiSlip;
+
+    if (!pSlip && pinSlipTab) {
+      pSlip = await execInTab(pinSlipTab, pinnacleReadSlipFn);
+    }
+    if (!bSlip && opponentTab) {
+      if (!sboTab) {
+        bSlip = await readBtiSlipFromFrame(opponentTab.id, opponentTab.frameId ?? 0);
+      } else {
+        bSlip = await execInTab(opponentTab, opponentReadFn);
+      }
+    }
+
     const profit = (pSlip && bSlip && pSlip.odds > 1 && bSlip.odds > 1)
       ? calcProfit(pSlip.odds, bSlip.odds) : null;
     updateUI(pSlip, bSlip, profit);
