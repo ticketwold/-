@@ -133,11 +133,17 @@ function inferSelectedTeam(slip) {
   return '';
 }
 
+// side 정규화 (over/under ↔ o/u)
+function normOuSide(s) {
+  const x = String(s || '').toLowerCase();
+  if (x === 'under' || x === 'u') return 'u';
+  if (x === 'over' || x === 'o') return 'o';
+  return x;
+}
+
 function marketsMatch(p, b) {
   if (!p || !b) return false;
   if (p.marketKind !== b.marketKind) return false;
-  // ── 언오버(ou) 마켓 전체 제외 ─────────────────────────────────────
-  if (p.marketKind === 'ou' || b.marketKind === 'ou') return false;
   // ── 0.25/0.75 쿼터 핸디캡 제외 ──────────────────────────────────
   if (p.marketKind === 'ah' || b.marketKind === 'ah') {
     if (isQuarterLine(p.line) || isQuarterLine(b.line)) return false;
@@ -184,9 +190,12 @@ function marketsMatch(p, b) {
   }
 
   if (p.marketKind === 'ou') {
-    const isOpposite = SIDE_OPPOSITE[p.side] === b.side;
-    const isSame = p.side === b.side;
-    if (!isOpposite && !isSame) return false;
+    const pOu = normOuSide(p.side);
+    const bOu = normOuSide(b.side);
+    if (pOu !== 'o' && pOu !== 'u') return false;
+    if (bOu !== 'o' && bOu !== 'u') return false;
+    // 양방: 오버↔언더 반대 + 같은 기준점
+    if (pOu === bOu) return false;
     return linesMatch(p.line, b.line);
   }
 
@@ -202,7 +211,6 @@ function explainMarketMismatch(p, b) {
   if (p.marketKind !== b.marketKind) {
     return `마켓 종류 다름 — 피나클: ${pLabel} / BTI: ${bLabel}`;
   }
-  if (p.marketKind === 'ou') return '오버/언더는 슬립 봇에서 제외됩니다';
   const normPeriod = (v) => {
     if (!v || v === 'ft' || v === 'full') return 'ft';
     if (v === 'map1') return 'ft';
@@ -229,6 +237,17 @@ function explainMarketMismatch(p, b) {
   if (p.marketKind === 'ah') {
     if (isQuarterLine(p.line) || isQuarterLine(b.line)) return '0.25/0.75 핸디캡은 제외됩니다';
     return `핸디 기준점 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`;
+  }
+  if (p.marketKind === 'ou') {
+    const pOu = normOuSide(p.side);
+    const bOu = normOuSide(b.side);
+    const ouKr = (s) => (s === 'o' ? '오버' : s === 'u' ? '언더' : s);
+    if (pOu === bOu) {
+      return `양방은 오버↔언더 반대 필요 — 지금 양쪽 ${ouKr(pOu)} ${p.line ?? ''}`;
+    }
+    if (!linesMatch(p.line, b.line)) {
+      return `OU 기준점 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`;
+    }
   }
   return `조건 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`;
 }
@@ -432,9 +451,9 @@ function pinnacleClickLineFn(line, side) {
 // ─── BTI 기준점 변경 감지 및 피나클 슬립 동기화 ────────────────────
 // 반환값: 'synced' | 'already_correct' | 'stop' | 'error'
 async function syncPinnacleToLine(pinTab, btiSlip) {
-  if (!btiSlip || btiSlip.marketKind !== 'ou' || !btiSlip.line) return 'error';
-  // BTI와 피나클은 반대 방향: BTI 언더 → 피나클 오버, BTI 오버 → 피나클 언더
-  const pinSide = btiSlip.side === 'u' ? 'o' : 'u';
+  if (!btiSlip || btiSlip.marketKind !== 'ou' || btiSlip.line == null) return 'error';
+  const bOu = normOuSide(btiSlip.side);
+  const pinSide = bOu === 'u' ? 'o' : 'u';
   const pinSideKr = pinSide === 'u' ? '언더' : '오버';
   const result = await execInTab(pinTab, pinnacleClickLineFn, [btiSlip.line, pinSide]);
   if (!result) return 'error';
