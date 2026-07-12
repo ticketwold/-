@@ -57,7 +57,14 @@ chrome.runtime.onMessage.addListener((msg) => {
     renderPrematchResult(msg);
     if (msg.stats) {
       const s = msg.stats;
-      addLog(`프리매치: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'info');
+      const src = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
+      addLog(`프리매치: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개${src}`, 'info');
+      if (s.btiDataSource === 'featured') {
+        addLog('⚠️ BTI eventlist 실패 → featured 폴백 (소량일 수 있음)', 'warn');
+      }
+      if ((s.btiLiveFiltered || 0) > 0) {
+        addLog(`BTI 라이브 ${s.btiLiveFiltered}건 제외`, 'info');
+      }
     }
     return;
   }
@@ -2575,7 +2582,9 @@ function renderPrematchResult(msg) {
     if (stats.error) {
       statsEl.textContent = '⚠️ ' + stats.error;
     } else {
-      let line = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0}/이스포츠 ${stats.pinEsports||0}/테니스 ${stats.pinTennis||0} │ BTI: ${stats.btiTotal||0} │ 매칭: ${stats.matched||0}`;
+      let line = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0}/이스포츠 ${stats.pinEsports||0}/테니스 ${stats.pinTennis||0} │ BTI: ${stats.btiTotal||0}`;
+      if (stats.btiDataSource) line += ` (${stats.btiDataSource})`;
+      line += ` │ 매칭: ${stats.matched||0}`;
       if ((stats.btiTotal || 0) === 0 && stats.btiApiOrigin) {
         line += ` │ origin: ${stats.btiApiOrigin}`;
       }
@@ -2835,7 +2844,14 @@ document.addEventListener('DOMContentLoaded', () => {
           addLog('⚠️ pinnacle.com 탭 없음 — 영문 팀명으로 진행', 'warn');
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
         } else {
-          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
+          const srcNote = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
+          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개${srcNote}`, 'success');
+          if (s.btiDataSource === 'featured') {
+            addLog('⚠️ BTI가 featured 폴백 — eventlist API 확인 필요', 'warn');
+          }
+          if ((s.btiTotal || 0) > 0 && (s.btiTotal || 0) < 100 && s.btiDataSource === 'eventlist') {
+            addLog('💡 BTI 프리매치가 적으면 pbc00 BTI 탭에서「조기/예정」화면인지 확인', 'info');
+          }
           if ((s.btiTotal || 0) === 0) {
             addLog(`⚠️ BTI 0건 — pbc00 로그인+BTI화면(gamecode=19) 열고 새로고침`, 'warn');
             if (s.btiApiOrigin) addLog(`BTI API origin: ${s.btiApiOrigin}`, 'info');

@@ -1054,13 +1054,30 @@ function extractEventlistRows(rawData) {
   return [];
 }
 
+function isBtiEventlistRowLive(r) {
+  if (!r || r.length < 8) return false;
+  // r[12]=라이브, r[13]=중단/블록 (eventlist API 관례)
+  if (r[12] === true || r[12] === 1) return true;
+  if (r[13] === true || r[13] === 1) return true;
+  const status = String(r[14] || r[15] || r[16] || '').toLowerCase();
+  if (/live|inplay|in-play|진행/.test(status)) return true;
+  const startRaw = r[11];
+  if (startRaw) {
+    const ts = typeof startRaw === 'number'
+      ? (startRaw < 1e12 ? startRaw * 1000 : startRaw)
+      : new Date(startRaw).getTime();
+    if (ts && !Number.isNaN(ts) && ts < Date.now() - 3 * 60 * 1000) return true;
+  }
+  return false;
+}
+
 function parseEventlistRow(row, btiSportId) {
   const r = Array.isArray(row) ? row : Object.values(row);
   if (!r || r.length < 8) return null;
 
   const eventId = r[0];
   if (!eventId) return null;
-  if (r[12] === true || r[13] === true) return null;
+  if (isBtiEventlistRowLive(r)) return null;
 
   let home = '', away = '';
   let homeEn = '', awayEn = '', homeKo = '', awayKo = '';
@@ -1157,6 +1174,16 @@ async function enrichBtiEventsEnglish(btiTabId, btiTabUrl, events) {
   return events;
 }
 
+function isBtiFeaturedEventLive(event) {
+  if (!event) return true;
+  if (event.IsLive === true || event.isLive === true) return true;
+  if (event.LiveGameState || event.Clock) return true;
+  const status = String(event.Status || event.EventStatus || event.State || '').toLowerCase();
+  if (/live|inplay|진행/.test(status)) return true;
+  if (event.markets?.some((m) => m.IsLive || m.isLive)) return true;
+  return false;
+}
+
 async function fetchBtiFeaturedPrematch(btiTabId, btiTabUrl) {
   const path = `/api/sportscenter/carousels/featured-matches/markets?language=KO&customerLevel=0&selectedOptionId=0&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`;
   const data = await fetchBtiViaTab(btiTabId, path, btiTabUrl);
@@ -1165,7 +1192,7 @@ async function fetchBtiFeaturedPrematch(btiTabId, btiTabUrl) {
   const result = [];
   for (const event of data) {
     if (!event.id || !event.markets?.length) continue;
-    if (event.markets.some((m) => m.IsLive)) continue;
+    if (isBtiFeaturedEventLive(event)) continue;
 
     let home = '', away = '';
     const m0 = event.markets[0];
@@ -1196,9 +1223,49 @@ async function fetchBtiFeaturedPrematch(btiTabId, btiTabUrl) {
   return result;
 }
 
-let lastBtiPrematchDiag = { errors: [], sources: {}, apiOrigin: '' };
+let lastBtiPrematchDiag = { errors: [], sources: {}, apiOrigin: '', liveFiltered: 0, dataSource: 'none' };
 
-// BTI 프리매치 전체 경기 목록 + 배당 가져오기
+function btiPrematchPathsForSport(sportId, marketTypes) {
+  const mt = marketTypes || 'HC0%2COU0%2CML0';
+  const lang = 'language=KO';
+  return [
+    `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?${lang}&isAllMarkets=true&marketTypeIds=${mt}`,
+    `/api/eventlist/eu/sports/v2/${sportId}/early/eventUpdates?${lang}&isAllMarkets=true&marketTypeIds=${mt}`,
+    `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?${lang}&isAllMarkets=false&marketTypeIds=ML0%2COU0%2CHC0`,
+    `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?${lang}&marketTypeIds=ML0`,
+    `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?${lang}&becomeLiveIn=24&isAllMarkets=true&marketTypeIds=ML0`
+  ];
+}
+
+async function fetchBtiEventlistPrematchForSport(btiTabId, btiTabUrl, sportId, marketTypes) {
+  const paths = btiPrematchPathsForSport(sportId, marketTypes);
+  let best = [];
+  let bestTag = '';
+  let liveFiltered = 0;
+
+  for (const url of paths) {
+    try {
+      const rawData = await fetchBtiViaTab(btiTabId, url, btiTabUrl);
+      const rows = extractEventlistRows(rawData);
+      const parsed = [];
+      for (const row of rows) {
+        const r = Array.isArray(row) ? row : Object.values(row);
+        if (isBtiEventlistRowLive(r)) { liveFiltered++; continue; }
+        const ev = parseEventlistRow(row, sportId);
+        if (ev) parsed.push(ev);
+      }
+      if (parsed.length > best.length) {
+        best = parsed;
+        bestTag = url.includes('/early/') ? 'early' : 'upcoming';
+      }
+    } catch (e) {
+      // 다음 URL 시도
+    }
+  }
+  return { events: best, tag: bestTag, liveFiltered };
+}
+
+// BTI 프리매치 전체 경기 목록 + 배당 가져오기 (라이브/DOM 폴백 사용 안 함)
 async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
   const BTI_SPORT_IDS = [1, 6, 7, 59, 2];
   const MARKET_TYPE_MAP = {
@@ -1209,45 +1276,38 @@ async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
     2:  'HC0%2COU0%2CML0%2CHC619%2COU619%2CML619'
   };
 
-  const allEvents = [];
+  const byId = new Map();
   const errors = [];
   const sources = {};
+  let liveFiltered = 0;
+  let dataSource = 'eventlist';
 
   try {
     lastBtiPrematchDiag.apiOrigin = await resolveBtiApiOrigin(btiTabId, btiTabUrl);
   } catch (_) {}
 
   for (const sportId of BTI_SPORT_IDS) {
-    const paths = [
-      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?becomeLiveIn=3&isAllMarkets=true&marketTypeIds=${MARKET_TYPE_MAP[sportId] || 'HC0%2COU0%2CML0'}`,
-      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?isAllMarkets=false&marketTypeIds=ML0%2COU0%2CHC0`,
-      `/api/eventlist/eu/sports/v2/${sportId}/upcoming/eventUpdates?marketTypeIds=ML0`
-    ];
-    let sportCount = 0;
-    for (const url of paths) {
-      try {
-        const rawData = await fetchBtiViaTab(btiTabId, url, btiTabUrl);
-        const rows = extractEventlistRows(rawData);
-        for (const row of rows) {
-          const ev = parseEventlistRow(row, sportId);
-          if (ev) { allEvents.push(ev); sportCount++; }
-        }
-        if (sportCount > 0) {
-          sources[`sport${sportId}`] = `eventlist:${sportCount}`;
-          break;
-        }
-      } catch (e) {
-        errors.push(`sport${sportId}: ${e.message}`);
+    try {
+      const { events, tag, liveFiltered: lf } = await fetchBtiEventlistPrematchForSport(
+        btiTabId, btiTabUrl, sportId, MARKET_TYPE_MAP[sportId]
+      );
+      liveFiltered += lf;
+      if (events.length) {
+        sources[`sport${sportId}`] = `${tag}:${events.length}`;
+        for (const ev of events) byId.set(ev.id, ev);
       }
+    } catch (e) {
+      errors.push(`sport${sportId}: ${e.message}`);
     }
   }
 
-  if (!allEvents.length) {
+  if (!byId.size) {
     try {
       const featured = await fetchBtiFeaturedPrematch(btiTabId, btiTabUrl);
       if (featured.length) {
-        allEvents.push(...featured);
+        for (const ev of featured) byId.set(ev.id, ev);
         sources.featured = featured.length;
+        dataSource = 'featured';
         console.log('[BTI] 프리매치 featured-matches 폴백:', featured.length);
       }
     } catch (e) {
@@ -1255,13 +1315,11 @@ async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
     }
   }
 
+  const allEvents = [...byId.values()];
+
   if (!allEvents.length) {
-    const domEvents = await scrapeBtiDomFromTab(btiTabId);
-    if (domEvents.length) {
-      allEvents.push(...domEvents);
-      sources.dom = domEvents.length;
-      console.warn('[BTI] 프리매치 API 0건 — DOM 폴백:', domEvents.length);
-    }
+    errors.push('프리매치 API 0건 — BTI 탭을 프리매치(조기/예정) 화면으로 전환 후 새로고침 (라이브 화면 DOM은 사용하지 않음)');
+    dataSource = 'none';
   }
 
   if (allEvents.length) {
@@ -1273,7 +1331,13 @@ async function getBtiPrematchMatchups(btiTabId, btiTabUrl) {
     }
   }
 
-  lastBtiPrematchDiag = { errors: errors.slice(0, 8), sources, apiOrigin: lastBtiPrematchDiag.apiOrigin };
+  lastBtiPrematchDiag = {
+    errors: errors.slice(0, 8),
+    sources,
+    apiOrigin: lastBtiPrematchDiag.apiOrigin,
+    liveFiltered,
+    dataSource
+  };
   console.log('[BTI] 프리매치 수집:', allEvents.length, lastBtiPrematchDiag);
   return allEvents;
 }
@@ -1886,7 +1950,9 @@ async function runPrematchSearchOnce() {
       btiTabFound: true,
       pinTabFound: !!pinTab,
       btiApiOrigin,
-      btiDomFallback: btiAll.some((e) => e._domFallback),
+      btiDomFallback: false,
+      btiDataSource: lastBtiPrematchDiag.dataSource || 'eventlist',
+      btiLiveFiltered: lastBtiPrematchDiag.liveFiltered || 0,
       btiFetchErrors: lastBtiPrematchDiag.errors,
       btiFetchSources: lastBtiPrematchDiag.sources,
       matched: allOpps.length
@@ -2102,7 +2168,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let btiNames = [];
         let btiEvents = [];
         try {
-          const url = '/api/eventlist/eu/sports/v2/1/upcoming/eventUpdates?becomeLiveIn=3&isAllMarkets=false&marketTypeIds=ML0';
+          const url = '/api/eventlist/eu/sports/v2/1/upcoming/eventUpdates?language=KO&isAllMarkets=true&marketTypeIds=ML0%2COU0%2CHC0';
           const rawData = await fetchBtiViaTab(btiTab.id, url, btiTab.url);
           const rows = extractEventlistRows(rawData);
           btiEvents = rows.map((row) => parseEventlistRow(row, 1)).filter(Boolean).slice(0, 10);
