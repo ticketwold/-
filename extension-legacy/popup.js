@@ -2390,7 +2390,11 @@ function renderPrematchResult(msg) {
     if (stats.error) {
       statsEl.textContent = '⚠️ ' + stats.error;
     } else {
-      statsEl.textContent = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0}/이스포츠 ${stats.pinEsports||0}/테니스 ${stats.pinTennis||0} │ BTI: ${stats.btiTotal||0} │ 매칭: ${stats.matched||0}`;
+      let line = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0}/이스포츠 ${stats.pinEsports||0}/테니스 ${stats.pinTennis||0} │ BTI: ${stats.btiTotal||0} │ 매칭: ${stats.matched||0}`;
+      if ((stats.btiTotal || 0) === 0 && stats.btiApiOrigin) {
+        line += ` │ origin: ${stats.btiApiOrigin}`;
+      }
+      statsEl.textContent = line;
     }
   }
 
@@ -2647,6 +2651,12 @@ document.addEventListener('DOMContentLoaded', () => {
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
         } else {
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
+          if ((s.btiTotal || 0) === 0) {
+            addLog(`⚠️ BTI 0건 — pbc00 로그인+BTI화면(gamecode=19) 열고 새로고침`, 'warn');
+            if (s.btiApiOrigin) addLog(`BTI API origin: ${s.btiApiOrigin}`, 'info');
+            if (s.btiFetchErrors?.length) addLog(`BTI 오류: ${s.btiFetchErrors[0]}`, 'error');
+            addLog('→ 팝업 하단 [BTI 진단] 버튼으로 확인', 'info');
+          }
         }
       } else if (resp && !resp.ok) {
         addLog('프리매치 서치 오류: ' + (resp.error || '알 수 없음'), 'error');
@@ -2821,9 +2831,14 @@ document.addEventListener('DOMContentLoaded', () => {
       addLog(`API origin: ${resp.apiOrigin}`, 'info');
       addLog(`iframe ${resp.frameCount}개 / src샘플: ${(resp.iframeSrcs || []).join(' | ').substring(0, 120)}`, 'info');
       if (resp.apiTest?.ok) {
-        addLog(`✅ API 테스트 OK — 라이브 ${resp.apiTest.count}건`, 'success');
+        addLog(`✅ 라이브 API OK — ${resp.apiTest.count}건`, 'success');
       } else {
-        addLog(`❌ API 테스트 실패: ${resp.apiTest?.error || '?'}`, 'error');
+        addLog(`❌ 라이브 API 실패: ${resp.apiTest?.error || '?'}`, 'error');
+      }
+      if (resp.prematchTest?.ok) {
+        addLog(`✅ 프리매치 API OK — 축구 ${resp.prematchTest.count}건`, 'success');
+      } else {
+        addLog(`❌ 프리매치 API 실패: ${resp.prematchTest?.error || '?'}`, 'error');
       }
       addLog(`DOM 폴백 경기: ${resp.domEventCount}건`, resp.domEventCount ? 'success' : 'warn');
       (resp.framePings || []).forEach((p) => {

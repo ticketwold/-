@@ -87,10 +87,33 @@ const BTI_HOST_HINTS = [
 ];
 const BTI_URL_EXTRA = /sportsbook|asian-view|\/sports|prod\d+/i;
 const PBC_BTI_GAMECODES = ['19', '20', '21', '22', '23'];
+// manifest host_permissions와 동일 — executeScript/sendMessage 가능 도메인만
+const INJECTABLE_HOST_SUFFIXES = [
+  'auremi88.com', 'bti-sports.com', 'bti-sports.io', 'eviran66.com',
+  'indonesiawinner.com', 'jjddgg.com', 'mervani99.com', 'pbc00.com',
+  'pinnacle.com', 'live8588.com', 'fxf774.com', 'wg88ss.com',
+  'zzddqq.com', 'zzllrrcc33.com', 'arcadia.pinnacle.com'
+];
+
+function isInjectableUrl(url) {
+  if (!url || url === 'about:blank') return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const h = u.hostname.toLowerCase();
+    return INJECTABLE_HOST_SUFFIXES.some((suffix) => h === suffix || h.endsWith('.' + suffix));
+  } catch (_) {
+    return false;
+  }
+}
 
 function isBtiHost(url) {
   if (!url || url === 'about:blank') return false;
   return BTI_HOST_HINTS.some((h) => url.includes(h)) || BTI_URL_EXTRA.test(url);
+}
+
+function isInjectableBtiFrame(url) {
+  return isInjectableUrl(url) && isBtiHost(url);
 }
 
 function scorePbcBtiTab(url) {
@@ -124,16 +147,33 @@ async function probeIframeSrcs(tabId) {
   }
 }
 
+async function probeBtiFramesByPing(tabId, frames) {
+  const found = [];
+  for (const frame of frames) {
+    if (frame.frameId === 0) continue;
+    if (frame.url && !isInjectableUrl(frame.url)) continue;
+    try {
+      const ping = await chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: frame.frameId });
+      if (!ping) continue;
+      const href = ping.href || frame.url || '';
+      if (ping.buttonCount || ping.hasSlip || isBtiHost(href)) {
+        found.push({ frameId: frame.frameId, url: href, score: 14 });
+      }
+    } catch (_) {}
+  }
+  return found;
+}
+
 async function getBtiFrameCandidates(tabId, tabUrl) {
   const frames = await getAllTabFrames(tabId);
   const candidates = [];
 
   for (const frame of frames) {
     if (!frame.url || frame.url === 'about:blank') continue;
+    if (!isInjectableBtiFrame(frame.url)) continue;
     let score = 0;
     if (BTI_HOST_HINTS.some((h) => frame.url.includes(h))) score = 20;
     else if (BTI_URL_EXTRA.test(frame.url)) score = 12;
-    else if (frame.frameId !== 0) score = 3;
     if (score > 0) candidates.push({ frameId: frame.frameId, url: frame.url, score });
   }
 
@@ -144,16 +184,17 @@ async function getBtiFrameCandidates(tabId, tabUrl) {
       try {
         const origin = new URL(src).origin;
         const match = frames.find((f) => f.url && f.url.startsWith(origin));
-        candidates.push({
-          frameId: match?.frameId ?? 0,
-          url: src,
-          score: 15
-        });
+        if (match && isInjectableBtiFrame(match.url)) {
+          candidates.push({ frameId: match.frameId, url: match.url, score: 15 });
+        }
       } catch (_) {}
+    }
+    if (!candidates.length && srcs.some(isBtiHost)) {
+      candidates.push(...await probeBtiFramesByPing(tabId, frames));
     }
   }
 
-  if (!candidates.length && tabUrl && isBtiHost(tabUrl)) {
+  if (!candidates.length && tabUrl && isInjectableBtiFrame(tabUrl)) {
     candidates.push({ frameId: 0, url: tabUrl, score: 5 });
   }
 
@@ -196,7 +237,8 @@ async function getBtiFrameIds(tabId, tabUrl) {
   const candidates = await getBtiFrameCandidates(tabId, tabUrl);
   const ids = [...new Set(candidates.map((c) => c.frameId))];
   if (ids.length) return ids;
-  return [0];
+  if (tabUrl && isInjectableBtiFrame(tabUrl)) return [0];
+  return [];
 }
 
 function sleep(ms) {
@@ -205,16 +247,15 @@ function sleep(ms) {
 
 async function getAllFrameIdsForFetch(tabId, tabUrl) {
   const candidates = await getBtiFrameCandidates(tabId, tabUrl);
-  const frames = await getAllTabFrames(tabId);
   const ordered = [];
   const seen = new Set();
   for (const c of candidates) {
     if (!seen.has(c.frameId)) { ordered.push(c.frameId); seen.add(c.frameId); }
   }
-  for (const f of frames) {
-    if (f.frameId !== 0 && !seen.has(f.frameId)) { ordered.push(f.frameId); seen.add(f.frameId); }
+  // BTI iframe이 없고 탭 자체가 BTI 도메인이면 top frame만 시도
+  if (!ordered.length && tabUrl && isInjectableBtiFrame(tabUrl)) {
+    ordered.push(0);
   }
-  if (!ordered.length) ordered.push(0);
   return ordered;
 }
 
@@ -230,21 +271,29 @@ async function fetchJsonInFrame(tabId, frameId, path) {
     if (viaContent?.ok && viaContent.data !== undefined) return viaContent.data;
   } catch (_) {}
 
-  const results = await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [frameId] },
-    world: 'MAIN',
-    func: async (p) => {
-      try {
-        const fetchUrl = p.startsWith('http') ? p : (location.origin.replace(/\/$/, '') + p);
-        const res = await fetch(fetchUrl, { credentials: 'include' });
-        if (!res.ok) return { error: String(res.status), url: fetchUrl };
-        return await res.json();
-      } catch (e) {
-        return { error: e.message };
-      }
-    },
-    args: [apiPath]
-  });
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: async (p) => {
+        try {
+          const fetchUrl = p.startsWith('http') ? p : (location.origin.replace(/\/$/, '') + p);
+          const res = await fetch(fetchUrl, { credentials: 'include' });
+          if (!res.ok) return { error: String(res.status), url: fetchUrl };
+          return await res.json();
+        } catch (e) {
+          return { error: e.message };
+        }
+      },
+      args: [apiPath]
+    });
+  } catch (e) {
+    if (/Cannot access contents of url/i.test(e.message)) {
+      throw new Error('inject 권한 없음 (비BTI iframe 건너뜀)');
+    }
+    throw e;
+  }
   const result = results?.[0]?.result;
   if (!result || result.error) throw new Error(String(result?.error || '응답 없음') + (result?.url ? ` @ ${result.url}` : ''));
   return result;
@@ -257,6 +306,10 @@ async function fetchBtiViaTab(tabId, path, tabUrl) {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await sleep(1000);
     const frameIds = await getAllFrameIdsForFetch(tabId, tabUrl);
+    if (!frameIds.length) {
+      lastError = 'BTI iframe 없음 — pbc00 BTI 화면(gamecode=19) 새로고침';
+      continue;
+    }
 
     for (const frameId of frameIds) {
       try {
@@ -278,7 +331,13 @@ async function scrapeBtiDomFromTab(tabId) {
   const frames = await getAllTabFrames(tabId);
   const events = [];
 
-  for (const frame of frames) {
+  let tryFrames = frames.filter((f) => isInjectableBtiFrame(f.url));
+  if (!tryFrames.length) {
+    const pingHits = await probeBtiFramesByPing(tabId, frames);
+    tryFrames = pingHits.map((h) => ({ frameId: h.frameId, url: h.url }));
+  }
+
+  for (const frame of tryFrames) {
     try {
       const ping = await chrome.tabs.sendMessage(
         tabId,
@@ -366,7 +425,8 @@ async function diagBtiSearch() {
 
   const domEvents = await scrapeBtiDomFromTab(btiTab.id);
   const framePings = [];
-  for (const frame of frames.slice(0, 12)) {
+  const pingFrames = frames.filter((f) => isInjectableUrl(f.url)).slice(0, 12);
+  for (const frame of pingFrames) {
     try {
       const ping = await chrome.tabs.sendMessage(btiTab.id, { type: 'PING' }, { frameId: frame.frameId });
       if (ping) framePings.push({ frameId: frame.frameId, url: (frame.url || '').slice(0, 80), ...ping });
