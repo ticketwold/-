@@ -1,6 +1,26 @@
-# 양방배팅 (Arbitrage Betting) 자동화 프로그램
+# 양방배팅 (Arbitrage Betting)
 
-**Pinnacle** (A사이트)과 **pbc00.com** (B사이트)의 배당을 실시간으로 비교하여, 양방배팅 조건에 맞으면 자동으로 배팅을 실행하는 프로그램입니다.
+**Pinnacle** + **pbc00 BTI** 배당을 비교해 양방 기회를 찾습니다.
+
+## ★ 추천: 브라우저 확장 프로그램
+
+Python/venv 없이 **Edge 확장만**으로 사용할 수 있습니다.
+
+```powershell
+git pull origin cursor/arbitrage-betting-00df
+# edge://extensions → 개발자 모드 → extension 폴더 로드
+```
+
+자세한 사용법: [extension/README.md](extension/README.md)
+
+1. 확장 아이콘 → **pbc00 열기** → 로그인
+2. BTI 경기/배당 화면에서 **양방 스캔**
+
+---
+
+## Python CLI (선택)
+
+**Pinnacle** (A)과 **pbc00.com** (B) Playwright 자동화 버전입니다.
 
 ## 연동 사이트
 

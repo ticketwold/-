@@ -1,14 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Arbitrage Odds Helper",
-  "version": "0.2.0",
-  "description": "Pinnacle / BTI(pbc00) / SBOBET 배당 수집",
+  "name": "양방배팅 (Pinnacle + BTI)",
+  "version": "1.0.0",
+  "description": "Pinnacle API와 pbc00 BTI 배당을 비교하는 양방배팅 확장 프로그램",
   "permissions": ["storage", "activeTab", "scripting", "tabs", "webNavigation"],
   "host_permissions": [
     "https://pbc00.com/*",
     "https://*.pbc00.com/*",
-    "https://*.bti*/",
-    "https://*.btisports*/",
     "https://www.pinnacle.com/*",
     "https://guest.api.arcadia.pinnacle.com/*"
   ],
@@ -17,22 +15,13 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "양방 배당"
+    "default_title": "양방배팅"
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://pbc00.com/*",
-        "https://*.pbc00.com/*"
-      ],
+      "matches": ["https://pbc00.com/*", "https://*.pbc00.com/*"],
       "js": ["bti_content.js"],
       "all_frames": true,
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://www.pinnacle.com/*"],
-      "js": ["pinnacle_content.js"],
-      "all_frames": false,
       "run_at": "document_idle"
     }
   ],
