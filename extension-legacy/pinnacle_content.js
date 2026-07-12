@@ -246,11 +246,35 @@ async function fetchPinPrematchKo(sportId, leagueIds) {
     if (!Array.isArray(data)) return { ok: false, error: '응답 형식 오류', raw: JSON.stringify(data).slice(0, 200) };
 
     // matchupId → { home, away, league, startTime } 맵
+    const byId = {};
+    for (const m of data) byId[m.id] = m;
+
+    function getParticipants(mu) {
+      const direct = mu.participants;
+      if (Array.isArray(direct) && direct.length >= 2 && direct.some((p) => p?.name)) return direct;
+      if (mu.parent?.participants?.length >= 2) return mu.parent.participants;
+      let pid = mu.parentId;
+      for (let depth = 0; depth < 6 && pid; depth++) {
+        const parent = byId[pid];
+        if (!parent) break;
+        if (parent.participants?.length >= 2 && parent.participants.some((p) => p?.name)) {
+          return parent.participants;
+        }
+        pid = parent.parentId;
+      }
+      return [];
+    }
+
     const result = {};
     for (const mu of data) {
-      if (!mu.participants || mu.participants.length < 2) continue;
-      const home = mu.participants.find(p => p.alignment === 'home')?.name || mu.participants[0]?.name || '';
-      const away = mu.participants.find(p => p.alignment === 'away')?.name || mu.participants[1]?.name || '';
+      if (mu.isLive) continue;
+      if (mu.type && mu.type !== 'matchup') continue;
+      if (mu.hasMarkets === false) continue;
+      const parts = getParticipants(mu);
+      if (parts.length < 2) continue;
+      const home = parts.find((p) => p.alignment === 'home')?.name || parts[0]?.name || '';
+      const away = parts.find((p) => p.alignment === 'away')?.name || parts[1]?.name || '';
+      if (!home || !away) continue;
       result[mu.id] = { home, away, league: mu.league?.name || '', startTime: mu.startTime || null };
     }
     return { ok: true, matchups: result, count: Object.keys(result).length };

@@ -60,12 +60,63 @@ function normTeam(name) {
 // 두 팀명 유사도 체크 (한쪽이 다른쪽에 포함되거나 앞 4자 일치)
 function teamMatch(a, b) {
   const na = normTeam(a), nb = normTeam(b);
-  if (!na || !nb) return false;
+  if (!na || !nb || na.length < 2 || nb.length < 2) return false;
+  if (na === 'vs' || nb === 'vs') return false;
   if (na === nb) return true;
   if (na.includes(nb) || nb.includes(na)) return true;
   // 앞 4자 일치
   if (na.length >= 4 && nb.length >= 4 && na.slice(0, 4) === nb.slice(0, 4)) return true;
   return false;
+}
+
+// 피나클 matchups API → 실제 경기만 추출 (리그/특수 마켓 행 제외, parent participants 폴백)
+function parsePinMatchupsFromApi(matchups, sportId) {
+  if (!Array.isArray(matchups)) return [];
+  const byId = {};
+  for (const m of matchups) byId[m.id] = m;
+
+  function getParticipants(mu) {
+    const direct = mu.participants;
+    if (Array.isArray(direct) && direct.length >= 2 && direct.some((p) => p?.name)) {
+      return direct;
+    }
+    if (mu.parent?.participants?.length >= 2) return mu.parent.participants;
+    let pid = mu.parentId;
+    for (let depth = 0; depth < 6 && pid; depth++) {
+      const parent = byId[pid];
+      if (!parent) break;
+      if (parent.participants?.length >= 2 && parent.participants.some((p) => p?.name)) {
+        return parent.participants;
+      }
+      pid = parent.parentId;
+    }
+    return [];
+  }
+
+  const result = [];
+  for (const mu of matchups) {
+    if (mu.isLive) continue;
+    if (mu.type && mu.type !== 'matchup') continue;
+    if (mu.hasMarkets === false) continue;
+
+    const parts = getParticipants(mu);
+    if (parts.length < 2) continue;
+
+    const home = parts.find((p) => p.alignment === 'home')?.name || parts[0]?.name || '';
+    const away = parts.find((p) => p.alignment === 'away')?.name || parts[1]?.name || '';
+    if (!home || !away) continue;
+    if (normTeam(home).length < 2 || normTeam(away).length < 2) continue;
+
+    result.push({
+      id: mu.id,
+      home,
+      away,
+      league: mu.league?.name || '',
+      sportId,
+      startTime: mu.startTime || null
+    });
+  }
+  return result;
 }
 
 // 피나클 API 호출
@@ -430,7 +481,15 @@ async function pickBtiTab() {
 // BTI 진단 (팝업 로그용)
 async function diagBtiSearch() {
   const btiTab = await pickBtiTab();
-  if (!btiTab) return { ok: false, error: 'BTI/pbc00 탭 없음' };
+  if (!btiTab) {
+    const tabs = await chrome.tabs.query({});
+    const pbcAny = tabs.filter((t) => t.url?.includes('pbc00.com')).map((t) => t.url).slice(0, 3);
+    return {
+      ok: false,
+      error: 'BTI 탭 없음 — pbc00.com?gamecode=19 BTI 화면을 열어주세요 (polymarket 등 /sports 탭은 BTI가 아님)',
+      pbcTabsOpen: pbcAny
+    };
+  }
 
   const frames = await getAllTabFrames(btiTab.id);
   const candidates = await getBtiFrameCandidates(btiTab.id, btiTab.url);
@@ -491,13 +550,28 @@ async function findBtiTabId() {
   return tab ? tab.id : null;
 }
 
-// 피나클 탭 찾기 (content script 메시지 전송용)
+// 피나클 탭 찾기 (content script 메시지 전송용, pbc00 iframe 포함)
 async function findPinnacleTab() {
-  const PIN_DOMAINS = ['pinnacle.com'];
+  const PIN_HINTS = ['pinnacle.com', 'eviran66.com', 'mervani99.com', 'auremi88.com'];
   const tabs = await chrome.tabs.query({});
+
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (PIN_DOMAINS.some(d => tab.url.includes(d))) return tab;
+    if (PIN_HINTS.some((d) => tab.url.includes(d))) {
+      return { id: tab.id, frameId: 0, url: tab.url };
+    }
+  }
+
+  for (const tab of tabs) {
+    if (!tab.url?.includes('pbc00.com')) continue;
+    const gm = tab.url.match(/[?&]gamecode=(\d+)/);
+    if (gm && !['1', '2', '3', '4', '5'].includes(gm[1])) continue;
+    const frames = await getAllTabFrames(tab.id);
+    for (const frame of frames) {
+      if (frame.url && PIN_HINTS.some((d) => frame.url.includes(d))) {
+        return { id: tab.id, frameId: frame.frameId, url: frame.url };
+      }
+    }
   }
   return null;
 }
@@ -511,10 +585,11 @@ async function getPinPrematchMatchupsKo(sportId) {
       return null; // null 반환 시 영문 팀명 폴백 사용
     }
 
-    const result = await chrome.tabs.sendMessage(pinTab.id, {
-      type: 'FETCH_PREMATCH',
-      sportId
-    });
+    const result = await chrome.tabs.sendMessage(
+      pinTab.id,
+      { type: 'FETCH_PREMATCH', sportId },
+      { frameId: pinTab.frameId || 0 }
+    );
 
     if (!result || !result.ok) {
       console.warn(`[피나클] FETCH_PREMATCH 실패 sportId=${sportId}:`, result?.error || '응답 없음');
@@ -697,16 +772,13 @@ async function getPinLiveMatchups(sportId) {
       oddsMap[m.matchupId][key] = m;
     }
 
-    return matchups
-      .filter(mu => mu.isLive && mu.participants && mu.participants.length >= 2)
-      .map(mu => ({
-        id: mu.id,
-        home: mu.participants.find(p => p.alignment === 'home')?.name || mu.participants[0]?.name,
-        away: mu.participants.find(p => p.alignment === 'away')?.name || mu.participants[1]?.name,
-        league: mu.league?.name || '',
-        sportId,
-        odds: oddsMap[mu.id] || {}
-      }));
+    return parsePinMatchupsFromApi(
+      matchups.filter((mu) => mu.isLive),
+      sportId
+    ).map((mu) => ({
+      ...mu,
+      odds: oddsMap[mu.id] || {}
+    }));
   } catch (e) {
     console.error('getPinLiveMatchups error:', e);
     return [];
@@ -732,17 +804,10 @@ async function getPinPrematchMatchups(sportId) {
       oddsMap[m.matchupId][key] = m;
     }
 
-    return matchups
-      .filter(mu => !mu.isLive && mu.participants && mu.participants.length >= 2)
-      .map(mu => ({
-        id: mu.id,
-        home: mu.participants.find(p => p.alignment === 'home')?.name || mu.participants[0]?.name,
-        away: mu.participants.find(p => p.alignment === 'away')?.name || mu.participants[1]?.name,
-        league: mu.league?.name || '',
-        sportId,
-        startTime: mu.startTime || null,
-        odds: oddsMap[mu.id] || {}
-      }));
+    return parsePinMatchupsFromApi(matchups, sportId).map((mu) => ({
+      ...mu,
+      odds: oddsMap[mu.id] || {}
+    }));
   } catch (e) {
     console.error('getPinPrematchMatchups error:', e);
     return [];
@@ -1538,31 +1603,34 @@ async function runPrematchSearchOnce() {
   const pinMatchupsBySport = {};
   for (let i = 0; i < SPORT_IDS.length; i++) {
     const sid = SPORT_IDS[i];
-    const koMatchups = koMatchupResults[i]; // null이면 영문 폴백
+    const koMatchups = koMatchupResults[i];
     const oddsMap = oddsResults[i];
 
-    if (koMatchups !== null) {
-      // 한국어 팀명 + 배당 결합
-      pinMatchupsBySport[sid] = koMatchups.map(mu => ({
+    try {
+      const raw = await fetchPin(`/sports/${sid}/matchups?isLive=false`);
+      let parsed = parsePinMatchupsFromApi(raw, sid).map((mu) => ({
         ...mu,
         odds: oddsMap[mu.id] || {}
       }));
-    } else {
-      // 피나클 탭 없음: 영문 팀명으로 폴백
-      try {
-        const matchups = await fetchPin(`/sports/${sid}/matchups?isLive=false`);
-        pinMatchupsBySport[sid] = Array.isArray(matchups)
-          ? matchups.filter(mu => !mu.isLive && mu.participants?.length >= 2).map(mu => ({
-              id: mu.id,
-              home: mu.participants.find(p => p.alignment === 'home')?.name || mu.participants[0]?.name || '',
-              away: mu.participants.find(p => p.alignment === 'away')?.name || mu.participants[1]?.name || '',
-              league: mu.league?.name || '',
-              sportId: sid,
-              startTime: mu.startTime || null,
-              odds: oddsMap[mu.id] || {}
-            }))
-          : [];
-      } catch(e) { pinMatchupsBySport[sid] = []; }
+
+      // 한국어 팀명 오버레이 (content script 성공 시)
+      if (koMatchups?.length) {
+        const koById = Object.fromEntries(koMatchups.map((m) => [String(m.id), m]));
+        parsed = parsed.map((mu) => {
+          const ko = koById[String(mu.id)];
+          if (!ko) return mu;
+          return {
+            ...mu,
+            home: ko.home || mu.home,
+            away: ko.away || mu.away,
+            league: ko.league || mu.league
+          };
+        });
+      }
+
+      pinMatchupsBySport[sid] = parsed;
+    } catch (e) {
+      pinMatchupsBySport[sid] = [];
     }
   }
 
@@ -1782,21 +1850,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let pinNames = [];
         try {
           const matchups = await fetchPin('/sports/29/matchups?isLive=false');
-          if (Array.isArray(matchups)) {
-            pinNames = matchups.slice(0, 10).map(mu => {
-              const h = mu.participants?.find(p => p.alignment === 'home')?.name || '';
-              const a = mu.participants?.find(p => p.alignment === 'away')?.name || '';
-              return `${h} vs ${a}`;
-            });
-          }
-        } catch(e) { pinNames = ['PIN 오류: ' + e.message]; }
+          pinNames = parsePinMatchupsFromApi(matchups, 29)
+            .slice(0, 10)
+            .map((mu) => `${mu.home} vs ${mu.away}`);
+        } catch (e) { pinNames = ['PIN 오류: ' + e.message]; }
 
         // 피나클 탭 content script 경유 팀명 수집 (한국어 시도)
         let pinKoNames = [];
         const pinTab = await findPinnacleTab();
         if (pinTab) {
           try {
-            const koResult = await chrome.tabs.sendMessage(pinTab.id, { type: 'FETCH_PREMATCH', sportId: 29 });
+            const koResult = await chrome.tabs.sendMessage(
+              pinTab.id,
+              { type: 'FETCH_PREMATCH', sportId: 29 },
+              { frameId: pinTab.frameId || 0 }
+            );
             if (koResult && koResult.ok) {
               pinKoNames = Object.values(koResult.matchups).slice(0, 10).map(m => `${m.home} vs ${m.away}`);
             } else {
