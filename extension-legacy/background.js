@@ -81,18 +81,84 @@ async function fetchPin(path, lang = 'ko') {
   return res.json();
 }
 
-const BTI_HOST_HINTS = ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com', 'indonesiawinner.com'];
+const BTI_HOST_HINTS = [
+  'bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com',
+  'indonesiawinner.com', 'eviran66.com', 'auremi88.com'
+];
+const BTI_URL_EXTRA = /sportsbook|asian-view|\/sports|prod\d+/i;
+const PBC_BTI_GAMECODES = ['19', '20', '21', '22', '23'];
 
 function isBtiHost(url) {
-  if (!url) return false;
-  return BTI_HOST_HINTS.some((h) => url.includes(h));
+  if (!url || url === 'about:blank') return false;
+  return BTI_HOST_HINTS.some((h) => url.includes(h)) || BTI_URL_EXTRA.test(url);
+}
+
+function scorePbcBtiTab(url) {
+  if (!url || !url.includes('pbc00.com')) return 0;
+  const m = url.match(/[?&]gamecode=(\d+)/);
+  if (m && PBC_BTI_GAMECODES.includes(m[1])) return 10;
+  return 1;
 }
 
 async function getAllTabFrames(tabId) {
-  if (!chrome.webNavigation?.getAllFrames) return [];
+  if (!chrome.webNavigation?.getAllFrames) return [{ frameId: 0, url: '' }];
   return new Promise((resolve) => {
-    chrome.webNavigation.getAllFrames({ tabId }, (frames) => resolve(frames || []));
+    chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
+      resolve(frames?.length ? frames : [{ frameId: 0, url: '' }]);
+    });
   });
+}
+
+async function probeIframeSrcs(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => Array.from(document.querySelectorAll('iframe'))
+        .map((f) => f.src || f.getAttribute('src') || '')
+        .filter((s) => s && s.startsWith('http'))
+    });
+    return results?.[0]?.result || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getBtiFrameCandidates(tabId, tabUrl) {
+  const frames = await getAllTabFrames(tabId);
+  const candidates = [];
+
+  for (const frame of frames) {
+    if (!frame.url || frame.url === 'about:blank') continue;
+    let score = 0;
+    if (BTI_HOST_HINTS.some((h) => frame.url.includes(h))) score = 20;
+    else if (BTI_URL_EXTRA.test(frame.url)) score = 12;
+    else if (frame.frameId !== 0) score = 3;
+    if (score > 0) candidates.push({ frameId: frame.frameId, url: frame.url, score });
+  }
+
+  if (!candidates.length) {
+    const srcs = await probeIframeSrcs(tabId);
+    for (const src of srcs) {
+      if (!isBtiHost(src)) continue;
+      try {
+        const origin = new URL(src).origin;
+        const match = frames.find((f) => f.url && f.url.startsWith(origin));
+        candidates.push({
+          frameId: match?.frameId ?? 0,
+          url: src,
+          score: 15
+        });
+      } catch (_) {}
+    }
+  }
+
+  if (!candidates.length && tabUrl && isBtiHost(tabUrl)) {
+    candidates.push({ frameId: 0, url: tabUrl, score: 5 });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates;
 }
 
 // pbc00 탭 안 BTI iframe origin (쿠키가 iframe에 있음)
@@ -100,30 +166,41 @@ async function resolveBtiApiOrigin(tabId, tabUrl) {
   if (tabUrl && tabUrl.includes('fxf774.com')) {
     return new URL(tabUrl).origin;
   }
-  if (tabUrl && isBtiHost(tabUrl)) {
+  if (tabUrl && isBtiHost(tabUrl) && !tabUrl.includes('pbc00.com')) {
     return new URL(tabUrl).origin;
   }
 
-  const frames = await getAllTabFrames(tabId);
-  for (const frame of frames) {
-    if (!frame.url || !isBtiHost(frame.url)) continue;
+  const candidates = await getBtiFrameCandidates(tabId, tabUrl);
+  for (const c of candidates) {
     try {
-      const origin = new URL(frame.url).origin;
-      console.log('[BTI] iframe origin 감지:', origin);
+      const origin = new URL(c.url).origin;
+      console.log('[BTI] API origin:', origin, 'frame=', c.frameId);
       return origin;
     } catch (_) {}
   }
 
-  console.warn('[BTI] iframe 미발견 — prod188 폴백 (pbc00에서 BTI 화면을 먼저 열어주세요)');
+  const srcs = await probeIframeSrcs(tabId);
+  for (const src of srcs) {
+    if (!isBtiHost(src)) continue;
+    try {
+      console.log('[BTI] iframe src에서 origin 추출:', src.substring(0, 80));
+      return new URL(src).origin;
+    } catch (_) {}
+  }
+
+  console.warn('[BTI] iframe 미발견 — prod188 폴백');
   return 'https://prod188.bti-sports.io';
 }
 
 async function getBtiFrameIds(tabId, tabUrl) {
-  const frames = await getAllTabFrames(tabId);
-  const btiFrames = frames.filter((f) => f.url && isBtiHost(f.url)).map((f) => f.frameId);
-  if (btiFrames.length) return btiFrames;
-  if (tabUrl && isBtiHost(tabUrl)) return [0];
+  const candidates = await getBtiFrameCandidates(tabId, tabUrl);
+  const ids = [...new Set(candidates.map((c) => c.frameId))];
+  if (ids.length) return ids;
   return [0];
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function fetchJsonInFrame(tabId, frameId, url) {
@@ -157,38 +234,51 @@ async function fetchJsonInFrame(tabId, frameId, url) {
 
 // BTI API 호출 — BTI iframe 컨텍스트에서 fetch (pbc00 로그인 쿠키)
 async function fetchBtiViaTab(tabId, path, tabUrl) {
-  const baseUrl = await resolveBtiApiOrigin(tabId, tabUrl);
-  const url = baseUrl + path;
-  const frameIds = await getBtiFrameIds(tabId, tabUrl);
   let lastError = '응답 없음';
 
-  for (const frameId of frameIds) {
-    try {
-      const data = await fetchJsonInFrame(tabId, frameId, url);
-      console.log('[BTI] API OK', path.slice(0, 60), 'frame=', frameId, 'base=', baseUrl);
-      return data;
-    } catch (e) {
-      lastError = e.message;
-      console.warn('[BTI] frame', frameId, '실패:', e.message);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(800);
+
+    const baseUrl = await resolveBtiApiOrigin(tabId, tabUrl);
+    const url = baseUrl + path;
+    const frameIds = await getBtiFrameIds(tabId, tabUrl);
+
+    for (const frameId of frameIds) {
+      try {
+        const data = await fetchJsonInFrame(tabId, frameId, url);
+        console.log('[BTI] API OK', path.slice(0, 60), 'frame=', frameId, 'base=', baseUrl);
+        return data;
+      } catch (e) {
+        lastError = e.message;
+        console.warn('[BTI] frame', frameId, '실패:', e.message);
+      }
     }
   }
 
-  throw new Error('BTI fetch 실패: ' + lastError + ' (base=' + baseUrl + ')');
+  throw new Error('BTI fetch 실패: ' + lastError);
 }
 
-// API 실패 시 BTI iframe 배당판 DOM 스캔
+// API 실패 시 BTI iframe 배당판 DOM 스캔 (content script PING으로 프레임 탐색)
 async function scrapeBtiDomFromTab(tabId) {
   const frames = await getAllTabFrames(tabId);
-  const btiFrames = frames.filter((f) => f.url && isBtiHost(f.url));
   const events = [];
-  for (const frame of btiFrames) {
+
+  for (const frame of frames) {
     try {
+      const ping = await chrome.tabs.sendMessage(
+        tabId,
+        { type: 'PING' },
+        { frameId: frame.frameId }
+      );
+      if (!ping || (!ping.buttonCount && !ping.hasSlip)) continue;
+
       const res = await chrome.tabs.sendMessage(
         tabId,
         { type: 'SCRAPE_BOARD' },
         { frameId: frame.frameId }
       );
       if (!res?.events?.length) continue;
+
       for (const ev of res.events) {
         events.push({
           id: ev.eventId || ev.eventText,
@@ -201,19 +291,78 @@ async function scrapeBtiDomFromTab(tabId) {
       }
     } catch (_) {}
   }
+
   if (events.length) console.log('[BTI] DOM 폴백:', events.length, '경기');
   return events;
 }
 
-// BTI 탭 ID + URL 찾기 (background.js에서 사용)
-async function findBtiTabId() {
-  const BTI_DOMAINS = ['pbc00.com', 'bti-sports.io', 'bti-sports.com', 'indonesiawinner.com', 'live8588.com', 'fxf774.com'];
+async function pickBtiTab() {
   const tabs = await chrome.tabs.query({});
+  let bestPbc = null;
+
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (BTI_DOMAINS.some(d => tab.url.includes(d))) return tab.id;
+    if (isBtiHost(tab.url) && !tab.url.includes('pbc00.com')) {
+      return { id: tab.id, url: tab.url };
+    }
+    if (tab.url.includes('pbc00.com')) {
+      const score = scorePbcBtiTab(tab.url);
+      if (!bestPbc || score > bestPbc.score) bestPbc = { tab, score };
+    }
   }
+
+  if (bestPbc) return { id: bestPbc.tab.id, url: bestPbc.tab.url };
   return null;
+}
+
+// BTI 진단 (팝업 로그용)
+async function diagBtiSearch() {
+  const btiTab = await pickBtiTab();
+  if (!btiTab) return { ok: false, error: 'BTI/pbc00 탭 없음' };
+
+  const frames = await getAllTabFrames(btiTab.id);
+  const candidates = await getBtiFrameCandidates(btiTab.id, btiTab.url);
+  const iframeSrcs = await probeIframeSrcs(btiTab.id);
+  const apiOrigin = await resolveBtiApiOrigin(btiTab.id, btiTab.url);
+
+  let apiTest = { ok: false, error: 'not tried' };
+  try {
+    const data = await fetchBtiViaTab(
+      btiTab.id,
+      '/api/sportscenter/inplay/markets?language=KO&marketTypes=ML0&minimumOdds=1.1&draft=false',
+      btiTab.url
+    );
+    apiTest = { ok: true, count: Array.isArray(data) ? data.length : 0, type: Array.isArray(data) ? 'array' : typeof data };
+  } catch (e) {
+    apiTest = { ok: false, error: e.message };
+  }
+
+  const domEvents = await scrapeBtiDomFromTab(btiTab.id);
+  const framePings = [];
+  for (const frame of frames.slice(0, 12)) {
+    try {
+      const ping = await chrome.tabs.sendMessage(btiTab.id, { type: 'PING' }, { frameId: frame.frameId });
+      if (ping) framePings.push({ frameId: frame.frameId, url: (frame.url || '').slice(0, 80), ...ping });
+    } catch (_) {}
+  }
+
+  return {
+    ok: true,
+    tabUrl: btiTab.url,
+    apiOrigin,
+    iframeSrcs: iframeSrcs.slice(0, 5),
+    frameCount: frames.length,
+    candidates: candidates.slice(0, 5).map((c) => ({ frameId: c.frameId, url: c.url.slice(0, 80), score: c.score })),
+    apiTest,
+    domEventCount: domEvents.length,
+    framePings
+  };
+}
+
+// BTI 탭 ID + URL 찾기 (background.js에서 사용)
+async function findBtiTabId() {
+  const tab = await pickBtiTab();
+  return tab ? tab.id : null;
 }
 
 // 피나클 탭 찾기 (content script 메시지 전송용)
@@ -264,13 +413,7 @@ async function getPinPrematchMatchupsKo(sportId) {
 
 // BTI 탭 ID + URL 함께 반환 (API base 결정용)
 async function findBtiTab() {
-  const BTI_DOMAINS = ['pbc00.com', 'bti-sports.io', 'bti-sports.com', 'indonesiawinner.com', 'live8588.com', 'fxf774.com'];
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.url) continue;
-    if (BTI_DOMAINS.some(d => tab.url.includes(d))) return { id: tab.id, url: tab.url };
-  }
-  return null;
+  return pickBtiTab();
 }
 
 // SBOBET GraphQL API 호출 (토큰 필요)
@@ -1179,13 +1322,8 @@ async function runPrematchSearchOnce() {
   }
 
   const pinTab = await findPinnacleTab();
-  if (!pinTab) {
-    return { opportunities: [], stats: { error: '피나클 탭 미발견 - pinnacle.com을 열어주세요', btiTabFound: true, pinTabFound: false } };
-  }
+  // 피나클 탭 없어도 API 영문 폴백으로 진행 (차단하지 않음)
 
-  // 피나클 프리매치 수집:
-  // 1단계: 피나클 탭 content script에서 한국어 팀명 수집 (FETCH_PREMATCH)
-  // 2단계: background에서 배당 수집 (highlighted straight API)
   const SPORT_IDS = [29, 3, 4, 12, 33];
 
   // 1단계: 한국어 팀명 수집 (피나클 탭 경유)
@@ -1244,8 +1382,9 @@ async function runPrematchSearchOnce() {
   const pinEsports = pinMatchupsBySport[12] || [];
   const pinTennis = pinMatchupsBySport[33] || [];
 
-  // BTI 프리매치 전체 수집
   const btiAll = await getBtiPrematchMatchups(btiTab.id, btiTab.url);
+  let btiApiOrigin = '';
+  try { btiApiOrigin = await resolveBtiApiOrigin(btiTab.id, btiTab.url); } catch (_) {}
 
   // 양방 기회 탐색
   const allOpps = [
@@ -1267,7 +1406,9 @@ async function runPrematchSearchOnce() {
       pinTotal: pinSoccer.length + pinBaseball.length + pinBasketball.length + pinEsports.length + pinTennis.length,
       btiTotal: btiAll.length,
       btiTabFound: true,
-      pinTabFound: true,
+      pinTabFound: !!pinTab,
+      btiApiOrigin,
+      btiDomFallback: btiAll.some((e) => e._domFallback),
       matched: allOpps.length
     }
   };
@@ -1325,12 +1466,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // BTI API fetch (CORS 우회)
+  // BTI API fetch — pbc00 탭 iframe 경유 (쿠키 포함)
   if (msg.type === 'FETCH_BTI_API') {
-    fetch(msg.url, { credentials: 'omit' })
-      .then(r => r.json())
-      .then(data => sendResponse({ ok: true, data }))
-      .catch(e => sendResponse({ ok: false, error: e.message }));
+    (async () => {
+      try {
+        const btiTab = await findBtiTab();
+        if (!btiTab) {
+          sendResponse({ ok: false, error: 'pbc00/BTI 탭 없음' });
+          return;
+        }
+        let path = msg.path || '';
+        if (!path && msg.url) {
+          try { path = new URL(msg.url).pathname + new URL(msg.url).search; } catch (_) { path = msg.url; }
+        }
+        const data = await fetchBtiViaTab(btiTab.id, path, btiTab.url);
+        sendResponse({ ok: true, data });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
+  // BTI 서치 진단
+  if (msg.type === 'DIAG_BTI_SEARCH') {
+    diagBtiSearch().then((r) => sendResponse(r)).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
 

@@ -16,11 +16,12 @@ GitHub `-2` 저장소에서 받은 **전체 확장** + pbc00 BTI 서치 수정�
 3. **pinnacle.com** 탭도 열기 (프리매치 한국어 팀명용)
 4. 확장 팝업 → **프리매치 서치** 또는 **라이브 서치** 실행
 
-## v2.98 수정 (BTI 서치)
+## v2.99 수정 (BTI 서치 강화)
 
-- **원인**: pbc00 탭에서 API를 `prod188.bti-sports.io`로 호출하면 로그인 쿠키가 없어 실패
-- **수정**: BTI **iframe origin**을 자동 감지해 해당 프레임에서 `fetch` (쿠키 포함)
-- **폴백**: API 실패 시 배당판 DOM 스캔 (`master_fe_Selections_selection` 버튼)
+- iframe 탐색 강화 (src 프로브 + 전 프레임 재시도)
+- API 호출 3회 재시도
+- 프리매치: pinnacle.com 탭 없어도 API 영문 폴백으로 진행
+- 팝업 **BTI 진단** 버튼 → iframe/API/DOM 상태 출력
 
 ## 문제 해결
 

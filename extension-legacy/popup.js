@@ -2536,9 +2536,8 @@ document.addEventListener('DOMContentLoaded', () => {
           startPrematchBtn.disabled = false;
           stopPrematchBtn.disabled = true;
         } else if (s.pinTabFound === false) {
-          addLog('⚠️ 피나클 탭 미발견 - pinnacle.com을 먼저 열어주세요', 'warn');
-          startPrematchBtn.disabled = false;
-          stopPrematchBtn.disabled = true;
+          addLog('⚠️ pinnacle.com 탭 없음 — 영문 팀명으로 진행', 'warn');
+          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
         } else {
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
         }
@@ -2702,51 +2701,31 @@ document.addEventListener('DOMContentLoaded', () => {
     result.split('\n').forEach(line => addLog(line, 'info'));
   });
 
-  // BTI 진단 버튼
+  // BTI 진단 버튼 — iframe/API/DOM 전체 점검
   const diagBtn = document.getElementById('diagBtiBtn');
   if (diagBtn) diagBtn.addEventListener('click', async () => {
-    addLog('BTI 진단 시작...', 'info');
-    const { btiTab } = await findTabs();
-    if (!btiTab) { addLog('❌ BTI 탭 미발견 (pbc00.com 또는 bti-sports.io 탭 필요)', 'error'); return; }
-    addLog(`BTI 탭: id=${btiTab.id} frameId=${btiTab.frameId} url=${btiTab.url ? btiTab.url.substring(0,60) : '?'}`, 'info');
-    const result = await execInTab(btiTab, function() {
-      const out = [];
-      // 1. 슬립 카드
-      const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]')).filter(el =>
-        !el.className.includes('wrapper') && !el.className.includes('counter') &&
-        !el.className.includes('bageGroup') && !el.className.includes('badge') &&
-        !el.className.includes('PlaceBet') && !el.className.includes('Tab')
-      );
-      out.push(`슬립카드:${cards.length}`);
-      if (cards[0]) {
-        const card = cards[0];
-        // title 요소
-        const titles = card.querySelectorAll('[class*="betInformation__title"]');
-        titles.forEach((t,i) => out.push(`title[${i}]:"${t.textContent.trim().substring(0,40)}"`));
-        // 슬립 카드 내부 모든 span 요소 (class 포함)
-        out.push('--- 슬립 내부 span 요소 (class 있는 것) ---');
-        const spans = card.querySelectorAll('span[class]');
-        Array.from(spans).slice(0,20).forEach((s,i) => {
-          const txt = s.textContent.trim();
-          if (txt) out.push(`span[${i}]:cls="${s.className.substring(0,60)}" txt="${txt.substring(0,30)}"`);
-        });
-        // 숫자스러운 span (1.01~100 범위)
-        out.push('--- 배당숫자 span ---');
-        const allSpans = card.querySelectorAll('span');
-        Array.from(allSpans).forEach((s,i) => {
-          const txt = s.textContent.trim();
-          const n = parseFloat(txt);
-          if (n > 1.01 && n < 100 && /^\d+\.\d{2,4}$/.test(txt)) {
-            out.push(`odds-span[${i}]:cls="${s.className.substring(0,60)}" txt="${txt}"`);
-          }
-        });
+    addLog('BTI 서치 진단 시작...', 'info');
+    chrome.runtime.sendMessage({ type: 'DIAG_BTI_SEARCH' }, (resp) => {
+      if (!resp || !resp.ok) {
+        addLog('❌ ' + (resp?.error || '진단 실패'), 'error');
+        return;
       }
-      // 2. 현재 URL
-      out.push(`url:${location.href.substring(0,60)}`);
-      return out.join('\n');
+      addLog(`탭: ${(resp.tabUrl || '').substring(0, 70)}`, 'info');
+      addLog(`API origin: ${resp.apiOrigin}`, 'info');
+      addLog(`iframe ${resp.frameCount}개 / src샘플: ${(resp.iframeSrcs || []).join(' | ').substring(0, 120)}`, 'info');
+      if (resp.apiTest?.ok) {
+        addLog(`✅ API 테스트 OK — 라이브 ${resp.apiTest.count}건`, 'success');
+      } else {
+        addLog(`❌ API 테스트 실패: ${resp.apiTest?.error || '?'}`, 'error');
+      }
+      addLog(`DOM 폴백 경기: ${resp.domEventCount}건`, resp.domEventCount ? 'success' : 'warn');
+      (resp.framePings || []).forEach((p) => {
+        addLog(`frame ${p.frameId}: btn=${p.buttonCount} top=${p.isTop} ${(p.href || p.url || '').substring(0, 50)}`, 'info');
+      });
+      if (!resp.apiTest?.ok && !resp.domEventCount) {
+        addLog('→ pbc00 로그인 후 BTI 배당 화면(gamecode=19)을 열고 새로고침하세요', 'warn');
+      }
     });
-    if (!result) { addLog('❌ inject 실패 (frameId 문제 가능)', 'error'); return; }
-    result.split('\n').forEach(line => addLog(line, 'info'));
   });
 
   // SBO 진단 버튼
@@ -2896,10 +2875,12 @@ document.addEventListener('DOMContentLoaded', () => {
       addLog('스포츠목록 오류: ' + (sportsResp ? sportsResp.error : '응답없음'), 'error');
     }
 
-    // BTI API - background에서 fetch
-    const btiUrl = 'https://prod188.bti-sports.io/api/sportscenter/carousels/featured-matches/markets?language=KO&customerLevel=0&selectedOptionId=0&marketTypes=ML0%2CHC0%2COU0&marketTypesBySports=%7B%221%22%3A%5B%22HC0%22%2C%22OU0%22%2C%22ML0%22%5D%2C%226%22%3A%5B%22ML0%22%2C%22OU0%22%2C%22HC0%22%5D%2C%2259%22%3A%5B%22ML0%22%2C%22OU0%22%2C%22HC0%22%5D%7D&minimumOdds=1.1&draft=false';
+    // BTI API — pbc00 iframe 경유
     const btiResp = await new Promise(resolve =>
-      chrome.runtime.sendMessage({ type: 'FETCH_BTI_API', url: btiUrl }, resolve)
+      chrome.runtime.sendMessage({
+        type: 'FETCH_BTI_API',
+        path: '/api/sportscenter/inplay/markets?language=KO&marketTypes=ML0%2CHC0%2COU0&minimumOdds=1.1&draft=false'
+      }, resolve)
     );
     addLog('=== BTI API ===', 'info');
     if (btiResp && btiResp.ok) {
