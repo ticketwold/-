@@ -20,7 +20,7 @@ async function messageFrame(tabId, frameId, message) {
   return new Promise((resolve) => {
     chrome.tabs.sendMessage(
       tabId,
-      { ...message, target: "bti" },
+      message,
       { frameId },
       (response) => {
         if (chrome.runtime.lastError) {
@@ -33,52 +33,56 @@ async function messageFrame(tabId, frameId, message) {
   });
 }
 
-/** matchCount가 가장 많은 프레임 응답 선택 */
+/** eventCount / buttonCount / hitCount 가 가장 큰 프레임 응답 선택 */
 async function broadcastBti(tabId, message) {
   const frameIds = await getAllFrameIds(tabId);
   const responses = [];
 
   for (const frameId of frameIds) {
     const res = await messageFrame(tabId, frameId, message);
-    if (res) responses.push(res);
+    if (res) responses.push({ ...res, frameId });
   }
 
   if (!responses.length) {
-    return { ok: false, error: "no_frame_response", hint: "pbc00 탭에서 BTI 화면이 로드됐는지 확인" };
+    return {
+      ok: false,
+      error: "no_frame_response",
+      hint: "manifest all_frames:true 확인, pbc00 BTI 화면 로드 확인",
+    };
   }
 
-  responses.sort((a, b) => (b.matchCount || 0) - (a.matchCount || 0));
-  const best = responses[0];
-  return { ...best, framesAnswered: responses.length };
+  responses.sort((a, b) => {
+    const score = (r) => (r.hitCount || 0) * 1000 + (r.eventCount || 0) * 100 + (r.buttonCount || 0);
+    return score(b) - score(a);
+  });
+
+  return { ...responses[0], framesAnswered: responses.length, allFrames: responses };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    if (msg.action === "bti-collect") {
-      const tabId = msg.tabId || sender.tab?.id;
-      if (!tabId) {
-        sendResponse({ ok: false, error: "no_tab" });
-        return;
-      }
-      sendResponse(
-        await broadcastBti(tabId, { action: "collectOdds", sport: msg.sport || "football" }),
-      );
-      return;
-    }
-
     if (msg.action === "bti-search") {
       const tabId = msg.tabId || sender.tab?.id;
       if (!tabId) {
         sendResponse({ ok: false, error: "no_tab" });
         return;
       }
-      sendResponse(
-        await broadcastBti(tabId, {
-          action: "search",
-          query: msg.query || "",
-          sport: msg.sport || "football",
-        }),
-      );
+      const data = await broadcastBti(tabId, {
+        type: "BTI_SEARCH",
+        query: msg.query || "",
+      });
+      sendResponse(data);
+      return;
+    }
+
+    if (msg.action === "bti-collect") {
+      const tabId = msg.tabId || sender.tab?.id;
+      if (!tabId) {
+        sendResponse({ ok: false, error: "no_tab" });
+        return;
+      }
+      const data = await broadcastBti(tabId, { type: "SCRAPE_BOARD" });
+      sendResponse(data);
       return;
     }
 

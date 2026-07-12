@@ -1,335 +1,586 @@
-/**
- * BTI 스포츠북 배당 수집 (pbc00 iframe 포함)
- *
- * 흔한 실패 원인:
- * 1) all_frames: false → iframe 안 BTI DOM 접근 불가
- * 2) 부모 페이지만 스캔 → 배당은 iframe 내부
- * 3) 종목 전환을 텍스트 클릭만 시도 → BTI는 postMessage sportId 필요
- */
+// BTI content script v2.21
+// 실제 DOM 구조 (진단 결과 기준):
+// ─ 슬립 카드: [class*="betslip_fe_BetSecondary_bet"] (wrapper/counter/badge 제외)
+// ─ 배당판 버튼: button[class*="master_fe_Selections_selection"]
+//     배당 span: [class*="master_fe_Selections_odds"]
+//     기준점 span: [class*="master_fe_Selections_points"] 또는 [class*="selectionNameLine"]
+// ─ 금액 입력: input#counter
+// ─ 베팅 버튼: button.sportsbook-Button (텍스트: "베팅하기")
+
 (function () {
   "use strict";
 
-  const SOURCE = "arb-bti-content";
-  const BTI_HOST_HINTS = ["bti", "sportsbook", "asian-view", "/sports"];
-  const SPORT_IDS = {
-    football: "1",
-    baseball: "3",
-    basketball: "2",
-    esports: "64",
-    tennis: "6",
-  };
+  const VERSION = "2.21";
 
-  /** @type {Array<{url:string, data:any, ts:number}>} */
-  const capturedApi = [];
+  // ─────────────────────────────────────────────
+  // 슬립 읽기 (v2.20)
+  // ─────────────────────────────────────────────
 
-  function isBtiContext() {
-    const href = location.href.toLowerCase();
-    if (BTI_HOST_HINTS.some((h) => href.includes(h))) return true;
-    // pbc00 래퍼 페이지의 iframe 안이면 true
-    if (window !== window.top && document.querySelector("[class*='odds'], [class*='Odds'], [class*='event']")) {
-      return true;
-    }
-    return false;
-  }
+  function readBtiSlip() {
+    const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
+    const realCards = Array.from(betCards).filter((el) =>
+      !el.className.includes("wrapper") &&
+      !el.className.includes("counter") &&
+      !el.className.includes("bageGroup") &&
+      !el.className.includes("badge") &&
+      !el.className.includes("PlaceBet") &&
+      !el.className.includes("Tab"),
+    );
+    if (!realCards.length) return null;
+    const card = realCards[0];
 
-  function decimalOdds(raw) {
-    const v = parseFloat(raw);
-    if (!v || Number.isNaN(v)) return null;
-    if (v < 1) return +(v + 1).toFixed(3);
-    if (v >= 100) return +(v / 100 + 1).toFixed(3);
-    if (v <= -100) return +(100 / Math.abs(v) + 1).toFixed(3);
-    return +v.toFixed(3);
-  }
+    const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+    const selectionText = titleEls[0] ? titleEls[0].textContent.trim() : "";
+    const marketTitleText = titleEls[1] ? titleEls[1].textContent.trim() : "";
 
-  function normalizeTeam(s) {
-    return (s || "").replace(/\s+/g, " ").trim();
-  }
+    const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+    const eventText = eventEl ? eventEl.textContent.trim() : "";
 
-  /** BTI 공식: iframe에 sportId postMessage */
-  function navigateBtiSport(sportKey) {
-    const sportId = SPORT_IDS[sportKey] || sportKey;
-    const payload = JSON.stringify({
-      eventType: "sportId",
-      eventData: { value: String(sportId) },
-    });
+    const mktEl = card.querySelector('[class*="betInformation__marketName"]');
+    const mktText = mktEl ? mktEl.textContent.trim() : marketTitleText;
 
-    if (window === window.top) {
-      document.querySelectorAll("iframe").forEach((iframe) => {
-        try {
-          iframe.contentWindow?.postMessage(payload, "*");
-        } catch (_) {}
-      });
-    } else {
-      window.parent.postMessage(payload, "*");
-    }
-    return sportId;
-  }
+    const allText = `${selectionText} ${mktText} ${marketTitleText}`;
 
-  /** 네트워크 JSON 캡처 (fetch/XHR hook) */
-  function installNetworkHook() {
-    if (window.__arbBtiHooked) return;
-    window.__arbBtiHooked = true;
+    let odds = null;
+    let matchedLine = null;
+    let matchedSide = null;
 
-    const origFetch = window.fetch;
-    window.fetch = async function (...args) {
-      const res = await origFetch.apply(this, args);
-      try {
-        const clone = res.clone();
-        const ct = (clone.headers.get("content-type") || "").toLowerCase();
-        if (ct.includes("json")) {
-          const data = await clone.json();
-          pushApi(args[0]?.url || args[0], data);
-        }
-      } catch (_) {}
-      return res;
-    };
+    const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
 
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this.__arbUrl = url;
-      return origOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      this.addEventListener("load", function () {
-        try {
-          const ct = (this.getResponseHeader("content-type") || "").toLowerCase();
-          if (ct.includes("json") && this.responseText) {
-            pushApi(this.__arbUrl, JSON.parse(this.responseText));
+    if (selectionText) {
+      const slipLineMatch = selectionText.match(/([+-]\d+\.?\d*)\s*$/);
+      const slipLine = slipLineMatch ? parseFloat(slipLineMatch[1]) : null;
+      const teamName = slipLine !== null
+        ? selectionText.replace(slipLineMatch[0], "").trim()
+        : selectionText;
+
+      if (slipLine !== null) {
+        for (const btn of allBtns) {
+          const parsed = parseSelectionButton(btn);
+          if (!parsed || !parsed.odds) continue;
+          const pointsText = parsed.pointsText || "";
+          const pointsLineMatch = pointsText.match(/([+-]\d+\.?\d*)\s*$/);
+          if (!pointsLineMatch) continue;
+          const pointsLine = parseFloat(pointsLineMatch[1]);
+          if (Math.abs(pointsLine - slipLine) < 0.01) {
+            const pointsClean = pointsText.replace(/\s+/g, "").toLowerCase();
+            const teamClean = teamName.replace(/\s+/g, "").toLowerCase();
+            if (pointsClean.includes(teamClean) || teamClean.length < 2) {
+              odds = parsed.odds;
+              matchedLine = pointsLine;
+              break;
+            }
           }
-        } catch (_) {}
-      });
-      return origSend.apply(this, args);
-    };
-  }
-
-  function pushApi(url, data) {
-    const u = String(url || "");
-    if (!/api|event|sport|market|odds|bet|line|fixture|selection|match/i.test(u)) return;
-    capturedApi.push({ url: u, data, ts: Date.now() });
-    if (capturedApi.length > 80) capturedApi.shift();
-  }
-
-  function parseBtiEvent(ev) {
-    if (!ev || typeof ev !== "object") return null;
-
-    let home = ev.homeTeam || ev.HomeTeam || ev.home_team;
-    let away = ev.awayTeam || ev.AwayTeam || ev.away_team;
-
-    if (!home || !away) {
-      const name = ev.eventName || ev.name || "";
-      const m = name.match(/^(.+?)\s+(?:vs|VS|v\.|@)\s+(.+)$/);
-      if (m) {
-        home = m[1];
-        away = m[2];
-      }
-    }
-
-    const parts = ev.participants || ev.competitors || ev.teams || [];
-    if (Array.isArray(parts)) {
-      for (const p of parts) {
-        if (!p || typeof p !== "object") continue;
-        const n = p.name || p.teamName;
-        const role = String(p.venueRole || p.alignment || p.side || "").toLowerCase();
-        if (role === "home" || role === "h") home = n;
-        if (role === "away" || role === "a") away = n;
-      }
-      if (!home && parts.length >= 2) {
-        home = parts[0].name || parts[0];
-        away = parts[1].name || parts[1];
-      }
-    }
-
-    home = normalizeTeam(home);
-    away = normalizeTeam(away);
-    if (!home || !away) return null;
-
-    const markets = ev.markets || ev.market || [];
-    const list = Array.isArray(markets) ? markets : [markets];
-    let homeOdds = null;
-    let awayOdds = null;
-    let drawOdds = null;
-
-    for (const mk of list) {
-      if (!mk || typeof mk !== "object") continue;
-      const sels = mk.selections || mk.outcomes || mk.runners || mk.prices || [];
-      const arr = Array.isArray(sels) ? sels : Object.values(sels);
-      for (const s of arr) {
-        if (!s || typeof s !== "object") continue;
-        const price = decimalOdds(s.price ?? s.odds ?? s.decimal ?? s.decimalOdds ?? s.value);
-        if (!price) continue;
-        const label = String(s.name || s.designation || s.side || "").toLowerCase();
-        if (/home|^h$|1/.test(label)) homeOdds = price;
-        else if (/away|^a$|2/.test(label)) awayOdds = price;
-        else if (/draw|^x$/.test(label)) drawOdds = price;
-      }
-      if (homeOdds && awayOdds) break;
-    }
-
-    if (!homeOdds || !awayOdds) return null;
-
-    return {
-      matchId: String(ev.id || ev.eventId || `${home}_${away}`),
-      homeTeam: home,
-      awayTeam: away,
-      league: ev.leagueName || ev.league || "",
-      odds: { home: homeOdds, away: awayOdds, draw: drawOdds },
-      source: "bti-api",
-    };
-  }
-
-  function walkBtiEvents(data, out, depth = 0) {
-    if (depth > 8 || !data) return;
-    if (Array.isArray(data)) {
-      if (data.length && typeof data[0] === "object") {
-        const sample = data[0];
-        const keys = Object.keys(sample).map((k) => k.toLowerCase());
-        if (
-          keys.some((k) => ["participants", "markets", "hometeam", "eventname"].includes(k))
-        ) {
-          for (const item of data) {
-            const p = parseBtiEvent(item);
-            if (p) out.push(p);
-          }
-          return;
         }
       }
-      for (const item of data) walkBtiEvents(item, out, depth + 1);
-      return;
+
+      if (!odds) {
+        const slipMktType = detectMarketType(allText);
+        const candidates = [];
+        for (const btn of allBtns) {
+          const parsed = parseSelectionButton(btn);
+          if (!parsed || !parsed.odds) continue;
+          const btnTextClean = parsed.rawText.replace(/\s+/g, "");
+          const selClean = selectionText.replace(/\s+/g, "");
+          if (btnTextClean.includes(selClean) || selClean.includes(btnTextClean.replace(/[\d.]+$/, ""))) {
+            const pointsText = parsed.pointsText || "";
+            const hasHandicap = /[+-]\d/.test(pointsText);
+            const isOuBtn = /오버|언더|over|under/i.test(parsed.rawText);
+            candidates.push({ btn, btnOdds: parsed.odds, pointsText, hasHandicap, isOuBtn });
+          }
+        }
+
+        let chosen = null;
+        if (slipMktType === "ml") {
+          chosen = candidates.find((c) => !c.hasHandicap && !c.isOuBtn)
+            || candidates.find((c) => !c.isOuBtn)
+            || candidates[0];
+        } else if (slipMktType === "ah") {
+          chosen = candidates.find((c) => c.hasHandicap) || candidates[0];
+        } else {
+          chosen = candidates[0];
+        }
+
+        if (chosen) {
+          odds = chosen.btnOdds;
+          const pm = (chosen.pointsText || "").match(/([+-]?\d+\.?\d*)/);
+          if (pm) matchedLine = parseFloat(pm[1]);
+          if (chosen.btn.textContent.includes("언더") || chosen.btn.textContent.toLowerCase().includes("under")) matchedSide = "u";
+          else if (chosen.btn.textContent.includes("오버") || chosen.btn.textContent.toLowerCase().includes("over")) matchedSide = "o";
+        }
+      }
+
+      if (!odds) {
+        const ouMatch = selectionText.match(/(오버|언더|over|under)\s*([\d]+\.?[\d]*)/i);
+        if (ouMatch) {
+          const targetSide = (ouMatch[1].toLowerCase().includes("언더") || ouMatch[1].toLowerCase() === "under") ? "u" : "o";
+          const targetLine = parseFloat(ouMatch[2]);
+          for (const btn of allBtns) {
+            const parsed = parseSelectionButton(btn);
+            if (!parsed || !parsed.odds) continue;
+            const btnSide = /언더|under/i.test(parsed.rawText) ? "u" : (/오버|over/i.test(parsed.rawText) ? "o" : null);
+            if (btnSide !== targetSide) continue;
+            let btnLine = parsed.line;
+            if (btnLine !== null && Math.abs(btnLine - targetLine) < 0.01) {
+              odds = parsed.odds;
+              matchedLine = btnLine;
+              matchedSide = targetSide;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!odds) {
+        const ahMatch = selectionText.match(/([+-]\d+\.?\d*)/);
+        if (ahMatch) {
+          const targetLine = parseFloat(ahMatch[1]);
+          for (const btn of allBtns) {
+            const parsed = parseSelectionButton(btn);
+            if (!parsed || !parsed.odds || parsed.line === null) continue;
+            if (Math.abs(parsed.line - targetLine) < 0.01) {
+              odds = parsed.odds;
+              matchedLine = parsed.line;
+              break;
+            }
+          }
+        }
+      }
     }
-    if (typeof data === "object") {
-      const p = parseBtiEvent(data);
-      if (p) out.push(p);
-      for (const v of Object.values(data)) walkBtiEvents(v, out, depth + 1);
-    }
-  }
 
-  function scrapeFromApi() {
-    const out = [];
-    const seen = new Set();
-    for (const c of capturedApi.slice().reverse()) {
-      walkBtiEvents(c.data, out);
-    }
-    return out.filter((m) => {
-      const k = `${m.homeTeam}|${m.awayTeam}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-  }
+    if (!odds) odds = 0;
 
-  /** DOM 폴백: BTI 이벤트 행 */
-  function scrapeFromDom() {
-    const out = [];
-    const rowSelectors = [
-      "[class*='event-row']",
-      "[class*='EventRow']",
-      "[class*='match-row']",
-      "tr[class*='event']",
-      ".game-list .item",
-    ];
+    const period = detectPeriod(allText);
+    const type = mktText ? detectMarketType(mktText) : detectMarketType(allText);
+    const side = detectSide(selectionText || allText, type, matchedSide);
+    const line = detectLine(selectionText || allText, matchedLine);
+    const marketKey = type === "ml"
+      ? `${period}_ml_${side}`
+      : type === "ah"
+        ? `${period}_ah_${side}_${line}`
+        : `${period}_ou_${side}_${line}`;
 
-    for (const sel of rowSelectors) {
-      const rows = document.querySelectorAll(sel);
-      if (!rows.length) continue;
-
-      rows.forEach((row, i) => {
-        const text = row.innerText || "";
-        const vm = text.match(/(.{2,40}?)\s+(?:vs|VS|v\.)\s+(.{2,40})/);
-        if (!vm) return;
-        const odds = [...text.matchAll(/\b([1-9]\d?\.\d{2})\b/g)]
-          .map((x) => parseFloat(x[1]))
-          .filter((x) => x >= 1.01 && x <= 50);
-        if (odds.length < 2) return;
-        out.push({
-          matchId: `dom_${i}`,
-          homeTeam: normalizeTeam(vm[1]),
-          awayTeam: normalizeTeam(vm[2]),
-          league: "",
-          odds: { home: odds[0], away: odds[1], draw: odds[2] || null },
-          source: "bti-dom",
-        });
-      });
-      if (out.length) break;
-    }
-    return out;
-  }
-
-  async function collectOdds(sport = "football") {
-    installNetworkHook();
-    navigateBtiSport(sport);
-    await new Promise((r) => setTimeout(r, 2500));
-
-    let matches = scrapeFromApi();
-    if (!matches.length) matches = scrapeFromDom();
+    const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
+    const eventId = urlMatch ? urlMatch[1] : null;
 
     return {
-      ok: matches.length > 0,
-      sport,
+      odds,
+      eventId,
+      marketKind: type,
+      period,
+      side,
+      line,
+      marketKey,
+      mktText,
+      selectionText,
+      eventText,
+    };
+  }
+
+  function validateBtiLine(targetLine, tolerance) {
+    const slip = readBtiSlip();
+    if (!slip) return { valid: false, reason: "슬립 없음" };
+    if (slip.line === null) return { valid: false, reason: "기준점 파싱 실패" };
+    const diff = Math.abs(slip.line - targetLine);
+    if (diff > tolerance) {
+      return {
+        valid: false,
+        reason: `기준점 불일치: 목표=${targetLine}, 실제=${slip.line}("${slip.selectionText}"), 차이=${diff.toFixed(2)}`,
+        actualLine: slip.line,
+        selectionText: slip.selectionText,
+      };
+    }
+    return { valid: true, actualLine: slip.line, selectionText: slip.selectionText };
+  }
+
+  async function placeBtiBet(amount, targetLine, lineTolerance) {
+    try {
+      if (targetLine !== undefined && lineTolerance !== undefined) {
+        const validation = validateBtiLine(targetLine, lineTolerance);
+        if (!validation.valid) {
+          return {
+            success: false,
+            reason: `⚠️ ${validation.reason} → 베팅 취소`,
+            lineChanged: true,
+          };
+        }
+      }
+
+      const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
+      const realCards = Array.from(betCards).filter((el) =>
+        !el.className.includes("wrapper") &&
+        !el.className.includes("counter") &&
+        !el.className.includes("bageGroup") &&
+        !el.className.includes("badge") &&
+        !el.className.includes("PlaceBet") &&
+        !el.className.includes("Tab"),
+      );
+      if (!realCards.length) return { success: false, reason: "슬립 카드 없음" };
+
+      const input = document.getElementById("counter")
+        || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"]');
+      if (!input) return { success: false, reason: "금액 입력 필드 없음" };
+
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      nativeSetter.call(input, String(amount));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+
+      await new Promise((r) => setTimeout(r, 800));
+
+      const allBtns = document.querySelectorAll("button:not([disabled])");
+      let betBtn = null;
+
+      for (const btn of allBtns) {
+        if (btn.className.includes("sportsbook-Button") && btn.textContent.trim().includes("베팅하기")) {
+          betBtn = btn;
+          break;
+        }
+      }
+      if (!betBtn) {
+        for (const btn of allBtns) {
+          if (btn.className.includes("PlaceBetBlock") && !btn.className.includes("clearAll")) {
+            betBtn = btn;
+            break;
+          }
+        }
+      }
+      if (!betBtn) {
+        for (const btn of allBtns) {
+          const txt = btn.textContent.trim();
+          if ((txt.includes("베팅하기") || txt.includes("베팅 확인"))
+            && !txt.includes("슬립") && !txt.includes("내 베팅") && !txt.includes("로그인")) {
+            betBtn = btn;
+            break;
+          }
+        }
+      }
+
+      if (!betBtn) return { success: false, reason: "베팅 버튼 없음 (금액 미입력 또는 최소금액 미달?)" };
+
+      betBtn.click();
+      await new Promise((r) => setTimeout(r, 1500));
+      return { success: true };
+    } catch (e) {
+      return { success: false, reason: e.message };
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // 배당판 검색 (v2.21 신규 — 슬립 없이 동작)
+  // ─────────────────────────────────────────────
+
+  function detectPeriod(text) {
+    const t = text.toLowerCase();
+    if (t.includes("전반전") || t.includes("1st half") || t.includes("halftime")) return "1h";
+    if (t.includes("후반전") || t.includes("2nd half")) return "2h";
+    if (/[23]세트|[23]rd set|[23]nd set/i.test(t)) return "set";
+    return "ft";
+  }
+
+  function detectMarketType(text) {
+    const t = text.toLowerCase();
+    if (t.includes("머니 라인") || t.includes("money line") || t.includes("moneyline") || t.includes("승패")) return "ml";
+    if (t.includes("핸디캡") || t.includes("handicap") || t.includes("아시안")) return "ah";
+    if (t.includes("오버") || t.includes("언더") || t.includes("over") || t.includes("under") || t.includes("총계")) return "ou";
+    return "ml";
+  }
+
+  function detectSide(text, type, matchedSide) {
+    const t = text.toLowerCase();
+    if (type === "ou") {
+      if (matchedSide) return matchedSide;
+      return (t.includes("언더") || t.includes("under")) ? "u" : "o";
+    }
+    if (type === "ah") return (t.includes("어웨이") || t.includes("away")) ? "a" : "h";
+    if (t.includes("무승부") || t.includes("draw")) return "draw";
+    if (t.includes("어웨이") || t.includes("away")) return "away";
+    return "home";
+  }
+
+  function detectLine(text, matchedLine) {
+    if (matchedLine !== null) return matchedLine;
+    const m = text.match(/(?:오버|언더|over|under)[\s]*([\d]+\.?[\d]*)/i);
+    if (m) return parseFloat(m[1]);
+    const m2 = text.match(/([+-]\d+\.?\d*)/);
+    if (m2) return parseFloat(m2[1]);
+    const m3 = text.match(/([\d]+\.[\d]+)/);
+    if (m3) return parseFloat(m3[1]);
+    return null;
+  }
+
+  function parseSelectionButton(btn) {
+    if (!btn) return null;
+    const rawText = (btn.textContent || "").trim();
+    const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+    if (!oddsEl) return null;
+    const odds = parseFloat(oddsEl.textContent.trim());
+    if (!odds || odds <= 1.01 || odds >= 100) return null;
+
+    const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+    const pointsText = pointsEl ? pointsEl.textContent.trim() : "";
+
+    let line = null;
+    const lineMatch = (pointsText || rawText).match(/([+-]\d+\.?\d*)/);
+    if (lineMatch) line = parseFloat(lineMatch[1]);
+    else {
+      const ouLine = rawText.replace(/오버|언더|over|under/gi, "").match(/(\d+\.?\d*)/);
+      if (ouLine) line = parseFloat(ouLine[1]);
+    }
+
+    let label = pointsText || rawText.replace(String(odds), "").trim();
+    label = label.replace(/[+-]?\d+\.?\d*$/, "").trim();
+
+    return { odds, line, pointsText, label, rawText, element: btn };
+  }
+
+  function findEventNameNearButton(btn) {
+    let el = btn.parentElement;
+    for (let depth = 0; depth < 15 && el; depth++) {
+      const selectors = [
+        '[class*="eventName"]',
+        '[class*="EventName"]',
+        '[class*="competitor"]',
+        '[class*="participants"]',
+        '[class*="matchName"]',
+      ];
+      for (const sel of selectors) {
+        const found = el.querySelector(sel);
+        if (found) {
+          const t = found.textContent.trim();
+          if (t.includes("vs") || t.includes("VS") || t.includes(" @ ")) return t;
+        }
+      }
+      const text = (el.textContent || "").trim();
+      const vm = text.match(/([^\n]{2,50})\s+(?:vs|VS|v\.|@)\s+([^\n]{2,50})/);
+      if (vm && text.length < 200) return `${vm[1].trim()} vs ${vm[2].trim()}`;
+      el = el.parentElement;
+    }
+    return "";
+  }
+
+  function parseEventTeams(eventText) {
+    if (!eventText) return { home: "", away: "" };
+    for (const sep of [" vs ", " VS ", " v ", " @ "]) {
+      if (eventText.includes(sep)) {
+        const [home, away] = eventText.split(sep, 2);
+        return { home: home.trim(), away: away.trim() };
+      }
+    }
+    return { home: eventText, away: "" };
+  }
+
+  /** 배당판의 모든 selection 버튼 스캔 (슬립 불필요) */
+  function scrapeBoardSelections() {
+    const btns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+    const byEvent = new Map();
+
+    btns.forEach((btn, idx) => {
+      const parsed = parseSelectionButton(btn);
+      if (!parsed) return;
+
+      const eventText = findEventNameNearButton(btn);
+      const eventKey = eventText || `unknown_${idx}`;
+      const { home, away } = parseEventTeams(eventText);
+
+      const marketContainer = btn.closest('[class*="market"], [class*="Market"], [class*="selections"]');
+      const marketText = marketContainer
+        ? (marketContainer.querySelector('[class*="marketName"], [class*="MarketName"]')?.textContent || "").trim()
+        : "";
+
+      const marketKind = detectMarketType(marketText || parsed.rawText);
+      const side = detectSide(parsed.label || parsed.rawText, marketKind, null);
+
+      const entry = {
+        eventText,
+        homeTeam: home,
+        awayTeam: away,
+        selectionText: parsed.label || parsed.rawText,
+        marketText,
+        marketKind,
+        side,
+        line: parsed.line,
+        odds: parsed.odds,
+        pointsText: parsed.pointsText,
+        eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
+      };
+
+      if (!byEvent.has(eventKey)) byEvent.set(eventKey, []);
+      byEvent.get(eventKey).push(entry);
+    });
+
+    const events = [];
+    for (const [eventText, selections] of byEvent) {
+      const { home, away } = parseEventTeams(eventText);
+      events.push({
+        eventText,
+        homeTeam: home,
+        awayTeam: away,
+        selections,
+        moneyline: selections.filter((s) => s.marketKind === "ml"),
+        handicap: selections.filter((s) => s.marketKind === "ah"),
+        totals: selections.filter((s) => s.marketKind === "ou"),
+      });
+    }
+
+    return {
+      ok: events.length > 0 || btns.length > 0,
       frameUrl: location.href,
       isTop: window === window.top,
-      matchCount: matches.length,
-      matches,
-      apiCaptureCount: capturedApi.length,
-      debug: {
-        title: document.title,
-        frameCount: window === window.top ? document.querySelectorAll("iframe").length : 0,
-      },
+      buttonCount: btns.length,
+      eventCount: events.length,
+      events,
     };
   }
 
-  function searchTeam(query, sport = "football") {
-    const q = normalizeTeam(query).toLowerCase();
-    return collectOdds(sport).then((result) => {
-      const hits = result.matches.filter((m) => {
-        const blob = `${m.homeTeam} ${m.awayTeam}`.toLowerCase();
-        return blob.includes(q) || m.homeTeam.toLowerCase().includes(q) || m.awayTeam.toLowerCase().includes(q);
-      });
-      return { ...result, query, hits, hitCount: hits.length };
-    });
+  function normalizeQuery(q) {
+    return (q || "").replace(/\s+/g, "").toLowerCase();
   }
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || msg.target !== "bti") return;
+  /** 팀명으로 배당판 검색 */
+  function searchBtiOdds(query) {
+    const board = scrapeBoardSelections();
+    const q = normalizeQuery(query);
 
-    (async () => {
-      try {
-        if (msg.action === "ping") {
+    if (!q) {
+      return { ...board, query, hits: board.events, hitCount: board.eventCount };
+    }
+
+    const hits = board.events.filter((ev) => {
+      const blob = normalizeQuery(`${ev.homeTeam} ${ev.awayTeam} ${ev.eventText}`);
+      return blob.includes(q)
+        || normalizeQuery(ev.homeTeam).includes(q)
+        || normalizeQuery(ev.awayTeam).includes(q);
+    });
+
+    const selectionHits = [];
+    for (const btn of document.querySelectorAll('button[class*="master_fe_Selections_selection"]')) {
+      const parsed = parseSelectionButton(btn);
+      if (!parsed) continue;
+      const blob = normalizeQuery(`${parsed.label} ${parsed.rawText} ${findEventNameNearButton(btn)}`);
+      if (blob.includes(q)) {
+        const eventText = findEventNameNearButton(btn);
+        const { home, away } = parseEventTeams(eventText);
+        selectionHits.push({
+          eventText,
+          homeTeam: home,
+          awayTeam: away,
+          selectionText: parsed.label,
+          odds: parsed.odds,
+          line: parsed.line,
+          marketKind: detectMarketType(parsed.rawText),
+        });
+      }
+    }
+
+    return {
+      ...board,
+      query,
+      hits,
+      hitCount: hits.length,
+      selectionHits,
+      selectionHitCount: selectionHits.length,
+      slip: readBtiSlip(),
+    };
+  }
+
+  // ─────────────────────────────────────────────
+  // 메시지 핸들러 (기존 popup 호환 + 신규 search)
+  // ─────────────────────────────────────────────
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // 레거시: msg.type
+    if (msg.type === "READ_SLIP") {
+      sendResponse({ slip: readBtiSlip() });
+      return false;
+    }
+    if (msg.type === "PLACE_BET") {
+      placeBtiBet(msg.amount, msg.targetLine, msg.lineTolerance)
+        .then((result) => sendResponse(result));
+      return true;
+    }
+    if (msg.type === "VALIDATE_LINE") {
+      sendResponse(validateBtiLine(msg.targetLine, msg.tolerance));
+      return false;
+    }
+    if (msg.type === "SEARCH_ODDS" || msg.type === "BTI_SEARCH") {
+      sendResponse(searchBtiOdds(msg.query || msg.team || msg.q || ""));
+      return false;
+    }
+    if (msg.type === "SCRAPE_BOARD") {
+      sendResponse(scrapeBoardSelections());
+      return false;
+    }
+    if (msg.type === "PING") {
+      sendResponse({
+        ok: true,
+        version: VERSION,
+        href: location.href,
+        isTop: window === window.top,
+        buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
+        hasSlip: !!readBtiSlip(),
+      });
+      return false;
+    }
+
+    // 신규 background broadcast: msg.target === 'bti'
+    if (msg.target === "bti") {
+      (async () => {
+        if (msg.action === "collectOdds") {
+          sendResponse(scrapeBoardSelections());
+        } else if (msg.action === "search") {
+          sendResponse(searchBtiOdds(msg.query || ""));
+        } else if (msg.action === "ping") {
           sendResponse({
             ok: true,
-            source: SOURCE,
+            version: VERSION,
             href: location.href,
-            isBti: isBtiContext(),
             isTop: window === window.top,
+            buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
           });
-          return;
+        } else {
+          sendResponse({ ok: false, error: "unknown_action" });
         }
-        if (msg.action === "collectOdds") {
-          sendResponse(await collectOdds(msg.sport || "football"));
-          return;
-        }
-        if (msg.action === "search") {
-          sendResponse(await searchTeam(msg.query || "", msg.sport || "football"));
-          return;
-        }
-        if (msg.action === "navigateSport") {
-          sendResponse({ ok: true, sportId: navigateBtiSport(msg.sport || "football") });
-          return;
-        }
-        sendResponse({ ok: false, error: "unknown_action" });
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e) });
-      }
-    })();
+      })();
+      return true;
+    }
 
-    return true; // async
+    return false;
   });
 
-  // 부모/자식 프레임 간 브로드캐스트
-  window.addEventListener("message", (ev) => {
-    if (typeof ev.data !== "string") return;
-    if (!ev.data.includes("sportId")) return;
-  });
+  // ── MutationObserver: 슬립 변화 감지 ──
+  (function startBtiObserver() {
+    let lastOddsKey = "";
+    let debounceTimer = null;
 
-  console.log(`[${SOURCE}] loaded`, location.href, "top=", window === window.top);
+    function checkAndNotify() {
+      const slip = readBtiSlip();
+      if (!slip) return;
+      const key = `${slip.odds}_${slip.marketKey}_${slip.selectionText}`;
+      if (key === lastOddsKey) return;
+      lastOddsKey = key;
+      try {
+        chrome.runtime.sendMessage({ type: "ODDS_CHANGED", source: "bti", slip });
+      } catch (_) {}
+    }
+
+    function scheduleCheck() {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(checkAndNotify, 30);
+    }
+
+    if (document.body) {
+      const observer = new MutationObserver(scheduleCheck);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+      checkAndNotify();
+    }
+  })();
+
+  console.log(`[BTI봇] content script 로드됨 (v${VERSION})`, location.href, "top=", window === window.top);
 })();
