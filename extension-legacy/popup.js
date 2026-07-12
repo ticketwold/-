@@ -58,7 +58,17 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg.stats) {
       const s = msg.stats;
       const src = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
-      addLog(`프리매치: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개${src}`, 'info');
+      const teamN = s.teamMatched ?? s.matched ?? 0;
+      const arbN = s.arbOpps ?? s.matched ?? 0;
+      addLog(`프리매치: 피나클 ${s.pinTotal||0} / BTI ${s.btiTotal||0} / 팀매칭 ${teamN} / 양방 ${arbN}${src}`, 'info');
+      if ((s.pinKoHangul || 0) > 0) {
+        addLog(`PIN 한글 ${s.pinKoHangul}건`, 'info');
+      } else if ((s.btiEnriched || 0) === 0) {
+        addLog('⚠️ PIN 한글·BTI 영문 모두 부족 — 팀명 진단 실행 권장', 'warn');
+      }
+      if ((s.teamMatched || 0) > 0 && (s.arbOpps || 0) === 0) {
+        addLog(`팀 ${s.teamMatched}건 매칭됐으나 양방 0 — BTI배당 ${s.btiWithMarkets||0}건 / 수익률 조건`, 'warn');
+      }
       if (s.btiDataSource === 'featured') {
         addLog('⚠️ BTI eventlist 실패 → featured 폴백 (소량일 수 있음)', 'warn');
       }
@@ -2584,7 +2594,7 @@ function renderPrematchResult(msg) {
     } else {
       let line = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0}/이스포츠 ${stats.pinEsports||0}/테니스 ${stats.pinTennis||0} │ BTI: ${stats.btiTotal||0}`;
       if (stats.btiDataSource) line += ` (${stats.btiDataSource})`;
-      line += ` │ 매칭: ${stats.matched||0}`;
+      line += ` │ 팀매칭: ${stats.teamMatched ?? 0} │ 양방: ${stats.arbOpps ?? stats.matched ?? 0}`;
       if ((stats.btiTotal || 0) === 0 && stats.btiApiOrigin) {
         line += ` │ origin: ${stats.btiApiOrigin}`;
       }
@@ -2845,7 +2855,7 @@ document.addEventListener('DOMContentLoaded', () => {
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
         } else {
           const srcNote = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
-          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개${srcNote}`, 'success');
+          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0} / BTI ${s.btiTotal||0} / 팀매칭 ${s.teamMatched??0} / 양방 ${s.arbOpps??s.matched??0}${srcNote}`, 'success');
           if (s.btiDataSource === 'featured') {
             addLog('⚠️ BTI가 featured 폴백 — eventlist API 확인 필요', 'warn');
           }
