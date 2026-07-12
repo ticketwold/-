@@ -2673,6 +2673,37 @@ function pmOddsLabel(h, a) {
   return parts.length ? parts.join('/') : '';
 }
 
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setupPmManualListDelegation() {
+  const pinEl = document.getElementById('pmPinList');
+  const btiEl = document.getElementById('pmBtiList');
+  if (pinEl && !pinEl.dataset.clickBound) {
+    pinEl.dataset.clickBound = '1';
+    pinEl.addEventListener('click', (e) => {
+      const row = e.target.closest('.manual-item[data-idx]');
+      if (!row) return;
+      const idx = parseInt(row.dataset.idx, 10);
+      if (!Number.isNaN(idx)) selectPmPinItem(idx);
+    });
+  }
+  if (btiEl && !btiEl.dataset.clickBound) {
+    btiEl.dataset.clickBound = '1';
+    btiEl.addEventListener('click', (e) => {
+      const row = e.target.closest('.manual-item[data-idx]');
+      if (!row) return;
+      const idx = parseInt(row.dataset.idx, 10);
+      if (!Number.isNaN(idx)) selectPmBtiItem(idx);
+    });
+  }
+}
+
 function renderPmManualLists() {
   const filter = (document.getElementById('pmListFilter')?.value || '').trim().toLowerCase();
   const pinEl = document.getElementById('pmPinList');
@@ -2694,9 +2725,9 @@ function renderPmManualLists() {
     pinEl.innerHTML = pinItems.map(({ item, idx }) => {
       const sel = pmManualPinIdx === idx ? ' selected-pin' : '';
       const odds = pmOddsLabel(item.mlHome, item.mlAway);
-      return `<div class="manual-item${sel}" data-idx="${idx}" onclick="selectPmPinItem(${idx})">
-        <div class="teams">${item.home} vs ${item.away}</div>
-        <div class="meta">${item.timeLabel ? '⏰ ' + item.timeLabel + ' · ' : ''}${item.league || ''}${odds ? ' · ' + odds : ''}</div>
+      return `<div class="manual-item${sel}" data-idx="${idx}">
+        <div class="teams">${escapeHtml(item.home)} vs ${escapeHtml(item.away)}</div>
+        <div class="meta">${item.timeLabel ? '⏰ ' + escapeHtml(item.timeLabel) + ' · ' : ''}${escapeHtml(item.league || '')}${odds ? ' · ' + odds : ''}</div>
       </div>`;
     }).join('');
   }
@@ -2708,9 +2739,9 @@ function renderPmManualLists() {
       const sel = pmManualBtiIdx === idx ? ' selected-bti' : '';
       const odds = pmOddsLabel(item.mlHome, item.mlAway);
       const mkt = item.hasMarkets === false ? ' · 배당없음' : '';
-      return `<div class="manual-item${sel}" data-idx="${idx}" onclick="selectPmBtiItem(${idx})">
-        <div class="teams">${item.home} vs ${item.away}</div>
-        <div class="meta">${item.timeLabel ? '⏰ ' + item.timeLabel + ' · ' : ''}${item.league || ''}${odds ? ' · ' + odds : ''}${mkt}</div>
+      return `<div class="manual-item${sel}" data-idx="${idx}">
+        <div class="teams">${escapeHtml(item.home)} vs ${escapeHtml(item.away)}</div>
+        <div class="meta">${item.timeLabel ? '⏰ ' + escapeHtml(item.timeLabel) + ' · ' : ''}${escapeHtml(item.league || '')}${odds ? ' · ' + odds : ''}${mkt}</div>
       </div>`;
     }).join('');
   }
@@ -2720,11 +2751,13 @@ function renderPmManualLists() {
 function selectPmPinItem(idx) {
   pmManualPinIdx = idx;
   renderPmManualLists();
+  updatePmManualPairBox();
 }
 
 function selectPmBtiItem(idx) {
   pmManualBtiIdx = idx;
   renderPmManualLists();
+  updatePmManualPairBox();
 }
 
 function updatePmManualPairBox() {
@@ -3060,6 +3093,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const loadPmSportListsBtn = document.getElementById('loadPmSportListsBtn');
+  setupPmManualListDelegation();
   if (loadPmSportListsBtn) loadPmSportListsBtn.addEventListener('click', () => loadPmSportLists());
   const pmConfirmPairBtn = document.getElementById('pmConfirmPairBtn');
   if (pmConfirmPairBtn) pmConfirmPairBtn.addEventListener('click', () => confirmPmManualPair());
