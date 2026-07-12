@@ -85,7 +85,12 @@ const BTI_HOST_HINTS = [
   'bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com',
   'indonesiawinner.com', 'eviran66.com', 'auremi88.com'
 ];
-const BTI_URL_EXTRA = /sportsbook|asian-view|\/sports|prod\d+/i;
+// /sports 경로만으로 BTI 판별 시 polymarket.com 등 오탐 — 제외 목록
+const BTI_EXCLUDED_HOSTS = [
+  'polymarket.com', 'pinnacle.com', 'draftkings.com', 'fanduel.com',
+  'betfair.com', 'bovada.lv', 'google.com', 'youtube.com', 'facebook.com'
+];
+const BTI_PATH_HINTS = /sportsbook|asian-view/i;
 const PBC_BTI_GAMECODES = ['19', '20', '21', '22', '23'];
 // manifest host_permissions와 동일 — executeScript/sendMessage 가능 도메인만
 const INJECTABLE_HOST_SUFFIXES = [
@@ -107,9 +112,33 @@ function isInjectableUrl(url) {
   }
 }
 
+function isExcludedBtiHost(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return BTI_EXCLUDED_HOSTS.some((x) => h === x || h.endsWith('.' + x));
+  } catch (_) {
+    return false;
+  }
+}
+
+function isDirectBtiTabUrl(url) {
+  if (!url || url === 'about:blank' || isExcludedBtiHost(url)) return false;
+  return BTI_HOST_HINTS.some((h) => url.includes(h));
+}
+
 function isBtiHost(url) {
-  if (!url || url === 'about:blank') return false;
-  return BTI_HOST_HINTS.some((h) => url.includes(h)) || BTI_URL_EXTRA.test(url);
+  if (!url || url === 'about:blank' || isExcludedBtiHost(url)) return false;
+  if (BTI_HOST_HINTS.some((h) => url.includes(h))) return true;
+  try {
+    const u = new URL(url);
+    if (!isInjectableUrl(url)) return false;
+    const path = u.pathname.toLowerCase();
+    if (BTI_PATH_HINTS.test(path)) return true;
+    if (/prod\d+/i.test(url) && (u.hostname.includes('bti') || u.hostname.includes('sports'))) return true;
+    if ((u.hostname.includes('bti-sports') || u.hostname.includes('live8588') || u.hostname.includes('fxf774'))
+        && /\/sports(?:\/|$)/i.test(path)) return true;
+  } catch (_) {}
+  return false;
 }
 
 function isInjectableBtiFrame(url) {
@@ -173,7 +202,7 @@ async function getBtiFrameCandidates(tabId, tabUrl) {
     if (!isInjectableBtiFrame(frame.url)) continue;
     let score = 0;
     if (BTI_HOST_HINTS.some((h) => frame.url.includes(h))) score = 20;
-    else if (BTI_URL_EXTRA.test(frame.url)) score = 12;
+    else if (BTI_PATH_HINTS.test(frame.url)) score = 12;
     if (score > 0) candidates.push({ frameId: frame.frameId, url: frame.url, score });
   }
 
@@ -207,7 +236,7 @@ async function resolveBtiApiOrigin(tabId, tabUrl) {
   if (tabUrl && tabUrl.includes('fxf774.com')) {
     return new URL(tabUrl).origin;
   }
-  if (tabUrl && isBtiHost(tabUrl) && !tabUrl.includes('pbc00.com')) {
+  if (tabUrl && isDirectBtiTabUrl(tabUrl)) {
     return new URL(tabUrl).origin;
   }
 
@@ -373,19 +402,28 @@ async function scrapeBtiDomFromTab(tabId) {
 async function pickBtiTab() {
   const tabs = await chrome.tabs.query({});
   let bestPbc = null;
+  let bestDirect = null;
 
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (isBtiHost(tab.url) && !tab.url.includes('pbc00.com')) {
-      return { id: tab.id, url: tab.url };
-    }
     if (tab.url.includes('pbc00.com')) {
       const score = scorePbcBtiTab(tab.url);
-      if (!bestPbc || score > bestPbc.score) bestPbc = { tab, score };
+      if (score >= 10 && (!bestPbc || score > bestPbc.score)) {
+        bestPbc = { tab, score };
+      }
+      continue;
+    }
+    if (isDirectBtiTabUrl(tab.url)) {
+      const score = tab.url.includes('fxf774.com') ? 8 : 5;
+      if (!bestDirect || score > bestDirect.score) {
+        bestDirect = { tab, score };
+      }
     }
   }
 
+  // pbc00 BTI 화면(gamecode=19) 최우선 — polymarket 등 다른 /sports 탭보다 우선
   if (bestPbc) return { id: bestPbc.tab.id, url: bestPbc.tab.url };
+  if (bestDirect) return { id: bestDirect.tab.id, url: bestDirect.tab.url };
   return null;
 }
 

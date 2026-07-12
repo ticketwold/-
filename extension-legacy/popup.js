@@ -306,7 +306,17 @@ function isPbcPinnacleUrl(url) {
 function isBtiUrl(url) { return url && BTI_PATTERNS.some(p => url.includes(p)); }
 function isBtiFrameUrl(url) {
   if (!url || url === 'about:blank') return false;
-  return isBtiUrl(url) || /sportsbook|asian-view|\/sports/i.test(url);
+  if (isBtiUrl(url)) return true;
+  try {
+    const u = new URL(url);
+    if (/polymarket\.com|pinnacle\.com/i.test(u.hostname)) return false;
+    const path = u.pathname.toLowerCase();
+    return /sportsbook|asian-view/i.test(path)
+      || ((u.hostname.includes('bti-sports') || u.hostname.includes('live8588') || u.hostname.includes('fxf774'))
+          && /\/sports(?:\/|$)/i.test(path));
+  } catch (_) {
+    return false;
+  }
 }
 
 /** 배당 텍스트 파싱 — 1.8, 1.80, 2.525 모두 허용 */
