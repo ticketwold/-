@@ -156,10 +156,11 @@ function marketsMatch(p, b) {
     const bSide = (b.side || '').toLowerCase();
     if (pSide === 'draw' || bSide === 'draw') return true;
 
-    // 우선순위 1: 실제 선택 팀명 비교
-    // 사이트마다 home/away 정의가 뒤집히는 경우가 있어 side만으로 비교하면 오판 가능
     const pSelected = inferSelectedTeam(p);
     const bSelected = inferSelectedTeam(b);
+    const isHome = (s) => s === 'home' || s === 'h';
+    const isAway = (s) => s === 'away' || s === 'a';
+
     if (pSelected && bSelected) {
       const pTeams = (p.homeTeam && p.awayTeam) ? { homeTeam: p.homeTeam, awayTeam: p.awayTeam } : parseEventTeams(p.eventText);
       const bTeams = (b.homeTeam && b.awayTeam) ? { homeTeam: b.homeTeam, awayTeam: b.awayTeam } : parseEventTeams(b.eventText);
@@ -167,15 +168,13 @@ function marketsMatch(p, b) {
         const sameOrder = sameTeamName(pTeams.homeTeam, bTeams.homeTeam) && sameTeamName(pTeams.awayTeam, bTeams.awayTeam);
         const reversedOrder = sameTeamName(pTeams.homeTeam, bTeams.awayTeam) && sameTeamName(pTeams.awayTeam, bTeams.homeTeam);
         if (sameOrder || reversedOrder) {
-          // 동일 팀을 양쪽에서 고르면 양방 아님, 서로 다른 팀을 고르면 양방
           return !sameTeamName(pSelected, bSelected);
         }
       }
+      // 같은 경기인데 선택 팀명만 다르면 양방 (BTI side가 home으로 잘못 파싱되는 경우 보정)
+      if (!sameTeamName(pSelected, bSelected)) return true;
     }
 
-    // 우선순위 2: 기존 side 반대 비교 폴백
-    const isHome = (s) => s === 'home' || s === 'h';
-    const isAway = (s) => s === 'away' || s === 'a';
     return (isHome(pSide) && isAway(bSide)) || (isAway(pSide) && isHome(bSide));
   }
 
@@ -192,6 +191,46 @@ function marketsMatch(p, b) {
   }
 
   return linesMatch(p.line, b.line);
+}
+
+/** marketsMatch 실패 이유 — 로그용 (라벨이 같아도 원인 구분) */
+function explainMarketMismatch(p, b) {
+  const pLabel = marketKeyToLabel(p.marketKey || buildMarketKey(p.period, p.marketKind, p.side, p.line));
+  const bLabel = marketKeyToLabel(b.marketKey || buildMarketKey(b.period, b.marketKind, b.side, b.line));
+
+  if (!p || !b) return '슬립 정보 부족';
+  if (p.marketKind !== b.marketKind) {
+    return `마켓 종류 다름 — 피나클: ${pLabel} / BTI: ${bLabel}`;
+  }
+  if (p.marketKind === 'ou') return '오버/언더는 슬립 봇에서 제외됩니다';
+  const normPeriod = (v) => {
+    if (!v || v === 'ft' || v === 'full') return 'ft';
+    if (v === 'map1') return 'ft';
+    return v;
+  };
+  if (normPeriod(p.period) !== normPeriod(b.period)) {
+    return `기간 다름 — 피나클: ${pLabel} / BTI: ${bLabel}`;
+  }
+  if (p.marketKind === 'ml') {
+    const pSelected = inferSelectedTeam(p);
+    const bSelected = inferSelectedTeam(b);
+    const pSide = (p.side || '').toLowerCase();
+    const bSide = (b.side || '').toLowerCase();
+    const isHome = (s) => s === 'home' || s === 'h';
+    const isAway = (s) => s === 'away' || s === 'a';
+    if (pSelected && bSelected && sameTeamName(pSelected, bSelected)) {
+      return `양쪽 같은 팀(${pSelected}) — 한쪽은 반대 팀을 담아야 양방입니다`;
+    }
+    if ((isHome(pSide) && isHome(bSide)) || (isAway(pSide) && isAway(bSide))) {
+      const teams = pSelected && bSelected ? `피나클=${pSelected}, BTI=${bSelected}` : '홈↔어웨이 반대로 담기';
+      return `양방은 반대편 필요 — 지금 양쪽 모두 ${pLabel.includes('홈') ? '홈' : '어웨이'} (${teams})`;
+    }
+  }
+  if (p.marketKind === 'ah') {
+    if (isQuarterLine(p.line) || isQuarterLine(b.line)) return '0.25/0.75 핸디캡은 제외됩니다';
+    return `핸디 기준점 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`;
+  }
+  return `조건 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`;
 }
 
 // 피나클 계열 도메인 (eviran66, mervani99, auremi88 + 직접 pinnacle.com)
@@ -1571,7 +1610,11 @@ async function pollLoop() {
 
   const [pSlip, bSlip] = await Promise.all([
     _cachedPin ? Promise.resolve(_cachedPin) : execInTab(pinSlipTab, pinnacleReadSlipFn),
-    _cachedOpponent ? Promise.resolve(_cachedOpponent) : execInTab(activeOpponentTab, activeOpponentReadFn)
+    _cachedOpponent ? Promise.resolve(_cachedOpponent) : (
+      sboTab
+        ? execInTab(activeOpponentTab, activeOpponentReadFn)
+        : readBtiSlipFromFrame(activeOpponentTab.id, activeOpponentTab.frameId ?? 0)
+    )
   ]);
 
   // BTI 기준점 변경 감지 (오버/언더 마켓일 때만)
@@ -1619,12 +1662,10 @@ async function pollLoop() {
 
   // 마켓 종목 일치 여부 확인 (허용 오차 적용)
   if (!marketsMatch(pSlip, bSlip)) {
-    const pLabel = marketKeyToLabel(pSlip.marketKey || buildMarketKey(pSlip.period, pSlip.marketKind, pSlip.side, pSlip.line));
-    const bLabel = marketKeyToLabel(bSlip.marketKey || buildMarketKey(bSlip.period, bSlip.marketKind, bSlip.side, bSlip.line));
-    const mismatchKey = `${pLabel}|${bLabel}`;
-    if (mismatchKey !== lastOddsKey) {
-      lastOddsKey = mismatchKey;
-      addLog(`⚠️ 종목 불일치 — 피나클: ${pLabel} / BTI: ${bLabel}`, 'warn');
+    const msg = explainMarketMismatch(pSlip, bSlip);
+    if (msg !== lastOddsKey) {
+      lastOddsKey = msg;
+      addLog(`⚠️ ${msg}`, 'warn');
     }
     updateUI(pSlip, bSlip, null);
     return;
