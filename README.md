@@ -6,12 +6,17 @@
 
 Python/venv 없이 **Edge 확장만**으로 사용할 수 있습니다.
 
+| 폴더 | 용도 |
+|------|------|
+| **`extension-legacy/`** | 기존 전체 확장 (v2.98, Pinnacle+BTI+SBO 양방) — **추천** |
+| `extension/` | 간소화 버전 (Pinnacle + pbc00 DOM 스캔) |
+
 ```powershell
 git pull origin cursor/arbitrage-betting-00df
-# edge://extensions → 개발자 모드 → extension 폴더 로드
+# edge://extensions → 개발자 모드 → extension-legacy 폴더 로드
 ```
 
-자세한 사용법: [extension/README.md](extension/README.md)
+자세한 사용법: [extension-legacy/README.md](extension-legacy/README.md)
 
 1. 확장 아이콘 → **pbc00 열기** → 로그인
 2. BTI 경기/배당 화면에서 **양방 스캔**

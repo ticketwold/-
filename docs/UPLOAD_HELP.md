@@ -1,5 +1,8 @@
 # 확장 파일 업로드가 안 될 때
 
+> **업로드 완료**: https://github.com/ticketwold/-2 (`arb_v297.zip`)  
+> 메인 저장소 `extension-legacy/`에 통합 + BTI 서치 수정(v2.98) 반영됨.
+
 Cursor 채팅 첨부 / git push 가 안 되어도 아래 방법 중 **하나**만 하면 됩니다.
 
 ---

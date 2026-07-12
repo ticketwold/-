@@ -1,0 +1,85 @@
+{
+  "manifest_version": 3,
+  "name": "양방 베팅 봇",
+  "version": "2.98",
+  "description": "피나클/BTI/SBOBET 자동 양방 서치 + 슬립 비교 베팅 (pbc00.com + prod188 BTI + live8588.com AVA BTI + wg88ss SBOBET 지원)",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "*://*.auremi88.com/*",
+    "*://*.bti-sports.com/*",
+    "*://*.bti-sports.io/*",
+    "*://*.eviran66.com/*",
+    "*://*.indonesiawinner.com/*",
+    "*://*.jjddgg.com/*",
+    "*://*.mervani99.com/*",
+    "*://*.pbc00.com/*",
+    "*://*.pinnacle.com/*",
+    "*://*.live8588.com/*",
+    "*://*.fxf774.com/*",
+    "*://*.wg88ss.com/*",
+    "*://*.zzddqq.com/*",
+    "*://*.zzllrrcc33.com/*",
+    "*://api.arcadia.pinnacle.com/*",
+    "*://guest.api.arcadia.pinnacle.com/*",
+    "*://sports-sbomaind-play.zzllrrcc33.com/*",
+    "*://sports.zzllrrcc33.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.eviran66.com/*",
+        "*://*.mervani99.com/*",
+        "*://*.auremi88.com/*",
+        "*://*.pinnacle.com/*"
+      ],
+      "js": [
+        "pinnacle_content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.bti-sports.io/*",
+        "*://*.bti-sports.com/*",
+        "*://*.indonesiawinner.com/*",
+        "*://*.live8588.com/*",
+        "*://*.fxf774.com/*",
+        "*://*.pbc00.com/*"
+      ],
+      "js": [
+        "bti_content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.zzllrrcc33.com/*",
+        "*://sports-sbomaind-play.zzllrrcc33.com/*",
+        "*://sports.zzllrrcc33.com/*",
+        "*://*.jjddgg.com/*",
+        "*://*.zzddqq.com/*",
+        "*://wg88ss.com/*",
+        "*://*.wg88ss.com/*"
+      ],
+      "js": [
+        "sbobet_content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "양방 봇"
+  }
+}

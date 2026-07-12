@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 400px; font-family: 'Malgun Gothic', sans-serif; background: #1a1a2e; color: #eee; font-size: 13px; }
+  .header { background: #16213e; padding: 10px 16px; border-bottom: 1px solid #0f3460; display:flex; justify-content:space-between; align-items:center; }
+  .header h1 { font-size: 15px; color: #e94560; }
+  .header .sub { font-size: 11px; color: #888; margin-top: 2px; }
+  /* 탭 */
+  .tabs { display:flex; background:#0f3460; border-bottom:2px solid #1e4080; }
+  .tab { flex:1; padding:8px 0; text-align:center; font-size:12px; font-weight:bold; cursor:pointer; color:#888; border:none; background:none; }
+  .tab.active { color:#e94560; border-bottom:2px solid #e94560; margin-bottom:-2px; }
+  .tab-content { display:none; }
+  .tab-content.active { display:block; }
+  /* 공통 섹션 */
+  .section { padding: 8px 14px; border-bottom: 1px solid #0f3460; }
+  .section label { display: block; font-size: 11px; color: #888; margin-bottom: 3px; }
+  .section-title { font-size: 11px; color: #60a5fa; font-weight: bold; margin-bottom: 6px; }
+  /* 슬립 비교 */
+  .slip-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; min-height: 32px; }
+  .slip-box .odds-val { font-size: 17px; font-weight: bold; color: #e94560; }
+  .slip-box .market-label { font-size: 10px; color: #60a5fa; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+  .profit-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; text-align: center; }
+  .profit-box .pct { font-size: 20px; font-weight: bold; color: #888; }
+  .profit-positive { color: #4ade80 !important; }
+  .profit-neutral { color: #888 !important; }
+  /* 버튼 */
+  .btn { padding: 7px 0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; width: 100%; }
+  .btn-start { background: #e94560; color: #fff; }
+  .btn-start:hover { background: #c73652; }
+  .btn-stop { background: #374151; color: #fff; }
+  .btn-stop:hover { background: #4b5563; }
+  .btn-search { background: #7c3aed; color: #fff; }
+  .btn-search:hover { background: #6d28d9; }
+  .btn-search-stop { background: #374151; color: #fff; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* 서치 결과 */
+  .opp-list { max-height: 320px; overflow-y: auto; }
+  .opp-item { background: #0f3460; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; border: 1px solid transparent; }
+  .opp-item:hover { border-color: #e94560; }
+  .opp-item.selected { border-color: #4ade80; }
+  .opp-profit { font-size: 16px; font-weight: bold; color: #4ade80; float: right; }
+  .opp-profit.zero { color: #fbbf24; }
+  .opp-teams { font-size: 12px; color: #eee; margin-bottom: 2px; }
+  .opp-detail { font-size: 10px; color: #888; }
+  .opp-badge { display:inline-block; background:#1e4080; border-radius:3px; padding:1px 5px; font-size:10px; color:#60a5fa; margin-right:4px; }
+  .search-stats { font-size: 10px; color: #666; padding: 4px 14px; border-bottom: 1px solid #0f3460; }
+  /* 마켓 설정 */
+  .mkt-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .mkt-grid select { background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 4px 5px; border-radius: 4px; font-size: 11px; width: 100%; }
+  .mkt-grid select:focus { outline: none; border-color: #e94560; }
+  .mkt-grid label { font-size: 10px; color: #888; margin-bottom: 2px; display: block; }
+  .mkt-mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .mkt-mode-row label { font-size: 11px; color: #aaa; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .mkt-mode-row input[type=checkbox] { accent-color: #e94560; }
+  .tolerance-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .tolerance-row span { font-size: 11px; color: #888; }
+  .tolerance-row input { width: 60px; background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 3px 6px; border-radius: 4px; font-size: 11px; }
+  /* 베팅 금액 설정 */
+  .bet-site-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .bet-site-btn { flex: 1; padding: 5px 0; border: 1px solid #1e4080; border-radius: 5px; background: #0f3460; color: #888; font-size: 11px; font-weight: bold; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .bet-site-btn.active { border-color: #e94560; color: #e94560; background: #1a0a14; }
+  .bet-site-btn.sbo-active { border-color: #34d399; color: #34d399; background: #0a1a14; }
+  .bet-site-btn.bti-active { border-color: #60a5fa; color: #60a5fa; background: #0a1020; }
+  .bet-amount-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .bet-amount-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; }
+  .bet-amount-box label { font-size: 10px; color: #888; margin-bottom: 3px; display: block; }
+  .bet-amount-box input { width: 100%; background: transparent; border: none; border-bottom: 1px solid #1e4080; color: #eee; padding: 3px 0; font-size: 14px; font-weight: bold; outline: none; }
+  .bet-amount-box input:focus { border-bottom-color: #e94560; }
+  .bet-amount-box .unit { font-size: 10px; color: #888; margin-top: 2px; }
+  .bet-calc-box { background: #0a1a2e; border: 1px solid #1e4080; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+  .bet-calc-box .calc-title { font-size: 10px; color: #888; margin-bottom: 4px; }
+  .bet-calc-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+  .bet-calc-row .site-name { font-size: 11px; color: #aaa; }
+  .bet-calc-row .amount { font-size: 13px; font-weight: bold; color: #4ade80; }
+  .bet-calc-row .amount.anchor { color: #e94560; }
+  .bet-row { display: flex; gap: 8px; align-items: center; }
+  .bet-row input { flex: 1; background: #0f3460; border: 1px solid #e94560; color: #eee; padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+  .status-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .status-running .dot { background: #4ade80; animation: pulse 1s infinite; }
+  .status-betting .dot { background: #fbbf24; animation: pulse 0.5s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  /* 로그 */
+  .log-box { height: 120px; overflow-y: auto; background: #0a0a1a; padding: 6px 8px; font-size: 11px; font-family: monospace; }
+  .log-box .log { color: #aaa; }
+  .log-box .success { color: #4ade80; }
+  .log-box .error { color: #f87171; }
+  .log-box .info { color: #60a5fa; }
+  .log-box .warn { color: #fbbf24; }
+  .log-header { display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:#0f3460; border-top:1px solid #0f3460; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>⚡ 양방 베팅 봇</h1>
+    <div class="sub">피나클 + BTI + SBOBET 자동 양방 서치</div>
+  </div>
+  <button id="openWindowBtn" title="독립 창으로 열기" style="background:#e94560; border:none; color:#fff; font-size:14px; width:28px; height:28px; border-radius:6px; cursor:pointer; flex-shrink:0;">⧉</button>
+</div>
+
+<!-- 탭 -->
+<div class="tabs">
+  <button class="tab active" data-tab="search">🔍 라이브</button>
+  <button class="tab" data-tab="prematch">📅 프리매치</button>
+  <button class="tab" data-tab="slip">📋 슬립 비교</button>
+</div>
+
+<!-- ===== 자동 서치 탭 ===== -->
+<div class="tab-content active" id="tab-search">
+  <!-- 서치 컨트롤 -->
+  <div class="section">
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <div style="flex:1">
+        <label>최소 수익률 (%)</label>
+        <input type="number" id="minProfit" value="0" min="0" max="20" step="0.5" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:12px;">
+      </div>
+      <div style="flex:1">
+        <label>서치 모드</label>
+        <select id="searchMode" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:12px;">
+          <option value="bti">피나클 + BTI</option>
+          <option value="sbo">피나클 + SBO</option>
+          <option value="both">BTI + SBO 전체</option>
+        </select>
+      </div>
+    </div>
+    <div style="font-size:10px; margin-bottom:6px;" id="sboTokenStatus" style="color:#666;">SBO 토큰: 확인 중...</div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-search" id="startSearchBtn">🔍 서치 시작</button>
+      <button class="btn btn-search-stop" id="stopSearchBtn" disabled>■ 정지</button>
+    </div>
+  </div>
+
+  <!-- 경기 집중 모니터링 버튼 -->
+  <div class="section" style="padding:8px 14px;">
+    <div class="section-title">🎯 경기 집중 서치</div>
+    <div style="font-size:10px; color:#888; margin-bottom:8px;">팀명 입력 후 서치 시작 — 해당 경기만 집중 스캔하여 양방 발견 시 자동 베팅</div>
+
+    <!-- 팀명 입력 -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+      <div>
+        <label style="font-size:10px; color:#60a5fa; margin-bottom:3px; display:block;">피나클 팀명 (일부 입력)</label>
+        <input type="text" id="focusPinTeam" placeholder="예: 맨시티, Man City" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:5px 8px; border-radius:4px; font-size:12px;">
+      </div>
+      <div>
+        <label style="font-size:10px; color:#34d399; margin-bottom:3px; display:block;">BTI 팀명 (일부 입력)</label>
+        <input type="text" id="focusBtiTeam" placeholder="예: 맨시티, Man City" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:5px 8px; border-radius:4px; font-size:12px;">
+      </div>
+    </div>
+
+    <!-- 마켓 체크박스 -->
+    <div style="display:flex; gap:14px; margin-bottom:8px; align-items:center;">
+      <span style="font-size:10px; color:#888;">서치 마켓:</span>
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:#eee; cursor:pointer;">
+        <input type="checkbox" id="focusMktMl" checked style="accent-color:#e94560;"> 승패
+      </label>
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:#eee; cursor:pointer;">
+        <input type="checkbox" id="focusMktAh" checked style="accent-color:#e94560;"> 핸디캡
+      </label>
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:#eee; cursor:pointer;">
+        <input type="checkbox" id="focusMktOu" checked style="accent-color:#e94560;"> 언오버
+      </label>
+    </div>
+
+    <!-- 현재 스캔 상태 -->
+    <div id="focusScanStatus" style="font-size:10px; color:#888; margin-bottom:4px; min-height:14px;"></div>
+
+    <!-- 실시간 서치 목록 테이블 -->
+    <div id="focusLiveTable" style="display:none; margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <span style="font-size:10px; color:#60a5fa; font-weight:bold;">📊 실시간 서치 목록</span>
+        <span id="focusLiveCount" style="font-size:10px; color:#888;">0개 매칭</span>
+      </div>
+      <div style="max-height:180px; overflow-y:auto; background:#0a1628; border:1px solid #1e3a5f; border-radius:4px;">
+        <table style="width:100%; border-collapse:collapse; font-size:10px;">
+          <thead>
+            <tr style="background:#0f2040; color:#888; border-bottom:1px solid #1e3a5f;">
+              <th style="padding:4px 6px; text-align:left;">마켓</th>
+              <th style="padding:4px 6px; text-align:center;">PIN</th>
+              <th style="padding:4px 6px; text-align:center;">BTI</th>
+              <th style="padding:4px 6px; text-align:center; color:#e94560;">수익률</th>
+            </tr>
+          </thead>
+          <tbody id="focusLiveRows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      <button class="btn" id="startFocusBtn" style="background:#059669; color:#fff; flex:1;">🎯 서치 시작</button>
+      <button class="btn btn-stop" id="stopFocusBtn" disabled style="flex:1;">■ 정지</button>
+    </div>
+  </div>
+
+  <!-- 미러 모드 버튼 -->
+  <div class="section" style="padding:8px 14px;">
+    <div class="section-title">🔄 미러 모드</div>
+    <div style="font-size:10px; color:#888; margin-bottom:6px;">피나클에서 배당 클릭 시 BTI에서 반대편 자동 담기</div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" id="autoMirrorToggle" style="background:#6b7280; color:#fff; flex:1;">🔄 미러 OFF</button>
+    </div>
+  </div>
+
+  <!-- 서치 통계 -->
+  <div class="search-stats" id="searchStats">서치 대기 중...</div>
+
+  <!-- 양방 기회 목록 -->
+  <div class="section" style="padding:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <span class="section-title" style="margin:0;">양방 기회</span>
+      <span id="oppCount" style="font-size:10px; color:#888;">0개</span>
+    </div>
+    <div class="opp-list" id="oppList">
+      <div style="text-align:center; color:#555; padding:20px; font-size:12px;">서치 시작 후 결과가 표시됩니다</div>
+    </div>
+  </div>
+
+  <!-- 선택된 기회 베팅 -->
+  <div class="section" id="selectedOppSection" style="display:none;">
+    <div class="section-title">선택된 기회</div>
+    <div id="selectedOppInfo" style="font-size:11px; color:#aaa; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-start" id="betSelectedBtn">💰 베팅 실행</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 프리매치 서치 탭 ===== -->
+<div class="tab-content" id="tab-prematch">
+  <!-- 서치 컨트롤 -->
+  <div class="section">
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <div style="flex:1">
+        <label>최소 수익률 (%)</label>
+        <input type="number" id="pmMinProfit" value="0" min="0" max="20" step="0.5" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:12px;">
+      </div>
+      <div style="flex:1">
+        <label>시간 범위</label>
+        <select id="pmHours" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:12px;">
+          <option value="6">6시간</option>
+          <option value="12">12시간</option>
+          <option value="24">24시간</option>
+          <option value="48" selected>48시간</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-search" id="startPrematchBtn">📅 프리매치 서치</button>
+      <button class="btn btn-search-stop" id="stopPrematchBtn" disabled>■ 정지</button>
+    </div>
+  </div>
+
+  <!-- 서치 통계 -->
+  <div class="search-stats" id="pmSearchStats">서치 대기 중...</div>
+
+  <!-- 양방 기회 목록 -->
+  <div class="section" style="padding:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <span class="section-title" style="margin:0;">프리매치 양방 기회</span>
+      <span id="pmOppCount" style="font-size:10px; color:#888;">0개</span>
+    </div>
+    <div class="opp-list" id="pmOppList">
+      <div style="text-align:center; color:#555; padding:20px; font-size:12px;">서치 시작 후 결과가 표시됩니다</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 슬립 비교 탭 ===== -->
+<div class="tab-content" id="tab-slip">
+  <!-- 배당 표시 -->
+  <div class="section">
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <div style="flex:1">
+        <label>피나클 배당</label>
+        <div class="slip-box" id="pSlipBox">
+          <div class="odds-val" id="pOdds">-</div>
+          <div class="market-label" id="pMarket">-</div>
+        </div>
+      </div>
+      <div style="flex:1">
+        <label>BTI/SBO 배당</label>
+        <div class="slip-box" id="bSlipBox">
+          <div class="odds-val" id="bOdds">-</div>
+          <div class="market-label" id="bMarket">-</div>
+        </div>
+      </div>
+    </div>
+    <label>예상 수익률</label>
+    <div class="profit-box">
+      <div class="pct" id="profit">-</div>
+      <div style="font-size:11px;color:#aaa;margin-top:2px;" id="profitSub">슬립을 양쪽에 담아주세요</div>
+    </div>
+  </div>
+
+  <!-- 마켓 설정 -->
+  <div class="section">
+    <div class="section-title">마켓 설정</div>
+    <div class="mkt-mode-row">
+      <label>
+        <input type="checkbox" id="autoDetect" checked>
+        자동 감지
+      </label>
+      <span style="font-size:10px;color:#666;">체크 해제 시 아래 설정 사용</span>
+    </div>
+    <div class="mkt-grid" id="mktManual">
+      <div>
+        <label>기간</label>
+        <select id="mktPeriod">
+          <option value="ft">풀타임</option>
+          <option value="1h">전반전</option>
+          <option value="2h">후반전</option>
+          <option value="set">세트</option>
+        </select>
+      </div>
+      <div>
+        <label>마켓</label>
+        <select id="mktType">
+          <option value="ml">승패 (ML)</option>
+          <option value="ah">핸디캡 (HC)</option>
+          <option value="ou">오버/언더 (OU)</option>
+        </select>
+      </div>
+      <div>
+        <label>방향/팀</label>
+        <select id="mktSide">
+          <option value="home">홈</option>
+          <option value="away">어웨이</option>
+        </select>
+      </div>
+    </div>
+    <div class="tolerance-row">
+      <span>기준점 허용 오차</span>
+      <input type="number" id="lineTolerance" value="0.06" min="0" max="0.5" step="0.01">
+      <span style="color:#666;">이내 동일 처리</span>
+    </div>
+  </div>
+
+  <!-- 베팅 금액 설정 -->
+  <div class="section">
+    <div class="section-title">베팅 금액 설정</div>
+
+    <!-- 기준 사이트 선택 -->
+    <div style="font-size:10px; color:#888; margin-bottom:5px;">기준 사이트 (이 사이트 금액 직접 입력)</div>
+    <div class="bet-site-row">
+      <button class="bet-site-btn active" id="siteSelectPin" data-site="pin">🏔 피나클</button>
+      <button class="bet-site-btn" id="siteSelectBti" data-site="bti">🎯 BTI</button>
+      <button class="bet-site-btn" id="siteSelectSbo" data-site="sbo">💎 SBOBET</button>
+    </div>
+
+    <!-- 금액 입력 -->
+    <div class="bet-amount-row">
+      <div class="bet-amount-box">
+        <label id="betAmountLabel">피나클 베팅금</label>
+        <input type="number" id="minBet" value="12000" min="1" step="1">
+        <div class="unit" id="betAmountUnit">원 (KRW)</div>
+      </div>
+      <div class="bet-amount-box" id="usdtRateBox">
+        <label>USDT 환율 (원)</label>
+        <input type="number" id="usdtRate" value="1400" min="100" step="10">
+        <div class="unit">원/USDT (빗썸 기준)</div>
+      </div>
+    </div>
+
+    <!-- 반대편 금액 계산 표시 -->
+    <div class="bet-calc-box" id="betCalcBox">
+      <div class="calc-title">💰 베팅 금액 계산 (배당 기반)</div>
+      <div class="bet-calc-row">
+        <span class="site-name" id="calcAnchorName">피나클</span>
+        <span class="amount anchor" id="calcAnchorAmount">-</span>
+      </div>
+      <div class="bet-calc-row">
+        <span class="site-name" id="calcOppName">BTI/SBO</span>
+        <span class="amount" id="calcOppAmount">-</span>
+      </div>
+      <div style="font-size:10px; color:#555; margin-top:4px;" id="calcNote">슬립에 배당을 담으면 자동 계산됩니다</div>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-start" id="startBtn">▶ 봇 시작</button>
+      <button class="btn btn-stop" id="stopBtn" disabled>■ 정지</button>
+    </div>
+  </div>
+
+  <!-- 상태 -->
+  <div class="section">
+    <div class="status-row" id="status">
+      <div class="dot"></div>
+      <span>대기 중</span>
+    </div>
+  </div>
+</div>
+
+<!-- 로그 (공통) -->
+<div class="log-header">
+  <span style="font-size:11px; color:#888;">로그</span>
+  <div style="display:flex; gap:4px;">
+    <button id="diagApiBtn" style="background:#1e4080; border:1px solid #a78bfa; color:#a78bfa; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">API 진단</button>
+    <button id="diagPinBtn" style="background:#1e4080; border:1px solid #f59e0b; color:#f59e0b; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">PIN 진단</button>
+    <button id="diagBtiBtn" style="background:#1e4080; border:1px solid #60a5fa; color:#60a5fa; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">BTI 진단</button>
+    <button id="diagSboBtn" style="background:#1e4080; border:1px solid #34d399; color:#34d399; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">SBO 진단</button>
+    <button id="diagTeamBtn" style="background:#1e4080; border:1px solid #fb7185; color:#fb7185; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">팀명진단</button>
+    <button id="clearLogBtn" style="background:none; border:1px solid #374151; color:#888; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">지우기</button>
+  </div>
+</div>
+<div class="log-box" id="log"></div>
+
+<script src="arb_calculator.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

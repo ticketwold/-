@@ -1,50 +1,39 @@
-# 로컬 확장 전체 (arb_v294)
+# 양방 확장 v2.98 (arb_v294 기반)
 
-이 폴더에 **기존 확장 파일 전체**를 넣어 주세요.
+GitHub `-2` 저장소에서 받은 **전체 확장** + pbc00 BTI 서치 수정본입니다.
 
-## 복사 방법 (Windows)
+## Edge/Chrome 설치
 
-1. 탐색기에서 전체 선택:
+1. `edge://extensions` 또는 `chrome://extensions`
+2. **개발자 모드** 켜기
+3. **압축해제된 확장 프로그램 로드** → 이 폴더(`extension-legacy`) 선택
+4. 기존 v2.97 확장이 있으면 **비활성화** 후 이 버전만 사용
 
-```
-C:\Users\user\Downloads\arb_v297\arb_v294\*
-```
+## 사용 순서
 
-2. 붙여넣기:
+1. **pbc00.com** 로그인
+2. 10벳(BTI) 스포츠 화면 열기 (배당 버튼이 보이는 상태)
+3. **pinnacle.com** 탭도 열기 (프리매치 한국어 팀명용)
+4. 확장 팝업 → **프리매치 서치** 또는 **라이브 서치** 실행
 
-```
-C:\Users\user\Documents\arbitrage-betting\extension-legacy\
-```
+## v2.98 수정 (BTI 서치)
 
-3. PowerShell:
+- **원인**: pbc00 탭에서 API를 `prod188.bti-sports.io`로 호출하면 로그인 쿠키가 없어 실패
+- **수정**: BTI **iframe origin**을 자동 감지해 해당 프레임에서 `fetch` (쿠키 포함)
+- **폴백**: API 실패 시 배당판 DOM 스캔 (`master_fe_Selections_selection` 버튼)
 
-```powershell
-cd C:\Users\user\Documents\arbitrage-betting
-git add extension-legacy
-git commit -m "add full local extension arb_v294"
-git push origin cursor/arbitrage-betting-00df
-```
+## 문제 해결
 
-4. 채팅에 **"푸시 완료"** 라고 알려주세요.
+| 증상 | 확인 |
+|------|------|
+| BTI 0건 | pbc00 로그인 + BTI 배당 화면 열림 여부 |
+| 프리매치 0건 | F12 → 확장 Service Worker 콘솔에서 `[BTI]` 로그 |
+| 팀 매칭 안 됨 | 팝업 **팀명 진단** 버튼 |
 
----
+## 파일
 
-## 또는 zip 첨부
+- `background.js` — Pinnacle/BTI/SBO API + 양방 서치
+- `bti_content.js` — 슬립/베팅 + DOM 스캔 + `FETCH_BTI_JSON`
+- `popup.js` / `popup.html` — UI
 
-`arb_v294` 폴더를 zip으로 묶어 Cursor 채팅에 **파일 첨부**.
-
----
-
-## 예상 파일 목록
-
-- manifest.json
-- background.js
-- popup.html / popup.js
-- bti_content.js
-- pinnacle_content.js
-- sbobet_content.js
-- arb_calculator.js
-- debug_bti_*.js
-- icons/ (있으면)
-
-푸시 또는 첨부 후 전체를 분석해 BTI·Pinnacle·양방 로직을 한 번에 맞춥니다.
+원본 zip: https://github.com/ticketwold/-2 (`arb_v297.zip`)
