@@ -3250,8 +3250,14 @@ document.addEventListener('DOMContentLoaded', () => {
         addLog(`--- 매칭 성공 (${resp.matchSamples.length}개) ---`, 'success');
         resp.matchSamples.forEach((s, i) => addLog(`MATCH[${i}]: ${s}`, 'success'));
       } else {
-        addLog('⚠️ 매칭 0개 - PIN_EN vs BTI 팀명 언어 불일치 확인', 'warn');
-        addLog('팁: PIN_KO와 BTI 팀명이 동일한 언어인지 확인하세요', 'warn');
+        const pinKoH = resp.pinKoHangul || 0;
+        const btiEn = resp.btiEnriched || 0;
+        if (pinKoH > 0) {
+          addLog(`⚠️ 매칭 0개 — PIN_KO 한글 ${pinKoH}건 / BTI EN병합 ${btiEn}건`, 'warn');
+        } else {
+          addLog('⚠️ 매칭 0개 — PIN_KO 한글 수집 실패 (피나클 로그인+한국어 UI)', 'warn');
+        }
+        addLog('팁: pbc00 피나클(gamecode=1) 탭에서 프리매치 화면 열고 새로고침', 'warn');
       }
     });
   });

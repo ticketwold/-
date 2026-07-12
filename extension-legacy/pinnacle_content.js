@@ -164,6 +164,10 @@ async function placePinnacleBet(amount) {
 
 // popup의 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'PING') {
+    sendResponse({ ok: true, href: location.href, version: '2.19' });
+    return false;
+  }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readPinnacleSlip() });
     return false;
@@ -337,4 +341,5 @@ function installPinApiKeyInterceptor() {
   checkAndNotify();
 })();
 
-console.log('[피나클봇] content script 로드됨 (v2.18)');
+console.log('[피나클봇] content script 로드됨 (v2.19)');
+installPinApiKeyInterceptor();
