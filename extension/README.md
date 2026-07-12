@@ -4,14 +4,25 @@ Python 없이 **Edge/Chrome 확장만**으로 Pinnacle + BTI(pbc00) 양방을 �
 
 ## 설치
 
+### 로컬 확장 (arb_v294) — 추천
+
+기존 확장이 `C:\Users\user\Downloads\arb_v297\arb_v294` 에 있으면:
+
 ```powershell
 cd C:\Users\user\Documents\arbitrage-betting
 git pull origin cursor/arbitrage-betting-00df
+.\scripts\setup-extension-from-local.ps1
+# edge://extensions → extension-installed 폴더 로드
 ```
 
-1. Edge 주소창: `edge://extensions`
-2. **개발자 모드** ON
-3. **압축해제된 확장 로드** → `extension` 폴더 선택
+자세한 설명: [docs/EXTENSION_LOCAL.md](../docs/EXTENSION_LOCAL.md)
+
+### 저장소 extension 폴더만 사용
+
+```powershell
+git pull origin cursor/arbitrage-betting-00df
+# edge://extensions → extension 폴더 로드
+```
 
 ## 사용법
 

@@ -13,3 +13,5 @@ config/pbc00_no_odds.png
 .venv/
 venv/
 scripts/*.png
+extension-installed/
+extension-backup-*/
