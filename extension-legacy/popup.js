@@ -104,7 +104,35 @@ function sameTeamName(a, b) {
   const na = normMatchTeamName(a);
   const nb = normMatchTeamName(b);
   if (!na || !nb) return false;
-  return na === nb || na.includes(nb) || nb.includes(na);
+  if (na === nb) return true;
+  const minLen = Math.min(na.length, nb.length);
+  const maxLen = Math.max(na.length, nb.length);
+  // 슬립 전체 텍스트(양 팀명 포함)가 짧은 팀명과 부분일치하는 오탐 방지
+  if (maxLen > 50 && minLen < 30) return false;
+  if (maxLen > minLen * 2.5 && minLen < 25) return false;
+  return na.includes(nb) || nb.includes(na);
+}
+
+function isSlipBlobText(text) {
+  const t = String(text || '');
+  if (t.length > 45) return true;
+  if (/머니\s*라인|money\s*line|moneyline|핸디캡|handicap|최대\s*베팅|@\s*\d|\bMLB\b|\bNFL\b|\bNBA\b/i.test(t)) return true;
+  if ((t.match(/[-–—]/g) || []).length >= 2) return true;
+  return false;
+}
+
+function resolveSelectedTeam(slip) {
+  if (!slip) return '';
+  const fromField = cleanSelectedTeamName(slip.selectedTeam || '');
+  if (fromField && !isSlipBlobText(fromField) && !/^\d+(\.\d+)?$/.test(fromField)) return fromField;
+
+  const side = String(slip.side || '').toLowerCase();
+  if ((side === 'home' || side === 'h') && slip.homeTeam) return slip.homeTeam;
+  if ((side === 'away' || side === 'a') && slip.awayTeam) return slip.awayTeam;
+
+  const direct = cleanSelectedTeamName(slip.selectionText || '');
+  if (direct && !isSlipBlobText(direct) && !/^\d+(\.\d+)?$/.test(direct)) return direct;
+  return '';
 }
 
 function parseEventTeams(text) {
@@ -124,13 +152,7 @@ function cleanSelectedTeamName(text) {
 }
 
 function inferSelectedTeam(slip) {
-  if (!slip) return '';
-  const direct = cleanSelectedTeamName(slip.selectedTeam || slip.selectionText || '');
-  if (direct && !/^\d+(\.\d+)?$/.test(direct)) return direct;
-  const side = String(slip.side || '').toLowerCase();
-  if ((side === 'home' || side === 'h') && slip.homeTeam) return slip.homeTeam;
-  if ((side === 'away' || side === 'a') && slip.awayTeam) return slip.awayTeam;
-  return '';
+  return resolveSelectedTeam(slip);
 }
 
 // side 정규화 (over/under ↔ o/u)
@@ -227,7 +249,7 @@ function explainMarketMismatch(p, b) {
     const isHome = (s) => s === 'home' || s === 'h';
     const isAway = (s) => s === 'away' || s === 'a';
     if (pSelected && bSelected && sameTeamName(pSelected, bSelected)) {
-      return `양쪽 같은 팀(${pSelected}) — 한쪽은 반대 팀을 담아야 양방입니다`;
+      return `양쪽 같은 팀 — 피나클: ${pSelected} / BTI: ${bSelected} (한쪽은 반대 팀을 담아야 양방입니다)`;
     }
     if ((isHome(pSide) && isHome(bSide)) || (isAway(pSide) && isAway(bSide))) {
       const teams = pSelected && bSelected ? `피나클=${pSelected}, BTI=${bSelected}` : '홈↔어웨이 반대로 담기';
@@ -473,6 +495,64 @@ async function syncPinnacleToLine(pinTab, btiSlip) {
 // ─── 피나클 슬립 읽기 함수 (pinnacle.com 직접 탭에 주입) ─────────────
 // 실제 DOM 구조: 선택된 버튼에 "selected-" 클래스 추가 + 오른쪽 슬립 패널
 function pinnacleReadSlipFn() {
+  function pinTeamsMatch(a, b) {
+    const na = (a || '').replace(/\s/g, '').toLowerCase();
+    const nb = (b || '').replace(/\s/g, '').toLowerCase();
+    if (!na || !nb) return false;
+    return na === nb || na.includes(nb) || nb.includes(na);
+  }
+
+  // 피나클 슬립 패널 전체 텍스트 → 팀명/선택팀 추출
+  // 예: "라이브토론토 블루제이스 - 샌디에이고 파드리스머니 라인 – 게임 – MLB샌디에이고 파드리스 1.763"
+  function parsePinSlipCard(full) {
+    let raw = String(full || '').split(/최대\s*베팅/)[0].replace(/\s+/g, ' ').trim();
+    raw = raw.replace(/\d+\.\d{2,4}\s*$/, '').trim();
+    raw = raw.replace(/^라이브\s*/i, '');
+
+    const marketRe = /(?:머니\s*라인|money\s*line|moneyline|핸디캡|handicap|오버\s*\/\s*언더|over\s*\/\s*under)/i;
+    const parts = raw.split(marketRe);
+    const eventPart = (parts[0] || '').trim();
+    const afterMarket = parts.slice(1).join(' ').trim();
+
+    let awayTeam = '';
+    let homeTeam = '';
+    const em = eventPart.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+    if (em) {
+      awayTeam = em[1].trim();
+      homeTeam = em[2].trim();
+    }
+
+    let selectedTeam = '';
+    const tail = afterMarket
+      .replace(/[–—-]\s*게임\s*[–—-]?/gi, ' ')
+      .replace(/\b(MLB|NFL|NBA|NHL|KBO|NPB|EPL|UCL)\b/gi, ' ')
+      .replace(/[–—-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    for (const team of [homeTeam, awayTeam]) {
+      if (team && tail && pinTeamsMatch(tail, team)) {
+        selectedTeam = team;
+        break;
+      }
+    }
+    if (!selectedTeam && tail.length >= 2 && tail.length <= 40 && !/머니|money|핸디|오버|언더/i.test(tail)) {
+      selectedTeam = tail;
+    }
+
+    let side = 'home';
+    if (selectedTeam && awayTeam && pinTeamsMatch(selectedTeam, awayTeam)) side = 'away';
+    else if (selectedTeam && homeTeam && pinTeamsMatch(selectedTeam, homeTeam)) side = 'home';
+
+    return {
+      awayTeam,
+      homeTeam,
+      selectedTeam,
+      side,
+      eventText: awayTeam && homeTeam ? `${awayTeam} vs ${homeTeam}` : eventPart
+    };
+  }
+
   // ── 슬립 패널 우선 탐색 (오른쪽 베팅 슬립 패널) ──
   // 피나클 라이브: 오른쪽 패널에 선택된 종목 표시 (class에 BetSlip, betslip, slip 포함)
   const slipPanelSelectors = [
@@ -528,12 +608,23 @@ function pinnacleReadSlipFn() {
       }
       const type = _detectType(panelText);
       const period = _detectPeriod(panelText);
-      const side = _detectSide(panelText, type);
+      let side = _detectSide(panelText, type);
       const line = _detectLine(panelText);
+      const parsed = parsePinSlipCard(panelText);
+      if (parsed.selectedTeam) {
+        side = parsed.side || side;
+      }
       const marketKey = type === 'ml' ? `${period}_ml_${side}` :
                         type === 'ah' ? `${period}_ah_${side}_${line}` :
                         `${period}_ou_${side}_${line}`;
-      return { odds, marketKind: type, period, side, line, marketKey, selectionText: panelText.substring(0, 100) };
+      return {
+        odds, marketKind: type, period, side, line, marketKey,
+        selectionText: parsed.selectedTeam || panelText.substring(0, 80),
+        selectedTeam: parsed.selectedTeam,
+        homeTeam: parsed.homeTeam,
+        awayTeam: parsed.awayTeam,
+        eventText: parsed.eventText
+      };
     }
   }
 
@@ -790,12 +881,23 @@ function pinnacleReadSlipFn() {
       const cardText = cutIdx > 0 ? full.substring(0, cutIdx) : full.substring(0, 300);
       const period = detectPeriod(cardText);
       const type = detectType(cardText);
-      const side = detectSide(cardText, type);
+      let side = detectSide(cardText, type);
       const line = detectLine(cardText);
+      const parsed = parsePinSlipCard(cardText);
+      if (parsed.selectedTeam) {
+        side = parsed.side || side;
+      }
       const marketKey = type === 'ml' ? `${period}_ml_${side}` :
                         type === 'ah' ? `${period}_ah_${side}_${line}` :
                         `${period}_ou_${side}_${line}`;
-      return { odds, marketKind: type, period, side, line, marketKey, selectionText: cardText.substring(0, 100) };
+      return {
+        odds, marketKind: type, period, side, line, marketKey,
+        selectionText: parsed.selectedTeam || cardText.substring(0, 80),
+        selectedTeam: parsed.selectedTeam,
+        homeTeam: parsed.homeTeam,
+        awayTeam: parsed.awayTeam,
+        eventText: parsed.eventText
+      };
     }
   }
 
