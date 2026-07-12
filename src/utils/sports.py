@@ -24,6 +24,7 @@ class SportDefinition:
   pbc00_game_child_seq: str = PBC00_GAME_CHILD_SEQ
   pbc00_event: str = PBC00_EVENT
   pbc00_nav_texts: tuple[str, ...] = ()
+  bti_sport_id: str = ""  # BTI iframe postMessage sportId (공식: 축구=1, 농구=2)
 
   def pbc00_page_url(self, base_url: str = "https://pbc00.com") -> str:
     if not self.pbc00_gamecode or not self.pbc00_game_child_seq:
@@ -44,6 +45,7 @@ SPORTS: dict[str, SportDefinition] = {
     label_en="Football",
     pinnacle_id=29,
     pbc00_nav_texts=("축구", "Soccer", "Football"),
+    bti_sport_id="1",
   ),
   "baseball": SportDefinition(
     key="baseball",
@@ -51,6 +53,7 @@ SPORTS: dict[str, SportDefinition] = {
     label_en="Baseball",
     pinnacle_id=3,
     pbc00_nav_texts=("야구", "Baseball"),
+    bti_sport_id="3",
   ),
   "basketball": SportDefinition(
     key="basketball",
@@ -58,6 +61,7 @@ SPORTS: dict[str, SportDefinition] = {
     label_en="Basketball",
     pinnacle_id=4,
     pbc00_nav_texts=("농구", "Basketball"),
+    bti_sport_id="2",
   ),
   "esports": SportDefinition(
     key="esports",
@@ -65,6 +69,7 @@ SPORTS: dict[str, SportDefinition] = {
     label_en="Esports",
     pinnacle_id=12,
     pbc00_nav_texts=("e스포츠", "E스포츠", "Esports", "E-Sports"),
+    bti_sport_id="64",
   ),
   "tennis": SportDefinition(
     key="tennis",
@@ -72,6 +77,7 @@ SPORTS: dict[str, SportDefinition] = {
     label_en="Tennis",
     pinnacle_id=33,
     pbc00_nav_texts=("테니스", "Tennis"),
+    bti_sport_id="6",
   ),
 }
 
@@ -122,5 +128,6 @@ def default_sport_pages(base_url: str = "https://pbc00.com") -> dict[str, dict]:
       "event": sport.pbc00_event,
       "page_url": url,
       "nav_texts": list(sport.pbc00_nav_texts),
+      "bti_sport_id": sport.bti_sport_id,
     }
   return pages

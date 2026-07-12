@@ -44,6 +44,7 @@ site_b:
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
       nav_texts: ["축구", "Soccer", "Football"]
+      bti_sport_id: "1"
     baseball:
       enabled: true
       gamecode: "19"
@@ -51,6 +52,7 @@ site_b:
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
       nav_texts: ["야구", "Baseball"]
+      bti_sport_id: "3"
     basketball:
       enabled: true
       gamecode: "19"
@@ -58,6 +60,7 @@ site_b:
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
       nav_texts: ["농구", "Basketball"]
+      bti_sport_id: "2"
     esports:
       enabled: true
       gamecode: "19"
@@ -65,6 +68,7 @@ site_b:
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
       nav_texts: ["e스포츠", "E스포츠", "Esports", "E-Sports"]
+      bti_sport_id: "64"
     tennis:
       enabled: true
       gamecode: "19"
@@ -72,6 +76,7 @@ site_b:
       event: "N"
       page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
       nav_texts: ["테니스", "Tennis"]
+      bti_sport_id: "6"
 
 sports:
   - football

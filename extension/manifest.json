@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Arbitrage Odds Helper",
+  "version": "0.2.0",
+  "description": "Pinnacle / BTI(pbc00) / SBOBET 배당 수집",
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "webNavigation"],
+  "host_permissions": [
+    "https://pbc00.com/*",
+    "https://*.pbc00.com/*",
+    "https://*.bti*/",
+    "https://*.btisports*/",
+    "https://www.pinnacle.com/*",
+    "https://guest.api.arcadia.pinnacle.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "양방 배당"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pbc00.com/*",
+        "https://*.pbc00.com/*"
+      ],
+      "js": ["bti_content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.pinnacle.com/*"],
+      "js": ["pinnacle_content.js"],
+      "all_frames": false,
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["debug_bti_frames.js"],
+      "matches": ["https://pbc00.com/*", "https://*.pbc00.com/*"]
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>BTI 배당 테스트</title>
+  <style>
+    body { font-family: sans-serif; width: 360px; padding: 12px; margin: 0; }
+    input, button, select { width: 100%; margin: 6px 0; padding: 8px; box-sizing: border-box; }
+    pre { background: #111; color: #0f0; padding: 8px; font-size: 11px; max-height: 240px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h3>BTI 배당 수집</h3>
+  <select id="sport">
+    <option value="football">축구</option>
+    <option value="baseball">야구</option>
+    <option value="basketball">농구</option>
+    <option value="esports">e스포츠</option>
+    <option value="tennis">테니스</option>
+  </select>
+  <input id="query" placeholder="팀명 검색 (예: Barcelona)" />
+  <button id="btnOpen">pbc00 열기</button>
+  <button id="btnCollect">전체 배당 수집</button>
+  <button id="btnSearch">팀명 검색</button>
+  <pre id="log">대기 중...</pre>
+  <script src="popup.js"></script>
+</body>
+</html>

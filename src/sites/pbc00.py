@@ -12,9 +12,16 @@ from urllib.parse import urlencode, urlparse, parse_qs
 from ..models.match import Match, MatchOdds
 from ..models.odds import MarketType, Odds, Outcome
 from ..utils.sports import SUPPORTED_SPORT_KEYS, default_sport_pages, get_sport
+from ..utils.match_matcher import match_key
 from .base import SiteAdapter
 
 logger = logging.getLogger(__name__)
+
+BTI_FRAME_URL_HINTS = ("bti", "sportsbook", "sbk", "asian-view", "/sports")
+BTI_API_URL_HINTS = (
+  "api", "event", "sport", "market", "odds", "bti", "bet", "line",
+  "fixture", "selection", "match", "wager",
+)
 
 
 class Pbc00Adapter(SiteAdapter):
@@ -195,8 +202,79 @@ class Pbc00Adapter(SiteAdapter):
       return list(sport_def.pbc00_nav_texts)
     return []
 
+  def _sport_bti_sport_id(self, sport: str) -> str:
+    cfg = self.sport_pages.get(sport, {})
+    sid = (cfg.get("bti_sport_id") or "").strip()
+    if sid:
+      return sid
+    sport_def = get_sport(sport)
+    return sport_def.bti_sport_id if sport_def else ""
+
+  def _is_bti_frame_url(self, url: str) -> bool:
+    u = (url or "").lower()
+    return any(h in u for h in BTI_FRAME_URL_HINTS)
+
+  def _collect_all_frames(self) -> list:
+    """메인 + 중첩 iframe 전체 수집."""
+    if not self._page:
+      return []
+    seen: set[int] = set()
+    frames: list = []
+    stack = [self._page.main_frame]
+    while stack:
+      frame = stack.pop()
+      fid = id(frame)
+      if fid in seen:
+        continue
+      seen.add(fid)
+      frames.append(frame)
+      stack.extend(frame.child_frames)
+    return frames
+
+  async def _navigate_bti_sport(self, sport: str) -> bool:
+    """BTI iframe에 postMessage로 종목 전환 (공식 Communication Layer)."""
+    sport_id = self._sport_bti_sport_id(sport)
+    if not sport_id:
+      return False
+
+    bti_frames = [f for f in self._collect_all_frames() if self._is_bti_frame_url(f.url)]
+    if not bti_frames and not any(
+      self._is_bti_frame_url(f.url) for f in self._collect_all_frames()
+    ):
+      # iframe URL이 숨겨져 있어도 postMessage는 전체 iframe에 브로드캐스트
+      logger.debug("[%s] BTI iframe URL 미확인 — postMessage 브로드캐스트", self.name)
+
+    try:
+      await self._page.evaluate(
+        """
+        (sportId) => {
+          const payload = JSON.stringify({
+            eventType: 'sportId',
+            eventData: { value: String(sportId) },
+          });
+          for (const iframe of document.querySelectorAll('iframe')) {
+            try {
+              iframe.contentWindow?.postMessage(payload, '*');
+            } catch (e) {}
+          }
+        }
+        """,
+        sport_id,
+      )
+      logger.info("[%s] BTI sportId=%s postMessage 전송 (%s)", self.name, sport_id, sport)
+      await self._page.wait_for_timeout(3000)
+      return True
+    except Exception as e:
+      logger.warning("[%s] BTI postMessage 실패: %s", self.name, e)
+      return False
+
   async def _navigate_to_sport_tab(self, sport: str) -> bool:
-    """10벳 페이지 내 종목 탭/메뉴 클릭."""
+    """BTI postMessage 또는 페이지 내 종목 탭 클릭."""
+    if await self._navigate_bti_sport(sport):
+      await self._wait_for_content_load()
+      if await self._has_match_content():
+        return True
+
     nav_texts = self._sport_nav_texts(sport)
     if not nav_texts:
       return True
@@ -337,15 +415,21 @@ class Pbc00Adapter(SiteAdapter):
     return "you have been blocked" in body.lower()
 
   async def _on_response(self, response) -> None:
-    """XHR/Fetch JSON 응답 캡처."""
+    """XHR/Fetch JSON 응답 캡처 (BTI iframe API 포함)."""
     try:
-      ct = response.headers.get("content-type", "")
+      url = response.url
+      url_l = url.lower()
+      if not any(k in url_l for k in BTI_API_URL_HINTS):
+        return
+      ct = response.headers.get("content-type", "").lower()
       if "json" not in ct:
         return
       body = await response.json()
-      url = response.url
       self._captured_api_data.append({"url": url, "data": body})
-      logger.debug("[%s] API: %s", self.name, url[:100])
+      if any(h in url_l for h in ("bti", "sportsbook", "event", "market")):
+        logger.debug("[%s] BTI/API: %s", self.name, url[:120])
+      else:
+        logger.debug("[%s] API: %s", self.name, url[:100])
     except Exception:
       pass
 
@@ -805,29 +889,35 @@ class Pbc00Adapter(SiteAdapter):
 
   async def _wait_for_match_content(self, timeout_ms: int = 15000) -> None:
     """경기 목록 또는 배당 요소가 로드될 때까지 대기."""
-    page = self._page
     wait_selectors = [
       self.selectors.get("match_row", "").split(", ")[0],
-      ".odds", "[class*='odds']", "[class*='match']",
+      ".odds", "[class*='odds']", "[class*='Odds']",
+      "[class*='match']", "[class*='event']", "[class*='Event']",
       "table", ".game-list", ".event",
     ]
-    for sel in wait_selectors:
-      if not sel or not sel.strip():
-        continue
-      try:
-        await page.wait_for_selector(sel.strip(), timeout=timeout_ms)
-        logger.debug("[%s] 콘텐츠 로드 확인: %s", self.name, sel)
-        return
-      except Exception:
-        pass
+    per_frame_timeout = max(3000, timeout_ms // max(len(self._active_pages()), 1))
 
-    await page.wait_for_timeout(3000)
+    for target in self._active_pages():
+      for sel in wait_selectors:
+        sel = (sel or "").strip()
+        if not sel:
+          continue
+        try:
+          await target.wait_for_selector(sel, timeout=per_frame_timeout)
+          logger.debug("[%s] 콘텐츠 로드 확인: %s (frame)", self.name, sel)
+          return
+        except Exception:
+          pass
+
+    await self._page.wait_for_timeout(3000)
 
   def _active_pages(self) -> list:
-    """스크래핑 대상 페이지 목록 (메인 + iframe)."""
+    """스크래핑 대상 페이지 목록 (메인 + 중첩 iframe)."""
     if not self._page:
       return []
-    return [self._page] + [f for f in self._page.frames if f != self._page.main_frame]
+    frames = self._collect_all_frames()
+    # Frame 객체와 Page 모두 locator API 호환
+    return [self._page, *[f for f in frames if f != self._page.main_frame]]
 
   async def disconnect(self) -> None:
     if self._browser:
@@ -920,6 +1010,7 @@ class Pbc00Adapter(SiteAdapter):
 
     await self._save_debug_screenshot(f"no_odds_{sport}")
     await self._dump_clickable_elements()
+    await self._save_bti_api_samples(sport)
     api_urls = [c["url"] for c in self._captured_api_data]
     path = Path(f"config/pbc00_api_urls_{sport}.json")
     path.parent.mkdir(exist_ok=True)
@@ -928,19 +1019,241 @@ class Pbc00Adapter(SiteAdapter):
     logger.info("[%s] %s API URL %d개 저장: %s", self.name, sport, len(api_urls), path)
     return []
 
+  async def _save_bti_api_samples(self, sport: str) -> None:
+    """BTI/API 응답 샘플 저장 (디버그)."""
+    if not self._captured_api_data:
+      return
+    path = Path(f"config/pbc00_bti_samples_{sport}.json")
+    path.parent.mkdir(exist_ok=True)
+    samples = []
+    for c in self._captured_api_data[:30]:
+      body = c["data"]
+      samples.append({
+        "url": c["url"],
+        "preview": json.dumps(body, ensure_ascii=False)[:2000],
+      })
+    with open(path, "w", encoding="utf-8") as f:
+      json.dump(samples, f, ensure_ascii=False, indent=2)
+    logger.info("[%s] API 샘플 저장: %s (%d건)", self.name, path, len(samples))
+
   def _parse_api_data(self) -> list[MatchOdds]:
-    """캡처된 API 응답에서 배당 파싱 (범용 JSON 탐색)."""
+    """캡처된 API 응답에서 배당 파싱 (범용 + BTI)."""
     results: list[MatchOdds] = []
+    seen: set[str] = set()
 
     for captured in self._captured_api_data:
       data = captured["data"]
+      bti_results = self._parse_bti_payload(data)
+      for mo in bti_results:
+        key = match_key(mo.match.home_team, mo.match.away_team, mo.match.sport)
+        if key not in seen:
+          seen.add(key)
+          results.append(mo)
+
       items = self._find_match_lists(data)
       for item in items:
         parsed = self._parse_match_item(item)
         if parsed:
-          results.append(parsed)
+          key = match_key(parsed.match.home_team, parsed.match.away_team, parsed.match.sport)
+          if key not in seen:
+            seen.add(key)
+            results.append(parsed)
 
     return results
+
+  def _parse_bti_payload(self, data: Any) -> list[MatchOdds]:
+    """BTI 스포츠북 JSON 구조 파싱."""
+    results: list[MatchOdds] = []
+    events = self._find_bti_events(data)
+    for event in events:
+      parsed = self._parse_bti_event(event)
+      if parsed:
+        results.append(parsed)
+    return results
+
+  def _find_bti_events(self, data: Any, depth: int = 0) -> list[dict]:
+    if depth > 8:
+      return []
+
+    if isinstance(data, dict):
+      if self._looks_like_bti_event(data):
+        return [data]
+      found: list[dict] = []
+      for value in data.values():
+        found.extend(self._find_bti_events(value, depth + 1))
+      return found
+
+    if isinstance(data, list):
+      if data and isinstance(data[0], dict) and self._looks_like_bti_event(data[0]):
+        return [x for x in data if isinstance(x, dict)]
+      found = []
+      for item in data:
+        found.extend(self._find_bti_events(item, depth + 1))
+      return found
+
+    return []
+
+  def _looks_like_bti_event(self, item: dict) -> bool:
+    if not isinstance(item, dict):
+      return False
+    keys = {k.lower() for k in item.keys()}
+    has_teams = bool(
+      keys & {"hometeam", "awayteam", "participants", "competitors", "teams"}
+      or item.get("eventName") or item.get("eventname")
+    )
+    has_markets = bool(
+      keys & {"markets", "market", "selections", "lines", "odds"}
+      or isinstance(item.get("markets"), list)
+    )
+    return has_teams and has_markets
+
+  def _parse_bti_event(self, event: dict) -> MatchOdds | None:
+    home, away = self._extract_bti_teams(event)
+    if not home or not away:
+      name = str(event.get("eventName") or event.get("name") or "")
+      for sep in (" vs ", " VS ", " v ", " @ "):
+        if sep in name:
+          parts = name.split(sep, 1)
+          home, away = parts[0].strip(), parts[1].strip()
+          break
+    if not home or not away:
+      return None
+
+    home_odds, away_odds, draw_odds = self._extract_bti_moneyline(event)
+    if not home_odds or not away_odds:
+      return None
+
+    match_id = str(event.get("id") or event.get("eventId") or f"bti_{home}_{away}")
+    match = Match(
+      match_id=f"pbc00_{match_id}",
+      sport=self._current_sport,
+      home_team=home,
+      away_team=away,
+      league=str(event.get("leagueName") or event.get("league") or ""),
+    )
+    odds_list = [
+      Odds(outcome=Outcome.HOME, value=home_odds, site=self.name),
+      Odds(outcome=Outcome.AWAY, value=away_odds, site=self.name),
+    ]
+    if draw_odds:
+      odds_list.append(Odds(outcome=Outcome.DRAW, value=draw_odds, site=self.name))
+
+    return MatchOdds(
+      match=match,
+      site=self.name,
+      market_type=MarketType.MONEYLINE,
+      odds=odds_list,
+    )
+
+  def _extract_bti_teams(self, event: dict) -> tuple[str | None, str | None]:
+    home = away = None
+
+    for key in ("homeTeam", "HomeTeam", "home_team", "homeTeamName"):
+      if event.get(key):
+        home = str(event[key])
+        break
+    for key in ("awayTeam", "AwayTeam", "away_team", "awayTeamName"):
+      if event.get(key):
+        away = str(event[key])
+        break
+    if home and away:
+      return home, away
+
+    participants = event.get("participants") or event.get("competitors") or event.get("teams") or []
+    if isinstance(participants, list):
+      for p in participants:
+        if not isinstance(p, dict):
+          continue
+        name = p.get("name") or p.get("teamName") or p.get("participantName")
+        if not name:
+          continue
+        role = str(
+          p.get("venueRole") or p.get("alignment") or p.get("side") or p.get("position") or ""
+        ).lower()
+        if role in ("home", "h", "1"):
+          home = str(name)
+        elif role in ("away", "a", "2"):
+          away = str(name)
+      if not home and len(participants) >= 2:
+        home = str(participants[0].get("name", participants[0]) if isinstance(participants[0], dict) else participants[0])
+        away = str(participants[1].get("name", participants[1]) if isinstance(participants[1], dict) else participants[1])
+
+    return home, away
+
+  def _extract_bti_moneyline(self, event: dict) -> tuple[float | None, float | None, float | None]:
+    markets = event.get("markets") or event.get("market") or []
+    if isinstance(markets, dict):
+      markets = [markets]
+    if not isinstance(markets, list):
+      return None, None, None
+
+    home_odds = away_odds = draw_odds = None
+
+    for market in markets:
+      if not isinstance(market, dict):
+        continue
+      mtype = str(market.get("marketType") or market.get("type") or market.get("name") or "").upper()
+      if mtype and mtype not in ("ML", "MONEYLINE", "1X2", "WIN", "MATCH", "MATCH_ODDS", ""):
+        if "TOTAL" in mtype or "HANDICAP" in mtype or "SPREAD" in mtype:
+          continue
+
+      selections = (
+        market.get("selections") or market.get("outcomes")
+        or market.get("runners") or market.get("prices") or []
+      )
+      if isinstance(selections, dict):
+        selections = list(selections.values())
+
+      for sel in selections:
+        if not isinstance(sel, dict):
+          continue
+        price = self._read_price(sel)
+        if not price:
+          continue
+        label = str(
+          sel.get("name") or sel.get("designation") or sel.get("side") or sel.get("type") or ""
+        ).lower()
+        if label in ("home", "h", "1", "team1") or "home" in label:
+          home_odds = price
+        elif label in ("away", "a", "2", "team2") or "away" in label:
+          away_odds = price
+        elif label in ("draw", "x", "tie"):
+          draw_odds = price
+
+      if home_odds and away_odds:
+        return home_odds, away_odds, draw_odds
+
+    # selections가 market 없이 event 루트에 있는 경우
+    root_selections = event.get("selections") or []
+    if isinstance(root_selections, list):
+      for sel in root_selections:
+        if not isinstance(sel, dict):
+          continue
+        price = self._read_price(sel)
+        if not price:
+          continue
+        label = str(sel.get("name") or sel.get("side") or "").lower()
+        if "home" in label or label == "h":
+          home_odds = price
+        elif "away" in label or label == "a":
+          away_odds = price
+        elif "draw" in label or label == "x":
+          draw_odds = price
+
+    return home_odds, away_odds, draw_odds
+
+  def _read_price(self, sel: dict) -> float | None:
+    for key in (
+      "price", "odds", "decimal", "decimalOdds", "displayOdds",
+      "currentPrice", "value", "odd",
+    ):
+      val = sel.get(key)
+      if val is not None:
+        try:
+          return self._to_decimal(float(val))
+        except (TypeError, ValueError):
+          pass
+    return None
 
   def _find_match_lists(self, data: Any, depth: int = 0) -> list[dict]:
     """JSON에서 경기 목록 배열을 재귀 탐색."""
@@ -955,6 +1268,8 @@ class Pbc00Adapter(SiteAdapter):
         "homeName", "awayName", "teamHome", "teamAway",
         "home", "away", "odds", "homeOdds", "awayOdds",
         "hTeam", "aTeam", "team_h", "team_a", "competitor",
+        "HomeTeam", "AwayTeam", "eventName", "participants",
+        "competitors", "markets", "selections",
       }
       if keys & match_indicators:
         return data

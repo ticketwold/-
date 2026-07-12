@@ -21,6 +21,7 @@ class SportPageConfig(BaseModel):
   page_url: str = ""
   nav_text: str = ""
   nav_texts: list[str] = Field(default_factory=list)
+  bti_sport_id: str = ""
 
 
 class SiteConfig(BaseModel):
