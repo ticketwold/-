@@ -717,6 +717,9 @@ async function findPinnacleTab() {
 
 // 피나클 haywire API 키 (app.json)
 let cachedPinHaywireKey = '';
+// MAIN world 인터셉터가 background로 보낸 한글 팀명 캐시
+const pinKoCacheBySport = {};
+
 async function fetchPinHaywireApiKey() {
   if (cachedPinHaywireKey) return cachedPinHaywireKey;
   try {
@@ -767,7 +770,7 @@ async function findAllPinnacleFrames() {
 }
 
 // inject용 — 피나클 iframe에서 세션 쿠키로 한국어 팀명 수집
-function pinPrematchKoInjectFn(sportId, haywireKey) {
+async function pinPrematchKoInjectFn(sportId, haywireKey) {
   const PAGE_KEY = 'AI9lc7vjxbF2W9JnS9OJN6VJ7eRLlKuM';
   const keys = [...new Set([window.__PIN_API_KEY, PAGE_KEY, haywireKey].filter((k) => k && k.length > 15))];
 
@@ -803,9 +806,20 @@ function pinPrematchKoInjectFn(sportId, haywireKey) {
     return { matchups, koCount, total: Object.keys(matchups).length };
   }
 
-  return (async () => {
-    try {
-      if (!window.__pinInterceptInstalled) {
+  try {
+    const cached = window.__pinMatchupCache?.[sportId];
+    if (cached?.matchups && Object.keys(cached.matchups).length > 0) {
+      return {
+        ok: true,
+        matchups: cached.matchups,
+        count: cached.total || Object.keys(cached.matchups).length,
+        koCount: cached.koCount || 0,
+        source: 'main-cache',
+        frame: location.href
+      };
+    }
+
+    if (!window.__pinInterceptInstalled) {
         const origFetch = window.fetch;
         window.fetch = async function(input, init) {
           const url = typeof input === 'string' ? input : (input?.url || '');
@@ -841,12 +855,49 @@ function pinPrematchKoInjectFn(sportId, haywireKey) {
         if (parsed.koCount > 0) break;
       }
 
-      if (!best?.total) return { ok: false, error: 'matchups 0건 (로그인/프리매치 화면 확인)' };
-      return { ok: true, matchups: best.matchups, count: best.total, koCount: best.koCount, frame: location.href };
+      if (!best?.total) return { ok: false, error: 'matchups 0건 (프리매치 종목 화면 클릭 후 재시도)' };
+      return { ok: true, matchups: best.matchups, count: best.total, koCount: best.koCount, source: 'inject-fetch', frame: location.href };
     } catch (e) {
       return { ok: false, error: e.message };
     }
-  })();
+}
+
+async function readPinMainCacheFromFrame(pinTab, sportId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: pinTab.id, frameIds: [pinTab.frameId || 0] },
+      world: 'MAIN',
+      func: (sid) => {
+        const cache = window.__pinMatchupCache?.[sid];
+        if (!cache?.matchups || !Object.keys(cache.matchups).length) return null;
+        return {
+          ok: true,
+          matchups: cache.matchups,
+          count: cache.total || Object.keys(cache.matchups).length,
+          koCount: cache.koCount || 0,
+          source: 'main-cache'
+        };
+      },
+      args: [sportId]
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function ensurePinMainInterceptor(pinTab) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: pinTab.id, frameIds: [pinTab.frameId || 0] },
+      world: 'MAIN',
+      files: ['pinnacle_main.js']
+    });
+    await sleep(200);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 async function ensurePinContentScript(tabId, frameId) {
@@ -912,20 +963,38 @@ async function fetchPinKoViaInject(pinTab, sportId) {
 async function fetchPinKoFromAnyFrame(sportId) {
   const frames = await findAllPinnacleFrames();
   if (!frames.length) return { ok: false, error: '피나클 탭/iframe 없음' };
+
+  const bgCache = pinKoCacheBySport[sportId];
+  if (bgCache?.matchups && Object.keys(bgCache.matchups).length > 0) {
+    const koCount = Object.values(bgCache.matchups).filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
+    if (koCount > 0 || bgCache.koCount > 0) {
+      return { ok: true, matchups: bgCache.matchups, source: 'bg-cache', koCount: bgCache.koCount || koCount };
+    }
+  }
+
   let lastErr = '응답 없음';
   for (const frame of frames) {
-    let result = await fetchPinKoViaContentScript(frame, sportId);
+    await ensurePinMainInterceptor(frame);
+
+    let result = await readPinMainCacheFromFrame(frame, sportId);
+    if (result?.ok && result.matchups && Object.keys(result.matchups).length > 0) {
+      const koCount = Object.values(result.matchups).filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
+      console.log(`[피나클] KO 캐시 frame=${frame.frameId} ${koCount}/${Object.keys(result.matchups).length}건 (${result.source})`);
+      if (koCount > 0) return { ...result, koCount };
+    }
+
+    result = await fetchPinKoViaContentScript(frame, sportId);
     if (!result?.ok || !result.matchups || Object.keys(result.matchups).length === 0) {
       result = await fetchPinKoViaInject(frame, sportId);
     }
     if (result?.ok && result.matchups && Object.keys(result.matchups).length > 0) {
       const koCount = Object.values(result.matchups).filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
-      console.log(`[피나클] KO 팀명 frame=${frame.frameId} ${koCount}/${Object.keys(result.matchups).length}건 한글`);
+      console.log(`[피나클] KO 팀명 frame=${frame.frameId} ${koCount}/${Object.keys(result.matchups).length}건 (${result.source || 'fetch'})`);
       return result;
     }
     lastErr = result?.error || lastErr;
   }
-  return { ok: false, error: lastErr };
+  return { ok: false, error: lastErr + ' — 피나클 프리매치에서 축구 등 종목 클릭 후 재시도' };
 }
 
 // 피나클 탭 content script / inject → 한국어 팀명 수집
@@ -2365,6 +2434,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // 피나클 MAIN world 인터셉터 캐시 (한글 팀명)
+  if (msg.type === 'PIN_CACHE_UPDATE') {
+    if (msg.sportId && msg.matchups) {
+      const prev = pinKoCacheBySport[msg.sportId];
+      const koCount = msg.koCount || Object.values(msg.matchups).filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
+      if (!prev || koCount >= (prev.koCount || 0)) {
+        pinKoCacheBySport[msg.sportId] = {
+          matchups: msg.matchups,
+          koCount,
+          total: msg.total || Object.keys(msg.matchups).length,
+          updatedAt: Date.now(),
+          tabId: sender.tab?.id,
+          frameId: sender.frameId
+        };
+      }
+    }
+    return false;
+  }
+
   // SBOBET 토큰 상태 확인
   if (msg.type === 'GET_SBO_TOKEN_STATUS') {
     sendResponse({ hasToken: !!sbobetToken, apiBase: sbobetApiBase });
@@ -2556,7 +2644,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             const koN = pinKoMerged.filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
             if (koN === 0) pinKoNames.unshift('⚠️ 한글 팀명 0건 — 피나클 한국어 UI+로그인 확인');
           } else {
-            pinKoNames = ['KO 실패: ' + (koResult?.error || '응답 없음') + ` (피나클 iframe ${pinFrames.length}개)`];
+            pinKoNames = ['KO 실패: ' + (koResult?.error || '응답 없음') + ` (iframe ${pinFrames.length}개) — 피나클 프리매치에서 축구 클릭 후 F5`];
           }
         } else {
           pinKoNames = ['피나클 탭 없음 — pbc00 피나클(gamecode=1) 또는 pinnacle.com 탭 필요'];

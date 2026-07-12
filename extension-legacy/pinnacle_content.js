@@ -162,10 +162,108 @@ async function placePinnacleBet(amount) {
   }
 }
 
+// MAIN world 인터셉터가 캐시한 한글 팀명 (sportId → { matchups, koCount, updatedAt })
+const pinLocalCache = {};
+
+document.addEventListener('pin-cache-update', (ev) => {
+  const d = ev?.detail;
+  if (!d?.sportId || !d.matchups) return;
+  pinLocalCache[d.sportId] = {
+    matchups: d.matchups,
+    koCount: d.koCount || 0,
+    total: d.total || Object.keys(d.matchups).length,
+    updatedAt: Date.now(),
+    source: 'intercept'
+  };
+  try {
+    chrome.runtime.sendMessage({
+      type: 'PIN_CACHE_UPDATE',
+      sportId: d.sportId,
+      matchups: d.matchups,
+      koCount: d.koCount,
+      total: d.total
+    });
+  } catch (_) {}
+});
+
+function hasHangulText(s) {
+  return /[가-힣]/.test(String(s || ''));
+}
+
+function scrapePinPrematchFromDom() {
+  const matchups = {};
+  let koCount = 0;
+  const seen = new Set();
+
+  function addPair(home, away, league, startTime) {
+    const h = String(home || '').replace(/\s+/g, ' ').trim();
+    const a = String(away || '').replace(/\s+/g, ' ').trim();
+    if (!h || !a || h.length < 2 || a.length < 2) return;
+    if (/^\d+$/.test(h) && /^\d+$/.test(a)) return;
+    const key = `${h}|${a}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const id = `dom_${seen.size}`;
+    matchups[id] = { home: h, away: a, league: league || '', startTime: startTime || null };
+    if (hasHangulText(h + a)) koCount++;
+  }
+
+  const rowSelectors = [
+    '[class*="event-row"]', '[class*="EventRow"]', '[class*="matchup"]',
+    '[class*="Matchup"]', '[class*="eventRow"]', '[data-testid*="event"]',
+    '[class*="row-"]', 'tr', 'li'
+  ];
+  const nameSelectors = [
+    '[class*="participant"]', '[class*="Participant"]', '[class*="competitor"]',
+    '[class*="team-name"]', '[class*="TeamName"]', '[class*="name-"]'
+  ];
+
+  for (const rowSel of rowSelectors) {
+    for (const row of document.querySelectorAll(rowSel)) {
+      const names = [];
+      for (const ns of nameSelectors) {
+        for (const el of row.querySelectorAll(ns)) {
+          const t = (el.textContent || '').trim();
+          if (t.length >= 2 && t.length < 80 && !/^\d+\.?\d*$/.test(t)) names.push(t);
+        }
+      }
+      if (names.length >= 2) {
+        addPair(names[0], names[1]);
+        continue;
+      }
+      const txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
+      const vs = txt.match(/(.{2,40}?)\s+(?:vs|VS|v\.?s\.?|대)\s+(.{2,40})/);
+      if (vs) addPair(vs[1], vs[2]);
+    }
+    if (Object.keys(matchups).length >= 5) break;
+  }
+
+  const total = Object.keys(matchups).length;
+  if (!total) return null;
+  return { matchups, koCount, total, source: 'dom' };
+}
+
+async function readMainWorldCache(sportId) {
+  return new Promise((resolve) => {
+    const handler = (ev) => {
+      if (ev?.detail?.sportId === sportId) {
+        document.removeEventListener('pin-cache-read', handler);
+        resolve(ev.detail);
+      }
+    };
+    document.addEventListener('pin-cache-read', handler);
+    document.dispatchEvent(new CustomEvent('pin-cache-request', { detail: { sportId } }));
+    setTimeout(() => {
+      document.removeEventListener('pin-cache-read', handler);
+      resolve(null);
+    }, 50);
+  });
+}
+
 // popup의 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, version: '2.19' });
+    sendResponse({ ok: true, href: location.href, version: '2.20' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
@@ -202,6 +300,30 @@ function getPinPageApiKey() {
 // 피나클 한국어 세션 쿠키를 활용하여 한국어 팀명 반환 시도
 async function fetchPinPrematchKo(sportId, leagueIds) {
   try {
+    // 방법 0: MAIN world 인터셉터 캐시 (페이지가 이미 받아온 한글 API 응답)
+    let cached = pinLocalCache[sportId];
+    if (!cached?.matchups) {
+      const mainRead = await readMainWorldCache(sportId);
+      if (mainRead?.matchups) {
+        cached = {
+          matchups: mainRead.matchups,
+          koCount: mainRead.koCount || 0,
+          total: mainRead.total || Object.keys(mainRead.matchups).length,
+          source: 'intercept'
+        };
+        pinLocalCache[sportId] = cached;
+      }
+    }
+    if (cached?.matchups && Object.keys(cached.matchups).length > 0) {
+      return {
+        ok: true,
+        matchups: cached.matchups,
+        count: cached.total,
+        koCount: cached.koCount,
+        source: cached.source || 'intercept'
+      };
+    }
+
     // 방법 1: 피나클 페이지 전용 API 키 (캐시된 것 우선)
     let apiKey = window.__PIN_API_KEY;
 
@@ -281,7 +403,18 @@ async function fetchPinPrematchKo(sportId, leagueIds) {
       if (!home || !away) continue;
       result[mu.id] = { home, away, league: mu.league?.name || '', startTime: mu.startTime || null };
     }
-    return { ok: true, matchups: result, count: Object.keys(result).length };
+    const koCount = Object.values(result).filter((m) => hasHangulText(m.home) || hasHangulText(m.away)).length;
+    if (Object.keys(result).length > 0) {
+      return { ok: true, matchups: result, count: Object.keys(result).length, koCount, source: 'fetch' };
+    }
+
+    // 방법 5: DOM에서 한글 팀명 스크래핑 (API 쿠키 차단 시 폴백)
+    const domParsed = scrapePinPrematchFromDom();
+    if (domParsed?.total) {
+      return { ok: true, ...domParsed };
+    }
+
+    return { ok: false, error: 'matchups 0건 (프리매치 화면에서 종목 클릭 후 재시도)' };
   } catch(e) {
     return { ok: false, error: e.message };
   }
@@ -341,5 +474,5 @@ function installPinApiKeyInterceptor() {
   checkAndNotify();
 })();
 
-console.log('[피나클봇] content script 로드됨 (v2.19)');
+console.log('[피나클봇] content script 로드됨 (v2.20)');
 installPinApiKeyInterceptor();

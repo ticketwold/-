@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "3.15",
+  "version": "3.16",
   "description": "피나클/BTI/SBOBET 자동 양방 서치 + 슬립 비교 베팅 (pbc00.com + prod188 BTI + live8588.com AVA BTI + wg88ss SBOBET 지원)",
   "permissions": [
     "storage",
@@ -33,6 +33,21 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "*://*.eviran66.com/*",
+        "*://*.mervani99.com/*",
+        "*://*.auremi88.com/*",
+        "*://*.pinnacle.com/*",
+        "*://*.pbc00.com/*"
+      ],
+      "js": [
+        "pinnacle_main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
     {
       "matches": [
         "*://*.eviran66.com/*",
