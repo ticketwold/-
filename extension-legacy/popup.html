@@ -47,6 +47,20 @@
   .opp-detail { font-size: 10px; color: #888; }
   .opp-badge { display:inline-block; background:#1e4080; border-radius:3px; padding:1px 5px; font-size:10px; color:#60a5fa; margin-right:4px; }
   .search-stats { font-size: 10px; color: #666; padding: 4px 14px; border-bottom: 1px solid #0f3460; }
+  /* 수동 경기 매칭 */
+  .manual-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+  .manual-list-title { font-size: 10px; font-weight: bold; margin-bottom: 4px; }
+  .manual-list-title.pin { color: #60a5fa; }
+  .manual-list-title.bti { color: #34d399; }
+  .manual-list { max-height: 180px; overflow-y: auto; background: #0a0a1a; border-radius: 6px; border: 1px solid #1e4080; }
+  .manual-item { padding: 5px 6px; border-bottom: 1px solid #0f3460; cursor: pointer; font-size: 10px; line-height: 1.35; }
+  .manual-item:hover { background: #0f3460; }
+  .manual-item.selected-pin { border-left: 3px solid #60a5fa; background: #0a1628; }
+  .manual-item.selected-bti { border-left: 3px solid #34d399; background: #0a1a14; }
+  .manual-item .teams { color: #eee; font-weight: bold; }
+  .manual-item .meta { color: #666; font-size: 9px; margin-top: 2px; }
+  .manual-pair-box { background: #0f3460; border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-size: 11px; }
+  .manual-pair-box.empty { color: #555; text-align: center; }
   /* 마켓 설정 */
   .mkt-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
   .mkt-grid select { background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 4px 5px; border-radius: 4px; font-size: 11px; width: 100%; }
@@ -255,6 +269,39 @@
 
   <!-- 서치 통계 -->
   <div class="search-stats" id="pmSearchStats">서치 대기 중...</div>
+
+  <!-- 수동 경기 매칭 -->
+  <div class="section">
+    <div class="section-title">🎯 수동 경기 매칭</div>
+    <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
+      <select id="pmManualSport" style="flex:1; min-width:90px; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:5px 8px; border-radius:4px; font-size:12px;">
+        <option value="29" selected>⚽ 축구</option>
+        <option value="3">⚾ 야구</option>
+        <option value="4">🏀 농구</option>
+        <option value="12">🎮 이스포츠</option>
+        <option value="33">🎾 테니스</option>
+      </select>
+      <button class="btn btn-search" id="loadPmSportListsBtn" style="flex:1; min-width:120px; padding:6px;">경기 목록 불러오기</button>
+    </div>
+    <input type="text" id="pmListFilter" placeholder="팀명 검색..." style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:11px; margin-bottom:6px;">
+    <div class="search-stats" id="pmManualStats" style="padding:0; border:none; margin-bottom:4px;">종목 선택 후 목록 불러오기</div>
+    <div class="manual-pair-grid">
+      <div>
+        <div class="manual-list-title pin">피나클</div>
+        <div class="manual-list" id="pmPinList">
+          <div style="padding:12px; text-align:center; color:#555; font-size:10px;">—</div>
+        </div>
+      </div>
+      <div>
+        <div class="manual-list-title bti">BTI</div>
+        <div class="manual-list" id="pmBtiList">
+          <div style="padding:12px; text-align:center; color:#555; font-size:10px;">—</div>
+        </div>
+      </div>
+    </div>
+    <div class="manual-pair-box empty" id="pmManualPairBox">양쪽에서 경기를 하나씩 클릭하세요</div>
+    <button class="btn btn-start" id="pmConfirmPairBtn" style="margin-top:8px;" disabled>✓ 이 쌍으로 선택 (슬립 비교용)</button>
+  </div>
 
   <!-- 양방 기회 목록 -->
   <div class="section" style="padding:8px;">

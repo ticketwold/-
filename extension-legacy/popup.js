@@ -2661,6 +2661,182 @@ function renderPrematchResult(msg) {
   window._lastPrematchOpportunities = filtered;
 }
 
+// ─── 프리매치 수동 경기 매칭 ─────────────────────────────────────────
+let pmManualPinIdx = null;
+let pmManualBtiIdx = null;
+let pmManualSportId = 29;
+
+function pmOddsLabel(h, a) {
+  const parts = [];
+  if (h) parts.push(`H${h.toFixed(2)}`);
+  if (a) parts.push(`A${a.toFixed(2)}`);
+  return parts.length ? parts.join('/') : '';
+}
+
+function renderPmManualLists() {
+  const filter = (document.getElementById('pmListFilter')?.value || '').trim().toLowerCase();
+  const pinEl = document.getElementById('pmPinList');
+  const btiEl = document.getElementById('pmBtiList');
+  if (!pinEl || !btiEl) return;
+
+  const matchFilter = (item) => {
+    if (!filter) return true;
+    const blob = `${item.home} ${item.away} ${item.homeEn || ''} ${item.awayEn || ''} ${item.league}`.toLowerCase();
+    return blob.includes(filter);
+  };
+
+  const pinItems = (window._pmPinList || []).map((item, idx) => ({ item, idx })).filter((x) => matchFilter(x.item));
+  const btiItems = (window._pmBtiList || []).map((item, idx) => ({ item, idx })).filter((x) => matchFilter(x.item));
+
+  if (!pinItems.length) {
+    pinEl.innerHTML = '<div style="padding:12px;text-align:center;color:#555;font-size:10px;">경기 없음</div>';
+  } else {
+    pinEl.innerHTML = pinItems.map(({ item, idx }) => {
+      const sel = pmManualPinIdx === idx ? ' selected-pin' : '';
+      const odds = pmOddsLabel(item.mlHome, item.mlAway);
+      return `<div class="manual-item${sel}" data-idx="${idx}" onclick="selectPmPinItem(${idx})">
+        <div class="teams">${item.home} vs ${item.away}</div>
+        <div class="meta">${item.timeLabel ? '⏰ ' + item.timeLabel + ' · ' : ''}${item.league || ''}${odds ? ' · ' + odds : ''}</div>
+      </div>`;
+    }).join('');
+  }
+
+  if (!btiItems.length) {
+    btiEl.innerHTML = '<div style="padding:12px;text-align:center;color:#555;font-size:10px;">경기 없음</div>';
+  } else {
+    btiEl.innerHTML = btiItems.map(({ item, idx }) => {
+      const sel = pmManualBtiIdx === idx ? ' selected-bti' : '';
+      const odds = pmOddsLabel(item.mlHome, item.mlAway);
+      const mkt = item.hasMarkets === false ? ' · 배당없음' : '';
+      return `<div class="manual-item${sel}" data-idx="${idx}" onclick="selectPmBtiItem(${idx})">
+        <div class="teams">${item.home} vs ${item.away}</div>
+        <div class="meta">${item.timeLabel ? '⏰ ' + item.timeLabel + ' · ' : ''}${item.league || ''}${odds ? ' · ' + odds : ''}${mkt}</div>
+      </div>`;
+    }).join('');
+  }
+  updatePmManualPairBox();
+}
+
+function selectPmPinItem(idx) {
+  pmManualPinIdx = idx;
+  renderPmManualLists();
+}
+
+function selectPmBtiItem(idx) {
+  pmManualBtiIdx = idx;
+  renderPmManualLists();
+}
+
+function updatePmManualPairBox() {
+  const box = document.getElementById('pmManualPairBox');
+  const btn = document.getElementById('pmConfirmPairBtn');
+  if (!box) return;
+
+  const pin = pmManualPinIdx !== null ? window._pmPinList?.[pmManualPinIdx] : null;
+  const bti = pmManualBtiIdx !== null ? window._pmBtiList?.[pmManualBtiIdx] : null;
+
+  if (!pin && !bti) {
+    box.className = 'manual-pair-box empty';
+    box.textContent = '양쪽에서 경기를 하나씩 클릭하세요';
+    if (btn) btn.disabled = true;
+    return;
+  }
+
+  box.className = 'manual-pair-box';
+  let html = '';
+  if (pin) {
+    html += `<div style="color:#60a5fa;margin-bottom:4px;">피나클: <b>${pin.home}</b> vs <b>${pin.away}</b>${pin.timeLabel ? ' (' + pin.timeLabel + ')' : ''}</div>`;
+  } else {
+    html += '<div style="color:#555;">피나클: 미선택</div>';
+  }
+  if (bti) {
+    html += `<div style="color:#34d399;">BTI: <b>${bti.home}</b> vs <b>${bti.away}</b>${bti.timeLabel ? ' (' + bti.timeLabel + ')' : ''}</div>`;
+  } else {
+    html += '<div style="color:#555;">BTI: 미선택</div>';
+  }
+  box.innerHTML = html;
+  if (btn) btn.disabled = !(pin && bti);
+}
+
+async function loadPmSportLists() {
+  const sportId = parseInt(document.getElementById('pmManualSport')?.value || '29', 10);
+  const hours = parseInt(document.getElementById('pmHours')?.value || '48', 10);
+  pmManualSportId = sportId;
+  pmManualPinIdx = null;
+  pmManualBtiIdx = null;
+
+  const statsEl = document.getElementById('pmManualStats');
+  const btn = document.getElementById('loadPmSportListsBtn');
+  if (statsEl) statsEl.textContent = '목록 수집 중...';
+  if (btn) btn.disabled = true;
+
+  chrome.runtime.sendMessage({ type: 'GET_PREMATCH_SPORT_LISTS', sportId, hours }, (resp) => {
+    if (btn) btn.disabled = false;
+    if (!resp?.ok) {
+      if (statsEl) statsEl.textContent = '⚠️ ' + (resp?.error || '실패');
+      addLog('수동매칭 목록 실패: ' + (resp?.error || '?'), 'error');
+      return;
+    }
+    window._pmPinList = resp.pinList || [];
+    window._pmBtiList = resp.btiList || [];
+    window._pmPinFull = resp.pinFull || [];
+    window._pmBtiFull = resp.btiFull || [];
+
+    if (statsEl) {
+      statsEl.textContent = `${resp.sportLabel} │ 피나클 ${window._pmPinList.length}건 (한글 ${resp.pinKoHangul || 0}) │ BTI ${window._pmBtiList.length}건 (배당 ${resp.btiWithMarkets || 0})`;
+    }
+    addLog(`수동매칭: ${resp.sportLabel} 피나클 ${window._pmPinList.length} / BTI ${window._pmBtiList.length}`, 'info');
+    renderPmManualLists();
+  });
+}
+
+async function confirmPmManualPair() {
+  if (pmManualPinIdx === null || pmManualBtiIdx === null) return;
+  const pin = window._pmPinFull?.[pmManualPinIdx];
+  const bti = window._pmBtiFull?.[pmManualBtiIdx];
+  if (!pin || !bti) {
+    addLog('선택 경기 데이터 없음 — 목록 다시 불러오기', 'error');
+    return;
+  }
+
+  const pair = {
+    sportId: pmManualSportId,
+    sportLabel: { 29: '축구', 3: '야구', 4: '농구', 12: '이스포츠', 33: '테니스' }[pmManualSportId] || '기타',
+    pin: { id: pin.id, home: pin.home, away: pin.away, league: pin.league, startTime: pin.startTime },
+    bti: { id: bti.id, home: bti.home, away: bti.away, league: bti.league, startTime: bti.startTime },
+    savedAt: Date.now()
+  };
+
+  chrome.storage.local.set({ manualPrematchPair: pair });
+  window._manualPrematchPair = pair;
+
+  addLog(`✅ 수동 쌍 선택: ${pin.home} vs ${pin.away}`, 'success');
+  addLog('→ 양쪽 사이트에서 해당 경기 슬립에 담은 뒤 [슬립 비교] 탭에서 베팅', 'info');
+
+  chrome.runtime.sendMessage({
+    type: 'CHECK_MANUAL_PREMATCH_PAIR',
+    sportId: pmManualSportId,
+    pin,
+    bti
+  }, (resp) => {
+    const box = document.getElementById('pmManualPairBox');
+    if (!box) return;
+    let extra = '';
+    if (resp?.ok && resp.opportunities?.length > 0) {
+      const best = resp.opportunities[0];
+      extra = `<div style="margin-top:6px;color:#4ade80;">💡 양방 후보: ${best.market} ${best.profit}% (피나클 ${best.pinOdds?.toFixed(2)} / BTI ${best.btiOdds?.toFixed(2)})</div>`;
+      addLog(`양방 후보 ${resp.opportunities.length}건 — 최고 ${best.profit}%`, 'success');
+    } else if (resp?.ok) {
+      extra = '<div style="margin-top:6px;color:#888;">자동 양방 계산: 해당 없음 (슬립 수동 비교)</div>';
+    }
+    box.innerHTML = box.innerHTML + extra;
+  });
+}
+
+// 전역 (onclick)
+window.selectPmPinItem = selectPmPinItem;
+window.selectPmBtiItem = selectPmBtiItem;
+
 function selectOpp(idx) {
   if (!window._lastOpportunities) return;
   selectedOpp = window._lastOpportunities[idx];
@@ -2852,7 +3028,7 @@ document.addEventListener('DOMContentLoaded', () => {
           stopPrematchBtn.disabled = true;
         } else if (s.pinTabFound === false) {
           addLog('⚠️ pinnacle.com 탭 없음 — 영문 팀명으로 진행', 'warn');
-          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
+          addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0} / BTI ${s.btiTotal||0} / 팀매칭 ${s.teamMatched??0} / 양방 ${s.arbOpps??s.matched??0}`, 'success');
         } else {
           const srcNote = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
           addLog(`프리매치 서치 완료: 피나클 ${s.pinTotal||0} / BTI ${s.btiTotal||0} / 팀매칭 ${s.teamMatched??0} / 양방 ${s.arbOpps??s.matched??0}${srcNote}`, 'success');
@@ -2881,6 +3057,21 @@ document.addEventListener('DOMContentLoaded', () => {
     stopPrematchBtn.disabled = true;
     addLog('프리매치 서치 정지', 'info');
     chrome.runtime.sendMessage({ type: 'STOP_PREMATCH_SEARCH' });
+  });
+
+  const loadPmSportListsBtn = document.getElementById('loadPmSportListsBtn');
+  if (loadPmSportListsBtn) loadPmSportListsBtn.addEventListener('click', () => loadPmSportLists());
+  const pmConfirmPairBtn = document.getElementById('pmConfirmPairBtn');
+  if (pmConfirmPairBtn) pmConfirmPairBtn.addEventListener('click', () => confirmPmManualPair());
+  const pmListFilter = document.getElementById('pmListFilter');
+  if (pmListFilter) pmListFilter.addEventListener('input', () => renderPmManualLists());
+  const pmManualSport = document.getElementById('pmManualSport');
+  if (pmManualSport) pmManualSport.addEventListener('change', () => {
+    pmManualPinIdx = null;
+    pmManualBtiIdx = null;
+    const statsEl = document.getElementById('pmManualStats');
+    if (statsEl) statsEl.textContent = '종목 변경 — 목록 불러오기 클릭';
+    renderPmManualLists();
   });
 
   const betSelectedBtn = document.getElementById('betSelectedBtn');

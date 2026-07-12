@@ -2089,6 +2089,131 @@ function broadcastToPopup(msg) {
 let prematchSearchRunning = false;
 let prematchSearchInterval = null;
 
+async function getPinPrematchForSport(pinSportId) {
+  const koMatchups = await getPinPrematchMatchupsKo(pinSportId);
+  let oddsMap = {};
+  try {
+    const markets = await fetchPin(`/sports/${pinSportId}/markets/highlighted/straight?primaryOnly=false`);
+    if (Array.isArray(markets)) {
+      for (const m of markets) {
+        if (!oddsMap[m.matchupId]) oddsMap[m.matchupId] = {};
+        oddsMap[m.matchupId][`${m.type}_${m.period}`] = m;
+      }
+    }
+  } catch (_) {}
+
+  const raw = await fetchPin(`/sports/${pinSportId}/matchups?isLive=false`);
+  let parsed = parsePinMatchupsFromApi(raw, pinSportId).map((mu) => ({
+    ...mu,
+    homeEn: mu.home,
+    awayEn: mu.away,
+    odds: oddsMap[mu.id] || {}
+  }));
+
+  if (koMatchups?.length) {
+    const koById = Object.fromEntries(koMatchups.map((m) => [String(m.id), m]));
+    parsed = parsed.map((mu) => {
+      const ko = koById[String(mu.id)];
+      if (!ko) return mu;
+      return {
+        ...mu,
+        homeKo: ko.homeKo || ko.home,
+        awayKo: ko.awayKo || ko.away,
+        home: ko.home || mu.home,
+        away: ko.away || mu.away
+      };
+    });
+  }
+  return parsed;
+}
+
+function formatEventTimeKo(startTime) {
+  const ms = eventStartMs(startTime);
+  if (!ms) return '';
+  return new Date(ms).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function filterEventsByHours(events, hours) {
+  if (!hours || hours <= 0) return events;
+  const maxT = Date.now() + hours * 3600000;
+  return events.filter((e) => {
+    const t = eventStartMs(e.startTime);
+    return !t || t <= maxT;
+  });
+}
+
+function serializePinListItem(mu, pinSportId) {
+  const pinOdds = parsePinOdds(mu.odds || {}, pinSportId);
+  const ml0 = pinOdds.ml.filter((p) => p.period === 0);
+  return {
+    id: String(mu.id),
+    home: mu.home,
+    away: mu.away,
+    homeKo: mu.homeKo,
+    awayKo: mu.awayKo,
+    homeEn: mu.homeEn,
+    awayEn: mu.awayEn,
+    league: mu.league || '',
+    startTime: mu.startTime,
+    timeLabel: formatEventTimeKo(mu.startTime),
+    mlHome: ml0.find((p) => p.side === 'home')?.odds,
+    mlAway: ml0.find((p) => p.side === 'away')?.odds
+  };
+}
+
+function serializeBtiListItem(ev) {
+  const btiOdds = ev.rawRow ? parseBtiOddsFromRow(ev.rawRow) : parseBtiOdds(ev.markets || []);
+  const mlH = btiOdds.ml.find((m) => m.side === 'H' || m.side === 'Home');
+  const mlA = btiOdds.ml.find((m) => m.side === 'A' || m.side === 'Away');
+  return {
+    id: String(ev.id),
+    home: ev.home,
+    away: ev.away,
+    homeEn: ev.homeEn,
+    awayEn: ev.awayEn,
+    league: ev.league || '',
+    startTime: ev.startTime,
+    timeLabel: formatEventTimeKo(ev.startTime),
+    mlHome: mlH?.odds,
+    mlAway: mlA?.odds,
+    hasMarkets: btiRowMarketCount(ev.rawRow) > 0
+  };
+}
+
+// 종목별 프리매치 경기 목록 (수동 매칭 UI용)
+async function getPrematchSportLists(pinSportId, hours = 48) {
+  const btiTab = await findBtiTab();
+  if (!btiTab) return { ok: false, error: 'BTI 탭 없음 — pbc00.com을 열어주세요' };
+
+  const [pinRaw, btiAll] = await Promise.all([
+    getPinPrematchForSport(pinSportId),
+    getBtiPrematchMatchups(btiTab.id, btiTab.url)
+  ]);
+
+  const btiRaw = btiAll.filter((e) => e.sportId === pinSportId);
+  const pinFiltered = filterEventsByHours(pinRaw, hours);
+  const btiFiltered = filterEventsByHours(btiRaw, hours);
+
+  pinFiltered.sort((a, b) => eventStartMs(a.startTime) - eventStartMs(b.startTime));
+  btiFiltered.sort((a, b) => eventStartMs(a.startTime) - eventStartMs(b.startTime));
+
+  const pinKoHangul = pinFiltered.filter((m) => hasHangul(m.home) || hasHangul(m.away)).length;
+
+  return {
+    ok: true,
+    sportId: pinSportId,
+    sportLabel: PIN_SPORT_LABEL[pinSportId] || '기타',
+    hours,
+    pinList: pinFiltered.map((m) => serializePinListItem(m, pinSportId)),
+    btiList: btiFiltered.map(serializeBtiListItem),
+    pinFull: pinFiltered,
+    btiFull: btiFiltered,
+    pinKoHangul,
+    btiWithMarkets: countBtiWithMarkets(btiFiltered),
+    btiEnriched: btiFiltered.filter((e) => e.homeEn || e.awayEn).length
+  };
+}
+
 async function runPrematchSearchOnce() {
   const btiTab = await findBtiTab();
   if (!btiTab) {
@@ -2373,6 +2498,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'RUN_PREMATCH_ONCE') {
     runPrematchSearchOnce().then(r => sendResponse({ ok: true, result: r }))
       .catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // 종목별 프리매치 경기 목록 (수동 매칭)
+  if (msg.type === 'GET_PREMATCH_SPORT_LISTS') {
+    getPrematchSportLists(msg.sportId || 29, msg.hours || 48)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // 수동 선택 경기 쌍 — 양방 기회 계산
+  if (msg.type === 'CHECK_MANUAL_PREMATCH_PAIR') {
+    try {
+      const { pin, bti, sportId } = msg;
+      if (!pin || !bti) {
+        sendResponse({ ok: false, error: '경기 미선택' });
+        return true;
+      }
+      const opps = findPrematchArbitrageOpportunities([pin], [bti], sportId || 29);
+      sendResponse({ ok: true, opportunities: opps, teamMatch: matchupTeamsMatch(pin, bti) });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
     return true;
   }
 
