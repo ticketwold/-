@@ -1,4 +1,4 @@
-// BTI content script v2.20
+// BTI content script v2.22
 // 실제 DOM 구조 (진단 결과 기준):
 // ─ 슬립 카드: [class*="betslip_fe_BetSecondary_bet"] (wrapper/counter/badge 제외)
 //     선택명: [class*="betInformation__title"][0] → "삼성 라이온스" (팀명 또는 "언더 16")
@@ -314,9 +314,154 @@ function validateBtiLine(targetLine, tolerance) {
   return { valid: true, actualLine: slip.line, selectionText: slip.selectionText };
 }
 
+function slipOddsFromText(txt) {
+  const t = String(txt || '').trim();
+  const n = parseFloat(t);
+  if (!n || n <= 1.01 || n >= 100) return 0;
+  if (!/^\d+(\.\d{1,4})?$/.test(t)) return 0;
+  return n;
+}
+
+function getRealSlipCards() {
+  return Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+    .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
+      !el.className.includes('bageGroup') && !el.className.includes('badge') &&
+      !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
+}
+
+function readSlipOddsFromDom() {
+  const cards = getRealSlipCards();
+  if (!cards.length) return 0;
+  const atM = cards[0].textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+  if (atM) {
+    const n = slipOddsFromText(atM[1]);
+    if (n) return n;
+  }
+  for (const sp of cards[0].querySelectorAll('span')) {
+    if ((sp.className || '').includes('UpdateNotification')) continue;
+    const n = slipOddsFromText(sp.textContent);
+    if (n) return n;
+  }
+  return 0;
+}
+
+function validateBtiOdds(targetOdds) {
+  if (!targetOdds || targetOdds <= 1) return { valid: true };
+  const curOdds = readSlipOddsFromDom();
+  if (!curOdds) return { valid: true };
+  if (Math.abs(curOdds - targetOdds) > 0.06) {
+    return {
+      valid: false,
+      reason: `배당 변경: 목표=${targetOdds}, 현재=${curOdds}`,
+      oddsChanged: true,
+      actualOdds: curOdds
+    };
+  }
+  return { valid: true, actualOdds: curOdds };
+}
+
+function findBtiBetButton() {
+  const allBtns = Array.from(document.querySelectorAll('button')).filter((b) => !b.disabled);
+  for (const btn of allBtns) {
+    if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
+      return btn;
+    }
+  }
+  for (const btn of allBtns) {
+    if ((btn.className || '').includes('PlaceBetBlock') && !(btn.className || '').includes('clearAll')) {
+      return btn;
+    }
+  }
+  for (const btn of allBtns) {
+    const txt = btn.textContent.trim();
+    if ((txt === '베팅하기' || txt === 'Place Bet' || txt === 'Bet Now' ||
+         txt.includes('베팅하기') || txt.includes('베팅 확인')) &&
+        !txt.includes('슬립') && !txt.includes('내 베팅') && !txt.includes('로그인')) {
+      return btn;
+    }
+  }
+  return null;
+}
+
+function confirmBtiBet() {
+  return new Promise((resolve) => {
+    const MAX_WAIT = 5000;
+    const INTERVAL = 150;
+    let elapsed = 0;
+    function slipRemaining() {
+      return getRealSlipCards().length;
+    }
+    function findConfirm() {
+      try {
+        const allBtns = Array.from(document.querySelectorAll('button'));
+        let confirmBtn = null;
+        for (const b of allBtns) {
+          if (b.disabled) continue;
+          const t = b.textContent.trim();
+          if (t === '승인' || t === '확인' || t === 'OK' || t === 'Confirm' ||
+              t === '베팅 승인' || t === '베팅확인' || t === 'Accept' ||
+              t === '베팅 확인' || t === 'Approve') {
+            confirmBtn = b; break;
+          }
+        }
+        if (!confirmBtn) {
+          const modals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="overlay"], [class*="Overlay"]');
+          for (const modal of modals) {
+            for (const b of modal.querySelectorAll('button')) {
+              if (b.disabled) continue;
+              const t = b.textContent.trim();
+              if (t.includes('승인') || t.includes('확인') || t.includes('Confirm') || t.includes('Accept')) {
+                confirmBtn = b; break;
+              }
+            }
+            if (confirmBtn) break;
+          }
+        }
+        if (confirmBtn) {
+          confirmBtn.click();
+          setTimeout(() => {
+            const left = slipRemaining();
+            const okMsg = document.body.innerText.match(/베팅.*(완료|성공|접수)|Bet.*(accepted|placed)/i);
+            resolve({
+              confirmed: left === 0 || !!okMsg,
+              btnText: confirmBtn.textContent.trim().substring(0, 20),
+              elapsed,
+              slipLeft: left
+            });
+          }, 400);
+          return;
+        }
+        if (slipRemaining() === 0) {
+          resolve({ confirmed: true, btnText: '슬립비움', elapsed });
+          return;
+        }
+        elapsed += INTERVAL;
+        if (elapsed >= MAX_WAIT) {
+          const left = slipRemaining();
+          const okMsg = document.body.innerText.match(/베팅.*(완료|성공|접수)|Bet.*(accepted|placed)/i);
+          if (left === 0 || okMsg) {
+            resolve({ confirmed: true, btnText: '슬립비움/메시지', elapsed, slipLeft: left });
+          } else {
+            resolve({ confirmed: false, reason: `승인버튼없음+슬립${left}건`, elapsed, slipLeft: left });
+          }
+          return;
+        }
+        setTimeout(findConfirm, INTERVAL);
+      } catch (e) {
+        resolve({ confirmed: false, reason: e.message });
+      }
+    }
+    findConfirm();
+  });
+}
+
 // ── BTI 베팅 실행 ──
-async function placeBtiBet(amount, targetLine, lineTolerance) {
+async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
   try {
+    if (document.querySelector('[class*="UpdateNotification"]')) {
+      return { success: false, reason: '배당 업데이트 중 — 잠시 후 재시도' };
+    }
+
     // ── 기준점 검증 (위치 변경 버그 방어) ──
     if (targetLine !== undefined && lineTolerance !== undefined) {
       const validation = validateBtiLine(targetLine, lineTolerance);
@@ -329,20 +474,22 @@ async function placeBtiBet(amount, targetLine, lineTolerance) {
       }
     }
 
-    const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
-    const realCards = Array.from(betCards).filter(el =>
-      !el.className.includes('wrapper') &&
-      !el.className.includes('counter') &&
-      !el.className.includes('bageGroup') &&
-      !el.className.includes('badge') &&
-      !el.className.includes('PlaceBet') &&
-      !el.className.includes('Tab')
-    );
+    if (targetOdds !== undefined && targetOdds !== null) {
+      const oddsValidation = validateBtiOdds(targetOdds);
+      if (!oddsValidation.valid) {
+        return {
+          success: false,
+          reason: oddsValidation.reason,
+          oddsChanged: true
+        };
+      }
+    }
+
+    const realCards = getRealSlipCards();
     if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
 
-    // 금액 입력 필드
     const input = document.getElementById('counter')
-      || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"]');
+      || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"]');
     if (!input) return { success: false, reason: '금액 입력 필드 없음' };
 
     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -350,39 +497,21 @@ async function placeBtiBet(amount, targetLine, lineTolerance) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
 
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 800));
 
-    // 베팅 버튼 탐색
-    const allBtns = document.querySelectorAll('button:not([disabled])');
-    let betBtn = null;
-
-    for (const btn of allBtns) {
-      if (btn.className.includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
-        betBtn = btn; break;
-      }
-    }
-    if (!betBtn) {
-      for (const btn of allBtns) {
-        if (btn.className.includes('PlaceBetBlock') && !btn.className.includes('clearAll')) {
-          betBtn = btn; break;
-        }
-      }
-    }
-    if (!betBtn) {
-      for (const btn of allBtns) {
-        const txt = btn.textContent.trim();
-        if ((txt.includes('베팅하기') || txt.includes('베팅 확인')) &&
-            !txt.includes('슬립') && !txt.includes('내 베팅') && !txt.includes('로그인')) {
-          betBtn = btn; break;
-        }
-      }
-    }
-
+    const betBtn = findBtiBetButton();
     if (!betBtn) return { success: false, reason: '베팅 버튼 없음 (금액 미입력 또는 최소금액 미달?)' };
 
     betBtn.click();
-    await new Promise(r => setTimeout(r, 1500));
-    return { success: true };
+    const confirm = await confirmBtiBet();
+    if (!confirm.confirmed) {
+      return {
+        success: false,
+        reason: confirm.reason || `승인 실패 (슬립잔존=${confirm.slipLeft ?? '?'})`,
+        slipLeft: confirm.slipLeft
+      };
+    }
+    return { success: true, btnText: confirm.btnText || '확정' };
   } catch (e) {
     return { success: false, reason: e.message };
   }
@@ -544,8 +673,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'PLACE_BET') {
-    placeBtiBet(msg.amount, msg.targetLine, msg.lineTolerance)
-      .then(result => sendResponse(result));
+    placeBtiBet(msg.amount, msg.targetLine, msg.lineTolerance, msg.targetOdds)
+      .then((result) => sendResponse(result));
     return true;
   }
   if (msg.type === 'VALIDATE_LINE') {

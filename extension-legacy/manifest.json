@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "3.09",
+  "version": "3.10",
   "description": "피나클/BTI/SBOBET 자동 양방 서치 + 슬립 비교 베팅 (pbc00.com + prod188 BTI + live8588.com AVA BTI + wg88ss SBOBET 지원)",
   "permissions": [
     "storage",

@@ -1440,14 +1440,249 @@ function execInTab(tabInfo, fn, args = []) {
 function execAsyncInTab(tabInfo, fn, args = []) {
   const tabId = tabInfo.id || tabInfo;
   const frameId = tabInfo.frameId !== undefined ? tabInfo.frameId : 0;
-  // 주입하는 함수는 완전 동기 함수여야 함 (async/await/Promise 반환 금지)
-  // executeScript는 동기 반환값만 직렬화 가능
   return new Promise(resolve => {
     chrome.scripting.executeScript(
       { target: { tabId, frameIds: [frameId] }, func: fn, args, world: 'MAIN' },
       results => {
-        if (chrome.runtime.lastError || !results || !results[0]) { resolve(null); return; }
+        if (chrome.runtime.lastError || !results || !results[0]) {
+          resolve({ ok: false, error: chrome.runtime.lastError?.message || 'inject 실패(frameId=' + frameId + ')' });
+          return;
+        }
         resolve(results[0].result);
+      }
+    );
+  });
+}
+
+// BTI 슬립 배당 파싱 (1.8 / 1.80 / 2.525)
+function btiSlipOddsFromTextInject(txt) {
+  const t = String(txt || '').trim();
+  const n = parseFloat(t);
+  if (!n || n <= 1.01 || n >= 100) return 0;
+  if (!/^\d+(\.\d{1,4})?$/.test(t)) return 0;
+  return n;
+}
+
+// BTI iframe 프로브 — 베팅카트(#counter)가 있는 프레임 찾기
+function probeBtiBetFrameInject() {
+  const slip = document.querySelector('[class*="betslip_fe_BetSecondary_bet"]');
+  const realSlip = slip && !String(slip.className || '').includes('wrapper');
+  const input = document.getElementById('counter')
+    || document.querySelector('input[class*="CounterSecondary_input"], input[placeholder="베팅금"]');
+  const betBtn = Array.from(document.querySelectorAll('button')).find((b) =>
+    !b.disabled && (b.className || '').includes('sportsbook-Button') && b.textContent.includes('베팅하기'));
+  return { hasSlip: !!realSlip, hasInput: !!input, hasBtn: !!betBtn, href: location.href };
+}
+
+async function resolveBtiBetTab(btiTab) {
+  if (!btiTab?.id) return btiTab;
+  if (btiTab.frameId !== undefined && btiTab.frameId !== 0) {
+    const direct = await execInTab(btiTab, probeBtiBetFrameInject);
+    if (direct?.hasSlip && direct?.hasInput) return btiTab;
+  }
+  const frames = await getAllFrames(btiTab.id);
+  const ordered = [...frames].sort((a, b) => (a.frameId === 0 ? 1 : 0) - (b.frameId === 0 ? 1 : 0));
+  for (const frame of ordered) {
+    const probe = await execInTab({ id: btiTab.id, frameId: frame.frameId }, probeBtiBetFrameInject);
+    if (probe?.hasSlip && probe?.hasInput) {
+      return { id: btiTab.id, frameId: frame.frameId, url: frame.url || btiTab.url };
+    }
+  }
+  return btiTab;
+}
+
+function btiSlipStabilizeInject(targetOdds) {
+  return new Promise((resolve) => {
+    const MAX_WAIT = 5000;
+    const CHECK_INTERVAL = 80;
+    let elapsed = 0;
+    function checkReady() {
+      const hasUpdateNotif = !!document.querySelector('[class*="UpdateNotification"]');
+      const allBtns = Array.from(document.querySelectorAll('button'));
+      const betBtn = allBtns.find((b) =>
+        !b.disabled && (
+          ((b.className || '').includes('sportsbook-Button') && b.textContent.trim().includes('베팅하기')) ||
+          ((b.className || '').includes('PlaceBetBlock') && !(b.className || '').includes('clearAll'))
+        )
+      );
+      let curOdds = 0;
+      const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+        .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
+          !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
+      if (cards.length > 0) {
+        const atM = cards[0].textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+        if (atM) curOdds = btiSlipOddsFromTextInject(atM[1]);
+        if (!curOdds) {
+          for (const sp of cards[0].querySelectorAll('span')) {
+            if ((sp.className || '').includes('UpdateNotification')) continue;
+            const n = btiSlipOddsFromTextInject(sp.textContent);
+            if (n) { curOdds = n; break; }
+          }
+        }
+      }
+      const oddsOk = !targetOdds || curOdds === 0 || Math.abs(curOdds - targetOdds) <= 0.06;
+      if (betBtn && !hasUpdateNotif && oddsOk) {
+        resolve({ ready: true, curOdds, elapsed, frame: location.href });
+        return;
+      }
+      elapsed += CHECK_INTERVAL;
+      if (elapsed >= MAX_WAIT) {
+        resolve({
+          ready: false,
+          reason: `타임아웃: UpdateNotif=${hasUpdateNotif}, betBtn=${!!betBtn}, curOdds=${curOdds}, target=${targetOdds}`,
+          curOdds, elapsed
+        });
+        return;
+      }
+      setTimeout(checkReady, CHECK_INTERVAL);
+    }
+    checkReady();
+  });
+}
+
+function btiClickBetBtnInject() {
+  return new Promise((resolve) => {
+    const MAX_WAIT = 4000;
+    const INTERVAL = 100;
+    let elapsed = 0;
+    function tryClick() {
+      try {
+        const allBtns = Array.from(document.querySelectorAll('button'));
+        let betBtn = null;
+        for (const btn of allBtns) {
+          if (btn.disabled) continue;
+          if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
+            betBtn = btn; break;
+          }
+        }
+        if (!betBtn) {
+          for (const btn of allBtns) {
+            if (btn.disabled) continue;
+            if ((btn.className || '').includes('PlaceBetBlock') && !(btn.className || '').includes('clearAll')) {
+              betBtn = btn; break;
+            }
+          }
+        }
+        if (!betBtn) {
+          for (const btn of allBtns) {
+            if (btn.disabled) continue;
+            const t = btn.textContent.trim();
+            if (t === '베팅하기' || t === 'Place Bet' || t === 'Bet Now') { betBtn = btn; break; }
+          }
+        }
+        if (betBtn) {
+          betBtn.click();
+          resolve({ success: true, btnText: betBtn.textContent.trim().substring(0, 30), elapsed });
+          return;
+        }
+        elapsed += INTERVAL;
+        if (elapsed >= MAX_WAIT) {
+          const debugBtns = allBtns.filter((b) => b.offsetParent).slice(0, 8)
+            .map((b) => `"${b.textContent.trim().substring(0, 20)}"[dis:${b.disabled}]`).join(' | ');
+          resolve({ success: false, reason: `베팅버튼없음 | ${debugBtns}` });
+          return;
+        }
+        setTimeout(tryClick, INTERVAL);
+      } catch (e) {
+        resolve({ success: false, reason: e.message });
+      }
+    }
+    tryClick();
+  });
+}
+
+function btiConfirmBetInject() {
+  return new Promise((resolve) => {
+    const MAX_WAIT = 5000;
+    const INTERVAL = 150;
+    let elapsed = 0;
+    function slipRemaining() {
+      return Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+        .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
+          !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab')).length;
+    }
+    function findConfirm() {
+      try {
+        const allBtns = Array.from(document.querySelectorAll('button'));
+        let confirmBtn = null;
+        for (const b of allBtns) {
+          if (b.disabled) continue;
+          const t = b.textContent.trim();
+          if (t === '승인' || t === '확인' || t === 'OK' || t === 'Confirm' ||
+              t === '베팅 승인' || t === '베팅확인' || t === 'Accept' ||
+              t === '베팅 확인' || t === 'Approve') {
+            confirmBtn = b; break;
+          }
+        }
+        if (!confirmBtn) {
+          const modals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="overlay"], [class*="Overlay"]');
+          for (const modal of modals) {
+            for (const b of modal.querySelectorAll('button')) {
+              if (b.disabled) continue;
+              const t = b.textContent.trim();
+              if (t.includes('승인') || t.includes('확인') || t.includes('Confirm') || t.includes('Accept')) {
+                confirmBtn = b; break;
+              }
+            }
+            if (confirmBtn) break;
+          }
+        }
+        if (confirmBtn) {
+          confirmBtn.click();
+          setTimeout(() => {
+            const left = slipRemaining();
+            const okMsg = document.body.innerText.match(/베팅.*(완료|성공|접수)|Bet.*(accepted|placed)/i);
+            resolve({
+              confirmed: left === 0 || !!okMsg,
+              btnText: confirmBtn.textContent.trim().substring(0, 20),
+              elapsed,
+              slipLeft: left
+            });
+          }, 400);
+          return;
+        }
+        if (slipRemaining() === 0) {
+          resolve({ confirmed: true, btnText: '슬립비움', elapsed });
+          return;
+        }
+        elapsed += INTERVAL;
+        if (elapsed >= MAX_WAIT) {
+          const left = slipRemaining();
+          const okMsg = document.body.innerText.match(/베팅.*(완료|성공|접수)|Bet.*(accepted|placed)/i);
+          if (left === 0 || okMsg) {
+            resolve({ confirmed: true, btnText: '슬립비움/메시지', elapsed, slipLeft: left });
+          } else {
+            resolve({ confirmed: false, reason: `승인버튼없음+슬립${left}건`, elapsed, slipLeft: left });
+          }
+          return;
+        }
+        setTimeout(findConfirm, INTERVAL);
+      } catch (e) {
+        resolve({ confirmed: false, reason: e.message });
+      }
+    }
+    findConfirm();
+  });
+}
+
+async function placeBtiBetViaMessage(btiTab, amount, bSlip) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(
+      btiTab.id,
+      {
+        type: 'PLACE_BET',
+        amount,
+        targetLine: bSlip?.line,
+        lineTolerance,
+        targetOdds: bSlip?.odds
+      },
+      { frameId: btiTab.frameId || 0 },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, reason: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(res || { success: false, reason: '응답 없음' });
       }
     );
   });
@@ -1959,63 +2194,25 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
     const pOdds = pSlip.odds, bOdds = bSlip.odds;
     const { pinBet, oppBet, oppBetDisplay, oppUnit } = calcBetAmounts(pOdds, bOdds, opponentSource);
     const oppName = opponentSource === 'sbobet' ? 'SBOBET' : 'BTI';
+    let btiTab = opponentSource !== 'sbobet' ? await resolveBtiBetTab(opponentTab) : opponentTab;
 
     addLog(`베팅 시작: 피나클 ${pinBet.toLocaleString()}원 (${pOdds}) / ${oppName} ${oppBetDisplay.toLocaleString()}${oppUnit} (${bOdds})`, 'info');
 
-    // ── BTI 슬립 안정화 대기 (배당 변경 후 베팅 버튼 활성화까지 대기) ──
-    // BTI는 배팅카트 담기 → 배당 업데이트(UpdateNotification) → 버튼 활성화 순서
-    // 배당 변경 직후 피나클 베팅이 먼저 들어가는 타이밍 버그 방지
     if (opponentSource !== 'sbobet') {
-      const btiReady = await execAsyncInTab(opponentTab, function(targetOdds) {
-        return new Promise(resolve => {
-          const MAX_WAIT = 3000; // 최대 3초 대기
-          const CHECK_INTERVAL = 80;
-          let elapsed = 0;
-          function checkReady() {
-            // 1. UpdateNotification (배당 변경 중 표시) 없는지 확인
-            const hasUpdateNotif = !!document.querySelector('[class*="UpdateNotification"]');
-            // 2. 베팅 버튼 활성화 여부 확인
-            const allBtns = Array.from(document.querySelectorAll('button'));
-            const betBtn = allBtns.find(b =>
-              !b.disabled &&
-              ((b.className || '').includes('sportsbook-Button') && b.textContent.trim().includes('베팅하기')) ||
-              ((b.className || '').includes('PlaceBetBlock') && !(b.className || '').includes('clearAll'))
-            );
-            // 3. 현재 배당이 목표 배당과 일치하는지 확인
-            let curOdds = 0;
-            const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
-              .filter(el => !el.className.includes('wrapper') && !el.className.includes('counter') &&
-                !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
-            if (cards.length > 0) {
-              const spans = cards[0].querySelectorAll('span');
-              for (const sp of spans) {
-                if ((sp.className || '').includes('UpdateNotification')) continue;
-                const txt = sp.textContent.trim();
-                const n = parseFloat(txt);
-                if (n > 1.01 && n < 100 && /^\d+\.\d{2,4}$/.test(txt)) { curOdds = n; break; }
-              }
-            }
-            const oddsMatch = !targetOdds || curOdds === 0 || Math.abs(curOdds - targetOdds) <= 0.05;
-            // betBtn=true 이면 UpdateNotif 여부와 curOdds 관계없이 통과
-            if (betBtn) {
-              resolve({ ready: true, curOdds, elapsed });
-              return;
-            }
-            elapsed += CHECK_INTERVAL;
-            if (elapsed >= MAX_WAIT) {
-              resolve({ ready: false, reason: `타임아웃 ${MAX_WAIT}ms: UpdateNotif=${hasUpdateNotif}, betBtn=${!!betBtn}, curOdds=${curOdds}`, curOdds, elapsed });
-              return;
-            }
-            setTimeout(checkReady, CHECK_INTERVAL);
-          }
-          checkReady();
-        });
-      }, [bOdds]);
-      if (btiReady && !btiReady.ready) {
-        addLog(`⚠️ BTI 슬립 안정화 실패: ${btiReady.reason} → 베팅 취소`, 'warn');
-        betInProgress = false; return;
+      const probe = await execInTab(btiTab, probeBtiBetFrameInject);
+      addLog(`BTI 베팅 프레임: frame=${btiTab.frameId} slip=${probe?.hasSlip} input=${probe?.hasInput} btn=${probe?.hasBtn}`, 'info');
+      if (!probe?.hasSlip || !probe?.hasInput) {
+        addLog('❌ BTI 베팅카트/금액입력 없음 — pbc00 BTI iframe 확인 후 재시도', 'error');
+        betInProgress = false;
+        return;
       }
-      if (btiReady) addLog(`BTI 슬립 안정화 완료 (${btiReady.elapsed}ms, 배당=${btiReady.curOdds})`, 'info');
+      const btiReady = await execAsyncInTab(btiTab, btiSlipStabilizeInject, [bOdds]);
+      if (!btiReady?.ready) {
+        addLog(`⚠️ BTI 슬립 안정화 실패: ${btiReady?.reason || btiReady?.error || '응답 없음'} → 베팅 취소`, 'warn');
+        betInProgress = false;
+        return;
+      }
+      addLog(`BTI 슬립 준비 완료 (${btiReady.elapsed}ms, 배당=${btiReady.curOdds})`, 'info');
     }
 
     // 피나클 먼저 - 2단계: 금액입력 후 1초 대기 후 버튼 클릭 (버튼 활성화 대기)
@@ -2206,7 +2403,6 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
     // 상대방 베팅
     let oppResult;
     if (opponentSource === 'sbobet') {
-      // SBOBET 2단계: 금액입력 → 1초 대기 → 버튼클릭
       const sboStep1 = await execAsyncInTab(opponentTab, sbobetPlaceBetFn, [oppBet]);
       if (!sboStep1 || !sboStep1.success) {
         addLog(`❌ SBOBET 금액 입력 실패: ${sboStep1?.reason || '응답 없음'}`, 'error');
@@ -2216,28 +2412,32 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
       await new Promise(r => setTimeout(r, 1000));
       oppResult = await execAsyncInTab(opponentTab, sbobetClickBetBtn, []);
     } else {
-      // BTI 2단계 베팅: 기준점/배당 검증 + 금액입력 후 800ms 대기 후 버튼 클릭
-      // 1단계: 기준점/배당 검증 + 금액 입력
-      const btiStep1 = await execAsyncInTab(opponentTab, function(amt, tLine, tol, tOdds) {
-        try {
-          // 기준점 검증
-          if (tLine !== undefined && tLine !== null && tol !== undefined) {
-            const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
-            const realCards = Array.from(betCards).filter(el =>
-              !el.className.includes('wrapper') && !el.className.includes('counter') &&
-              !el.className.includes('bageGroup') && !el.className.includes('badge') &&
-              !el.className.includes('PlaceBet') && !el.className.includes('Tab')
-            );
-            if (realCards.length > 0) {
-              const card = realCards[0];
-              let selText = '';
-              const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
-              for (const el of titleEls) {
-                const t = el.textContent.trim();
-                if (t && t !== '라이브' && t.length > 1 && t.length < 50) { selText = t; break; }
-              }
-              if (selText) {
-                // 부호 포함 라인 추출: "-1.5", "+2.5", "1.5" 모두 처리
+      // 피나클 베팅 후 BTI 슬립 재확인 (배당변경/버튼비활성 대응)
+      btiTab = await resolveBtiBetTab(opponentTab);
+      addLog(`피나클 완료 → BTI 재확인 (frame=${btiTab.frameId})`, 'info');
+      const btiReady2 = await execAsyncInTab(btiTab, btiSlipStabilizeInject, [bOdds]);
+      if (!btiReady2?.ready) {
+        addLog(`❌ 피나클 후 BTI 슬립 불안정: ${btiReady2?.reason || btiReady2?.error || '?'} — BTI만 미체결`, 'error');
+        betInProgress = false;
+        return;
+      }
+
+      // 1) content script PLACE_BET 시도
+      oppResult = await placeBtiBetViaMessage(btiTab, oppBet, bSlip);
+      if (!oppResult?.success) {
+        addLog(`BTI content script 베팅 실패: ${oppResult?.reason || '?'} → inject 폴백`, 'warn');
+        const btiStep1 = await execAsyncInTab(btiTab, function(amt, tLine, tol, tOdds) {
+          try {
+            if (tLine !== undefined && tLine !== null && tol !== undefined) {
+              const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+                .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
+                  !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
+              if (cards.length > 0) {
+                let selText = '';
+                for (const el of cards[0].querySelectorAll('[class*="betInformation__title"]')) {
+                  const t = el.textContent.trim();
+                  if (t && t !== '라이브' && t.length > 1 && t.length < 50) { selText = t; break; }
+                }
                 const lm = selText.match(/([+-]?[\d]+\.?[\d]*)(?:\s*\/\s*[+-]?[\d]+\.?[\d]*)?$/);
                 if (lm) {
                   let actualLine = parseFloat(lm[1]);
@@ -2247,190 +2447,63 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
                     actualLine = sign * (Math.abs(parseFloat(qM[1])) + Math.abs(parseFloat(qM[2]))) / 2;
                   }
                   if (Math.abs(actualLine - tLine) > tol) {
-                    return { ok: false, reason: `⚠️ 기준점 변경: 목표=${tLine}, 실제=${actualLine}("${selText}") → 취소`, lineChanged: true };
+                    return { ok: false, reason: `기준점 변경: 목표=${tLine}, 실제=${actualLine}`, lineChanged: true };
                   }
                 }
               }
             }
-          }
-          // 배당 변경 검증
-          if (tOdds && tOdds > 1) {
-            const betCards2 = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
-            const realCards2 = Array.from(betCards2).filter(el =>
-              !el.className.includes('wrapper') && !el.className.includes('counter') &&
-              !el.className.includes('bageGroup') && !el.className.includes('badge') &&
-              !el.className.includes('PlaceBet') && !el.className.includes('Tab')
-            );
-            if (realCards2.length > 0) {
-              const card2 = realCards2[0];
-              let curOdds = 0;
-              const spans = card2.querySelectorAll('span');
-              for (const sp of spans) {
-                if ((sp.className || '').includes('UpdateNotification')) continue;
-                const txt = sp.textContent.trim();
-                const n = parseFloat(txt);
-                if (n > 1.01 && n < 100 && /^\d+\.\d{2,4}$/.test(txt)) { curOdds = n; break; }
-              }
-              if (curOdds > 1 && Math.abs(curOdds - tOdds) > 0.05) {
-                return { ok: false, reason: `⚠️ 배당 변경: 목표=${tOdds}, 슬립현재=${curOdds} → 취소`, oddsChanged: true };
+            if (tOdds && tOdds > 1) {
+              const cards2 = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+                .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
+                  !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
+              if (cards2.length > 0) {
+                let curOdds = 0;
+                const atM = cards2[0].textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+                if (atM) curOdds = parseFloat(atM[1]);
+                if (!curOdds) {
+                  for (const sp of cards2[0].querySelectorAll('span')) {
+                    if ((sp.className || '').includes('UpdateNotification')) continue;
+                    const n = parseFloat(sp.textContent.trim());
+                    if (n > 1.01 && n < 100 && /^\d+(\.\d{1,4})?$/.test(sp.textContent.trim())) { curOdds = n; break; }
+                  }
+                }
+                if (curOdds > 1 && Math.abs(curOdds - tOdds) > 0.06) {
+                  return { ok: false, reason: `배당 변경: 목표=${tOdds}, 현재=${curOdds}`, oddsChanged: true };
+                }
               }
             }
-          }
-          // 금액 입력 (BTI React 앱 - nativeInputValueSetter 사용)
-          const input = document.getElementById('counter')
-            || document.querySelector('input[class*="CounterSecondary_input"], input[placeholder="베팅금"]')
-            || document.querySelector('input[class*="counter"]');
-          if (!input) return { ok: false, reason: '금액 input 없음 (input#counter)' };
-          input.focus();
-          input.select();
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSetter.call(input, String(amt));
-          input.dispatchEvent(new Event('focus', { bubbles: true }));
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-          input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
-          input.dispatchEvent(new Event('blur', { bubbles: true }));
-          return { ok: true };
-        } catch(e) { return { ok: false, reason: e.message }; }
-      }, [oppBet, bSlip.line, lineTolerance, bSlip.odds]);
+            const input = document.getElementById('counter')
+              || document.querySelector('input[class*="CounterSecondary_input"], input[placeholder="베팅금"]')
+              || document.querySelector('input[class*="counter"]');
+            if (!input) return { ok: false, reason: '금액 input 없음' };
+            input.focus();
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeSetter.call(input, String(amt));
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true };
+          } catch (e) { return { ok: false, reason: e.message }; }
+        }, [oppBet, bSlip.line, lineTolerance, bSlip.odds]);
 
-      if (!btiStep1 || !btiStep1.ok) {
-        const reason = btiStep1?.reason || '응답 없음';
-        addLog(`❌ BTI 사전검증/금액입력 실패: ${reason}`, 'error');
-        betInProgress = false; return;
-      }
-      addLog('BTI 금액 입력 완료, 버튼 활성화 대기...', 'info');
-      await new Promise(r => setTimeout(r, 800)); // 버튼 활성화 대기
-
-      // 2단계: 베팅 버튼 클릭
-      oppResult = await execAsyncInTab(opponentTab, function() {
-        try {
-          const allBtns = Array.from(document.querySelectorAll('button')).filter(
-            b => !b.disabled && !b.hasAttribute('disabled') && !(b.className || '').includes('disabled')
-          );
-          let betBtn = null;
-          for (const btn of allBtns) {
-            if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
-              betBtn = btn; break;
-            }
-          }
-          if (!betBtn) {
-            for (const btn of allBtns) {
-              if ((btn.className || '').includes('PlaceBetBlock') && !(btn.className || '').includes('clearAll')) {
-                betBtn = btn; break;
-              }
-            }
-          }
-          if (!betBtn) {
-            for (const btn of allBtns) {
-              const t = btn.textContent.trim();
-              if (t === '베팅하기' || t === 'Place Bet' || t === 'Bet Now') { betBtn = btn; break; }
-            }
-          }
-          if (!betBtn) {
-            for (const btn of allBtns) {
-              const t = btn.textContent.trim();
-              const cls = btn.className || '';
-              if (t.includes('전체') || t.includes('리그') || t.includes('정리') || cls.includes('clearAll')) continue;
-              if (t.includes('베팅') || t.includes('확인')) { betBtn = btn; break; }
-            }
-          }
-          if (!betBtn) {
-            const debugBtns = allBtns.slice(0,6).map(b => `"${b.textContent.trim().substring(0,20)}"[${(b.className||'').substring(0,25)}]`).join(' | ');
-            return { success: false, reason: `베팅버튼없음 | btns: ${debugBtns}` };
-          }
-          betBtn.click();
-          return { success: true, btnText: betBtn.textContent.trim().substring(0,20) };
-        } catch(e) { return { success: false, reason: e.message }; }
-      }, []);
-
-      // 3단계: BTI 승인 버튼 클릭 (베팅하기 클릭 후 나타나는 확인/승인 버튼)
-      if (oppResult && oppResult.success) {
-        addLog('BTI 베팅하기 클릭 완료, 승인 버튼 대기...', 'info');
-        const btiConfirm = await execAsyncInTab(opponentTab, function() {
-          return new Promise(resolve => {
-            const MAX_WAIT = 4000;
-            const INTERVAL = 150;
-            let elapsed = 0;
-            function findConfirm() {
-              try {
-                const allBtns = Array.from(document.querySelectorAll('button'));
-                let confirmBtn = null;
-
-                // 1순위: 승인/확인/OK 텍스트 버튼 (활성화된 것만)
-                for (const b of allBtns) {
-                  if (b.disabled) continue;
-                  const t = b.textContent.trim();
-                  const cls = b.className || '';
-                  if (t === '승인' || t === '확인' || t === 'OK' || t === 'Confirm' ||
-                      t === '베팅 승인' || t === '베팅확인' || t === 'Accept' ||
-                      t === '베팅 확인' || t === 'Approve') {
-                    confirmBtn = b; break;
-                  }
-                }
-                // 2순위: modal/dialog/overlay 안의 확인 버튼
-                if (!confirmBtn) {
-                  const modals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="overlay"], [class*="Overlay"], [class*="popup"], [class*="Popup"]');
-                  for (const modal of modals) {
-                    const btns = Array.from(modal.querySelectorAll('button')).filter(b => !b.disabled);
-                    for (const b of btns) {
-                      const t = b.textContent.trim();
-                      if (t.includes('승인') || t.includes('확인') || t.includes('OK') || t.includes('Confirm') || t.includes('Accept')) {
-                        confirmBtn = b; break;
-                      }
-                    }
-                    if (confirmBtn) break;
-                  }
-                }
-                // 3순위: BetConfirm, ConfirmBet 클래스 포함 버튼
-                if (!confirmBtn) {
-                  for (const b of allBtns) {
-                    if (b.disabled) continue;
-                    const cls = b.className || '';
-                    if (cls.includes('BetConfirm') || cls.includes('ConfirmBet') || cls.includes('confirm') || cls.includes('Confirm')) {
-                      const t = b.textContent.trim();
-                      if (t.length > 0 && !t.includes('취소') && !t.includes('Cancel')) {
-                        confirmBtn = b; break;
-                      }
-                    }
-                  }
-                }
-                // 4순위: sportsbook-Button 클래스 중 승인/확인 텍스트
-                if (!confirmBtn) {
-                  for (const b of allBtns) {
-                    if (b.disabled) continue;
-                    const cls = b.className || '';
-                    const t = b.textContent.trim();
-                    if (cls.includes('sportsbook-Button') && (t.includes('승인') || t.includes('확인') || t.includes('Confirm') || t.includes('Accept'))) {
-                      confirmBtn = b; break;
-                    }
-                  }
-                }
-
-                if (confirmBtn) {
-                  confirmBtn.click();
-                  resolve({ confirmed: true, btnText: confirmBtn.textContent.trim().substring(0,20), elapsed });
-                  return;
-                }
-                elapsed += INTERVAL;
-                if (elapsed >= MAX_WAIT) {
-                  // 승인 버튼이 없으면 베팅이 이미 완료된 것으로 간주 (일부 BTI 버전은 승인 없이 바로 처리)
-                  resolve({ confirmed: true, btnText: '없음(자동완료)', elapsed });
-                  return;
-                }
-                setTimeout(findConfirm, INTERVAL);
-              } catch(e) { resolve({ confirmed: false, reason: e.message }); }
-            }
-            findConfirm();
-          });
-        }, []);
-        if (btiConfirm && btiConfirm.confirmed) {
-          addLog(`✅ BTI 승인 완료 ["${btiConfirm.btnText}"] (${btiConfirm.elapsed}ms)`, 'success');
-        } else {
-          addLog(`⚠️ BTI 승인 버튼 오류: ${btiConfirm?.reason || '알 수 없음'}`, 'warn');
+        if (!btiStep1?.ok) {
+          addLog(`❌ BTI 사전검증/금액입력 실패: ${btiStep1?.reason || btiStep1?.error || '응답 없음'}`, 'error');
+          betInProgress = false;
+          return;
         }
-        oppResult = btiConfirm && btiConfirm.confirmed ? { success: true } : { success: false, reason: btiConfirm?.reason };
+        await new Promise((r) => setTimeout(r, 800));
+        oppResult = await execAsyncInTab(btiTab, btiClickBetBtnInject, []);
+        if (oppResult?.success) {
+          const btiConfirm = await execAsyncInTab(btiTab, btiConfirmBetInject, []);
+          if (btiConfirm?.confirmed) {
+            addLog(`✅ BTI 승인 완료 ["${btiConfirm.btnText}"]`, 'success');
+            oppResult = { success: true };
+          } else {
+            addLog(`❌ BTI 승인 실패: ${btiConfirm?.reason || '?'} (슬립잔존=${btiConfirm?.slipLeft})`, 'error');
+            oppResult = { success: false, reason: btiConfirm?.reason || '승인 실패' };
+          }
+        }
+      } else {
+        addLog(`✅ BTI content script 베팅 성공${oppResult.btnText ? ` ["${oppResult.btnText}"]` : ''}`, 'success');
       }
     }
     if (!oppResult || !oppResult.success) {
