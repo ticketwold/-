@@ -361,13 +361,22 @@ async function readPolySlipFromTab(polyTab) {
 }
 
 async function readBtiSlipFromFrame(tabId, frameId) {
+  let slip = null;
   try {
     const msg = await new Promise((resolve) => {
       chrome.tabs.sendMessage(tabId, { type: 'READ_SLIP' }, { frameId }, (res) => resolve(res));
     });
-    if (msg?.slip?.odds > 1) return msg.slip;
+    if (msg?.slip) slip = msg.slip;
   } catch (_) {}
-  return execInTab({ id: tabId, frameId }, btiReadSlipFn);
+
+  try {
+    const injected = await execInTab({ id: tabId, frameId }, btiReadSlipFn);
+    if (injected?.odds > 1) {
+      if (!slip?.odds || Math.abs(injected.odds - slip.odds) > 0.001) return injected;
+    }
+  } catch (_) {}
+
+  return (slip?.odds > 1) ? slip : null;
 }
 // pbc00.com / x10x10s.com URL에서 gamecode로 BTI/피나클 구분 (레거시 호환)
 function isPbcBtiUrlLegacy(url) {
@@ -2370,15 +2379,13 @@ async function polyPollLoop() {
   const { btiTab, polyTab } = await findTabs();
   if (!btiTab || !polyTab) { updateUI(null, null, null); return; }
 
-  const _cachedBti = cachedBtiSlip;
-  const _cachedPoly = cachedPolySlip;
-  cachedBtiSlip = null;
-  cachedPolySlip = null;
-
   const [bSlip, pSlip] = await Promise.all([
-    _cachedBti ? Promise.resolve(_cachedBti) : readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0),
-    _cachedPoly ? Promise.resolve(_cachedPoly) : readPolySlipFromTab(polyTab)
+    readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0),
+    readPolySlipFromTab(polyTab)
   ]);
+
+  if (bSlip) cachedBtiSlip = bSlip;
+  if (pSlip) cachedPolySlip = pSlip;
 
   if (!bSlip || !pSlip || !bSlip.odds || !pSlip.odds) {
     updateUI(bSlip, pSlip, null);

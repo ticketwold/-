@@ -33,6 +33,21 @@ const BTI_TO_PIN_SPORT = {
   2: 33    // 테니스
 };
 
+// BTI 스포츠 ID → 라벨 (서치 표시용)
+const BTI_SPORT_LABEL = {
+  1: '축구', 6: '야구', 7: '농구', 59: '이스포츠', 2: '테니스'
+};
+
+function parseBtiSelectionPrice(s) {
+  if (!s) return 0;
+  const fields = [s.Price, s.DisplayPrice, s.Odds, s.Decimal, s.price, s.FinalPrice];
+  for (const f of fields) {
+    const n = parseFloat(f);
+    if (n > 1.001 && n < 500) return n;
+  }
+  return 0;
+}
+
 // BTI 마켓 타입
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0%2CML39%2COU39%2CHC39%2CML587';
 
@@ -1817,21 +1832,21 @@ function parseBtiOdds(markets) {
     if (typeId.startsWith('ML')) {
       for (const s of sels) {
         const side = s.Side || '';
-        const odds = parseFloat(s.Price) || 0;
+        const odds = parseBtiSelectionPrice(s);
         if (odds > 1) result.ml.push({ side, odds, name: s.Name || s.TeamName || '' });
       }
     } else if (typeId.startsWith('HC')) {
       for (const s of sels) {
         const side = s.Side || '';
         const line = parseFloat(s.Points || s.Handicap || 0);
-        const odds = parseFloat(s.Price) || 0;
+        const odds = parseBtiSelectionPrice(s);
         if (odds > 1) result.ah.push({ side, line, odds, name: s.Name || s.TeamName || '' });
       }
     } else if (typeId.startsWith('OU')) {
       for (const s of sels) {
         const side = s.Side || '';
         const line = parseFloat(s.Points || s.Total || 0);
-        const odds = parseFloat(s.Price) || 0;
+        const odds = parseBtiSelectionPrice(s);
         if (odds > 1) result.ou.push({ side, line, odds, name: s.Name || s.TeamName || '' });
       }
     }
@@ -2151,9 +2166,9 @@ async function getPolymarketSportsMatchups(limit = 120) {
 
 function findPolyArbitrageOpportunities(btiMatchups, polyMatchups, sportId) {
   const opportunities = [];
-  const sportLabel = PIN_SPORT_LABEL[sportId] || '스포츠';
   for (const bti of btiMatchups) {
-    if (bti.sportId && bti.sportId !== sportId) continue;
+    if (sportId && bti.sportId && bti.sportId !== sportId) continue;
+    const sportLabel = BTI_SPORT_LABEL[bti.sportId] || PIN_SPORT_LABEL[sportId] || '스포츠';
     const btiOdds = bti.rawRow ? parseBtiOddsFromRow(bti.rawRow) : parseBtiOdds(bti.markets || []);
     const mlH = btiOdds.ml.find((m) => m.side === 'H' || m.side === 'Home');
     const mlA = btiOdds.ml.find((m) => m.side === 'A' || m.side === 'Away');
@@ -2215,7 +2230,7 @@ async function runSearchOnce() {
     console.warn('[Polymarket] API 실패:', e.message);
   }
   const polyTab = await findPolymarketTab();
-  const opps = findPolyArbitrageOpportunities(btiAll, polyAll, 29);
+  const opps = findPolyArbitrageOpportunities(btiAll, polyAll, 0);
   return {
     opportunities: opps,
     stats: {

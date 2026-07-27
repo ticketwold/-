@@ -13,6 +13,78 @@
 // ─ 금액 입력: input#counter (class: betslip_fe_CounterSecondary_input)
 // ─ 베팅 버튼: button.sportsbook-Button (텍스트: "베팅하기")
 
+// BTI content script v2.23
+
+function parseOddsText(txt) {
+  const t = String(txt || '').trim();
+  const n = parseFloat(t);
+  if (!n || n <= 1.01 || n >= 100) return null;
+  if (!/^\d+(\.\d{1,4})?$/.test(t)) return null;
+  return n;
+}
+
+function readOddsFromSlipCard(card) {
+  if (!card) return null;
+  for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
+    const n = parseOddsText(sp.textContent);
+    if (n) return n;
+  }
+  const atM = (card.textContent || '').match(/@\s*(\d+(?:\.\d{1,4})?)/);
+  if (atM) {
+    const n = parseOddsText(atM[1]);
+    if (n) return n;
+  }
+  for (const sp of card.querySelectorAll('span')) {
+    if ((sp.className || '').includes('UpdateNotification')) continue;
+    const n = parseOddsText(sp.textContent);
+    if (n) return n;
+  }
+  return null;
+}
+
+function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
+  const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+  if (!selectionText) return null;
+
+  const slipLineMatch = selectionText.match(/([+-]\d+\.?\d*)\s*$/);
+  const slipLine = slipLineMatch ? parseFloat(slipLineMatch[1]) : null;
+  const teamName = slipLine !== null
+    ? selectionText.replace(slipLineMatch[0], '').trim()
+    : selectionText.replace(/^W[12]\s*/i, '').trim();
+  const teamClean = teamName.replace(/\s+/g, '').toLowerCase();
+
+  // ML: MoneyLineSelection 순서 (첫=home, 마지막=away)
+  if (slipMktType === 'ml' && teamClean.length > 1) {
+    const mlLines = Array.from(document.querySelectorAll('[class*="MoneyLineSelection_line"]'));
+    if (mlLines.length >= 2) {
+      for (let i = 0; i < mlLines.length; i++) {
+        const lineText = (mlLines[i].textContent || '').replace(/\s+/g, '').toLowerCase();
+        if (!lineText.includes(teamClean) && !teamClean.includes(lineText.slice(0, 6))) continue;
+        const oddsEl = mlLines[i].querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]');
+        const n = oddsEl ? parseOddsText(oddsEl.textContent) : null;
+        if (n) return n;
+        const btn = mlLines[i].querySelector('button') || mlLines[i];
+        const parsed = parseSelectionButton(btn);
+        if (parsed?.odds) return parsed.odds;
+      }
+    }
+  }
+
+  let best = null;
+  for (const btn of allBtns) {
+    const parsed = parseSelectionButton(btn);
+    if (!parsed) continue;
+    const btnClean = (parsed.label || parsed.rawText || '').replace(/\s+/g, '').toLowerCase();
+    if (teamClean.length > 1 && !btnClean.includes(teamClean) && !teamClean.includes(btnClean.slice(0, 6))) {
+      continue;
+    }
+    if (slipLine !== null && parsed.line != null && Math.abs(parsed.line - slipLine) > 0.02) continue;
+    if (!best || parsed.odds) best = parsed.odds;
+    if (teamClean.length > 1 && btnClean.includes(teamClean)) return parsed.odds;
+  }
+  return best;
+}
+
 function readBtiSlip() {
   // ── 1. 슬립 카드 탐색 ──
   const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
@@ -42,15 +114,25 @@ function readBtiSlip() {
 
   const allText = selectionText + ' ' + mktText + ' ' + marketTitleText;
 
-  // ── 3. 배당판 버튼에서 배당 읽기 ──
-  // 슬립 선택명으로 배당판 버튼 매칭
-  let odds = null;
+  const slipMktType = (function() {
+    const t = allText.toLowerCase();
+    if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
+    if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
+    if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
+    return 'ml';
+  })();
+
+  // ── 3. 배당 읽기: 슬립 카드 → 배당판(실시간) 우선 ──
+  let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  const slipCardOdds = readOddsFromSlipCard(card);
+  if (!odds && slipCardOdds) odds = slipCardOdds;
+
   let matchedLine = null;
   let matchedSide = null;
 
   const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
 
-  if (selectionText) {
+  if (!odds && selectionText) {
     // 슬립 선택명에서 팀명과 기준점 분리
     // 예: "LG 트윈스 +5.5" → teamName="LG 트윈스", slipLine=+5.5
     // 예: "언더 16" → ouMatch
@@ -97,15 +179,6 @@ function readBtiSlip() {
     // 마켓 타입(ML/AH/OU)에 맞는 버튼 우선 선택
     // 예: selectionText="삼성 라이온스", 마켓="승패" → points에 기준점 없는 ML 버튼 우선
     if (!odds) {
-      // 슬립 마켓명으로 타입 미리 판별
-      const slipMktType = (function() {
-        const t = allText.toLowerCase();
-        if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
-        if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
-        if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
-        return 'ml';
-      })();
-
       const candidates = [];
       for (const btn of allBtns) {
         const btnText = btn.textContent || '';
@@ -229,6 +302,7 @@ function readBtiSlip() {
   }
 
   // 배당을 못 찾아도 기준점/마켓 정보는 반환
+  if (!odds && slipCardOdds) odds = slipCardOdds;
   if (!odds) odds = 0;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
@@ -703,7 +777,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PING') {
     sendResponse({
       ok: true,
-      version: '2.21',
+      version: '2.23',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -717,11 +791,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 (function startBtiObserver() {
   let lastOddsKey = '';
   let debounceTimer = null;
+  let pollTimer = null;
 
   function checkAndNotify() {
     const slip = readBtiSlip();
-    if (!slip) return;
-    const key = `${slip.odds}_${slip.marketKey}_${slip.selectionText}`;
+    if (!slip || !slip.odds || slip.odds <= 1) return;
+    const key = `${slip.odds.toFixed(4)}_${slip.marketKey}_${slip.selectionText}`;
     if (key === lastOddsKey) return;
     lastOddsKey = key;
     try {
@@ -731,12 +806,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function scheduleCheck() {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(checkAndNotify, 30);
+    debounceTimer = setTimeout(checkAndNotify, 25);
   }
 
-  const observer = new MutationObserver(scheduleCheck);
-  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
-  checkAndNotify();
+  if (document.body) {
+    const obs = new MutationObserver(scheduleCheck);
+    obs.observe(document.body, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true, attributeFilter: ['class', 'data-testid', 'aria-label']
+    });
+    document.addEventListener('input', scheduleCheck, true);
+    pollTimer = setInterval(checkAndNotify, 400);
+    scheduleCheck();
+  }
 })();
 
-console.log('[BTI봇] content script 로드됨 (v2.20)');
+console.log('[텐텐뱃] content script v2.23');
