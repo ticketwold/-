@@ -29,26 +29,20 @@ let selectedOpp = null;
 // background 메시지 수신 (ODDS_CHANGED + SEARCH_RESULT)
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'ODDS_CHANGED') {
-    if (msg.source === 'pinnacle' && msg.slip) {
-      const prevKey = cachedPinSlip ? cachedPinSlip.marketKey : null;
-      cachedPinSlip = msg.slip;
-      // 피나클 클릭 시 BTI 자동 반대편 담기 (autoMirror ON 시)
-      if (autoMirrorEnabled && msg.slip.marketKey && msg.slip.marketKey !== prevKey) {
-        autoMirrorToBti(msg.slip);
-      }
+    if (msg.source === 'pinnacle') {
+      return;
     }
     if (msg.source === 'bti' && msg.slip) cachedBtiSlip = msg.slip;
-    if (msg.source === 'sbobet' && msg.slip) cachedSboSlip = msg.slip;
     if (msg.source === 'polymarket' && msg.slip) cachedPolySlip = msg.slip;
     if (botRunning && !betInProgress && !pendingPollTrigger) {
       pendingPollTrigger = true;
-      setTimeout(() => { pendingPollTrigger = false; pollLoop(); }, 0);
+      setTimeout(() => { pendingPollTrigger = false; polyPollLoop(); }, 0);
     }
     return;
   }
   if (msg.type === 'SEARCH_RESULT') {
     renderSearchResult(msg);
-    if (msg.stats) addLog(`서치: 피나클 ${(msg.stats.pinSoccer||0)+(msg.stats.pinBaseball||0)+(msg.stats.pinBasketball||0)}경기 / BTI ${msg.stats.btiTotal||0}경기 / 매칭 ${msg.stats.matched||0}개`, 'info');
+    if (msg.stats) addLog(`서치: 텐텐뱃 ${msg.stats.btiTotal||0}경기 / Poly ${msg.stats.polyTotal||0}경기 / 양방 ${msg.stats.matched||0}개`, 'info');
     return;
   }
   if (msg.type === 'SEARCH_ERROR') {
@@ -56,41 +50,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     return;
   }
   if (msg.type === 'PREMATCH_SEARCH_RESULT') {
-    renderPrematchResult(msg);
-    if (msg.stats) {
-      const s = msg.stats;
-      const src = s.btiDataSource ? ` [BTI:${s.btiDataSource}]` : '';
-      const teamN = s.teamMatched ?? s.matched ?? 0;
-      const arbN = s.arbOpps ?? s.matched ?? 0;
-      addLog(`프리매치: 피나클 ${s.pinTotal||0} / BTI ${s.btiTotal||0} / 팀매칭 ${teamN} / 양방 ${arbN}${src}`, 'info');
-      if ((s.pinKoHangul || 0) > 0) {
-        addLog(`PIN 한글 ${s.pinKoHangul}건`, 'info');
-      } else if ((s.btiEnriched || 0) === 0) {
-        addLog('⚠️ PIN 한글·BTI 영문 모두 부족 — 팀명 진단 실행 권장', 'warn');
-      }
-      if ((s.teamMatched || 0) > 0 && (s.arbOpps || 0) === 0) {
-        addLog(`팀 ${s.teamMatched}건 매칭됐으나 양방 0 — BTI배당 ${s.btiWithMarkets||0}건 / 수익률 조건`, 'warn');
-      }
-      if (s.btiDataSource === 'featured') {
-        addLog('⚠️ BTI eventlist 실패 → featured 폴백 (소량일 수 있음)', 'warn');
-      }
-      if ((s.btiLiveFiltered || 0) > 0) {
-        addLog(`BTI 라이브 ${s.btiLiveFiltered}건 제외`, 'info');
-      }
-    }
     return;
   }
   // 미리보기 업데이트
   if (!botRunning) {
-    if (isPolySlipMode()) {
-      const b = cachedBtiSlip, p = cachedPolySlip;
-      const profit = (b && p && b.odds > 1 && p.odds > 1) ? calcProfit(b.odds, p.odds) : null;
-      updateUI(b, p, profit);
-    } else {
-      const p = cachedPinSlip, b = cachedBtiSlip;
-      const profit = (p && b && p.odds > 1 && b.odds > 1) ? calcProfit(p.odds, b.odds) : null;
-      updateUI(p, b, profit);
-    }
+    const b = cachedBtiSlip, p = cachedPolySlip;
+    const profit = (b && p && b.odds > 1 && p.odds > 1) ? calcProfit(b.odds, p.odds) : null;
+    updateUI(b, p, profit);
   }
 });
 
@@ -316,7 +282,7 @@ const POLYMARKET_PATTERNS = SITE_CONFIG.POLYMARKET_HOSTS;
 
 function isWrapperUrl(url) { return isSiteWrapperUrl(url); }
 function isPbcBtiUrl(url) { return isWrapperBtiUrl(url); }
-function isPbcPinnacleUrl(url) { return isWrapperPinUrl(url); }
+function isPbcPinnacleUrl(url) { return false; }
 
 function isPolymarketGameUrl(url) { return isPolymarketUrl(url); }
 
@@ -412,50 +378,27 @@ function isPbcBtiUrlLegacy(url) {
 }
 
 // ─── 탭 탐색 ─────────────────────────────────────────────────────────
-// 반환: { pinTab, pinSlipTab, btiTab, polyTab, sboTab }
+// 반환: { btiTab, polyTab }
 async function findTabs() {
   const tabs = await chrome.tabs.query({});
-  let pinTab = null, pinSlipTab = null, btiTab = null, sboTab = null, polyTab = null;
+  let btiTab = null, polyTab = null;
 
   const directPoly = tabs.filter((t) => isPolymarketGameUrl(t.url));
   if (directPoly.length) polyTab = { ...directPoly[directPoly.length - 1], frameId: 0 };
 
-  const allDirectPin = tabs.filter(t => isPinnacleGameUrl(t.url));
-  const directPin = allDirectPin.length > 0 ? allDirectPin[allDirectPin.length - 1] : null;
-  if (directPin) {
-    pinTab = { ...directPin, frameId: 0 };
-    pinSlipTab = { ...directPin, frameId: 0 };
-  }
-
-  const directBti = tabs.find(t => isBtiUrl(t.url) && !isWrapperUrl(t.url));
-  if (directBti) btiTab = { ...directBti, frameId: 0 };
-
-  const directSbo = tabs.find(t => isSbobetUrl(t.url));
-  if (directSbo) sboTab = { ...directSbo, frameId: 0 };
-
-  const scorePbcBti = (url) => scoreWrapperBtiTab(url);
   const allWrapperTabs = tabs
     .filter(t => t.url && isWrapperUrl(t.url))
     .sort((a, b) => scoreWrapperBtiTab(b.url) - scoreWrapperBtiTab(a.url));
-  const allWgTabs = tabs.filter(t => t.url && isSbobetWrapperUrl(t.url));
 
-  for (const wTab of [...allWrapperTabs, ...allWgTabs]) {
+  for (const wTab of allWrapperTabs) {
     const frames = await getAllFrames(wTab.id);
     for (const frame of frames) {
-      if (isPinnacleGameUrl(frame.url) && !frame.url.includes('dp-iframe')) {
-        pinTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-        pinSlipTab = pinTab;
-      }
       if (!btiTab && isBtiFrameUrl(frame.url)) {
         btiTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
-      }
-      if (!sboTab && isSbobetUrl(frame.url)) {
-        sboTab = { id: wTab.id, url: frame.url, frameId: frame.frameId };
       }
     }
   }
 
-  // BTI iframe URL 미매칭 시 — pbc00 모든 프레임에서 슬립 프로브
   if (!btiTab && allWrapperTabs.length) {
     for (const wrap of allWrapperTabs) {
       const frames = await getAllFrames(wrap.id);
@@ -472,7 +415,7 @@ async function findTabs() {
     }
   }
 
-  return { pinTab, pinSlipTab, btiTab, sboTab, polyTab };
+  return { btiTab, polyTab };
 }
 
 // ─── 마켓 매칭 키 생성 헬퍼 ──────────────────────────────────────────
@@ -1828,8 +1771,7 @@ function formatSlipMarket(slip) {
 }
 
 function isPolySlipMode() {
-  const el = document.getElementById('searchMode');
-  return !el || el.value === 'poly';
+  return true;
 }
 
 // ─── UI 업데이트 ──────────────────────────────────────────────────────
@@ -1840,8 +1782,8 @@ function updateUI(pSlip, bSlip, profit) {
   const statusEl = document.getElementById('status');
   const pLabel = document.querySelector('#tab-slip label[for="pSlipBox"], #tab-slip .section label');
   const slipLabels = document.querySelectorAll('#tab-slip .section > div:first-child label');
-  if (slipLabels.length >= 2 && isPolySlipMode()) {
-    slipLabels[0].textContent = '10벳 (BTI)';
+  if (slipLabels.length >= 2) {
+    slipLabels[0].textContent = '텐텐뱃';
     slipLabels[1].textContent = 'Polymarket';
   }
   if (pOddsEl) pOddsEl.textContent = formatSlipOdds(pSlip);
@@ -2802,13 +2744,9 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
 // ─── 자동 서치 UI ────────────────────────────────────────────────────
 function renderSearchResult(msg) {
   const { opportunities, stats } = msg;
-  // 통계 표시
   const statsEl = document.getElementById('searchStats');
   if (statsEl && stats) {
-    const sboInfo = stats.hasSboToken
-      ? ` │ SBO: 축구 ${stats.sboSoccer||0}/야구 ${stats.sboBaseball||0}/농구 ${stats.sboBasketball||0}`
-      : ' │ SBO: 토큰없음';
-    statsEl.textContent = `피나클: 축구 ${stats.pinSoccer||0}/야구 ${stats.pinBaseball||0}/농구 ${stats.pinBasketball||0} │ BTI: ${stats.btiTotal||0}${sboInfo} │ 매칭: ${stats.matched||0}`;
+    statsEl.textContent = `텐텐뱃: ${stats.btiTotal || 0}경기 │ Polymarket: ${stats.polyTotal || 0}경기 │ 양방: ${stats.matched || 0}개`;
   }
   const oppList = document.getElementById('oppList');
   const oppCount = document.getElementById('oppCount');
@@ -2826,20 +2764,21 @@ function renderSearchResult(msg) {
 
   oppList.innerHTML = filtered.map((opp, idx) => {
     const profit = parseFloat(opp.profit);
-    const profitCls = profit >= 5 ? 'style="color:#4ade80"' : profit >= 0 ? 'style="color:#fbbf24"' : 'style="color:#f87171"';
+    const polyOdds = opp.pinOdds || opp.polyOdds;
+    const tenOdds = typeof opp.btiOdds === 'number' ? opp.btiOdds.toFixed(3) : opp.btiOdds;
+    const polyLabel = opp.polyTeam || opp.pinSide || 'Poly';
     return `<div class="opp-item" data-idx="${idx}" onclick="selectOpp(${idx})">
       <span class="opp-profit ${profit < 1 ? 'zero' : ''}">${profit.toFixed(2)}%</span>
       <div class="opp-teams">${opp.home} vs ${opp.away}</div>
       <div class="opp-detail">
         <span class="opp-badge">${opp.sport}</span>
         <span class="opp-badge">${opp.market}</span>
-        피나클 ${opp.pinSide} ${opp.pinOdds?.toFixed(3)} │ ${opp.opponent||'BTI'} ${opp.btiSide} ${opp.btiOdds?.toFixed(3)}
+        텐텐뱃 ${opp.btiSide} ${tenOdds} │ Poly ${polyLabel} ${polyOdds}
       </div>
       <div class="opp-detail" style="margin-top:2px; color:#555;">${opp.league || ''}</div>
     </div>`;
   }).join('');
 
-  // 전역 저장
   window._lastOpportunities = filtered;
 }
 
@@ -3185,16 +3124,9 @@ function readSettings() {
 function startBot() {
   readSettings();
   botRunning = true; betInProgress = false; lastOddsKey = null; lastBtiLineKey = null;
-  const polyMode = isPolySlipMode();
   const mktInfo = manualMarket ? ` | 마켓: ${manualMarket.period} ${manualMarket.type} ${manualMarket.side}` : ' | 자동 감지';
+  addLog(`봇 시작 [텐텐뱃+Poly] ${minBetAmount.toLocaleString()}원 · 환율 ${usdtRate}원/USD · 허용오차 ±${lineTolerance}${mktInfo}`, 'info');
 
-  if (polyMode) {
-    addLog(`봇 시작 [10벳+Poly] 텐텐뱃 ${minBetAmount.toLocaleString()}원 · 환율 ${usdtRate}원/USD · 허용오차 ±${lineTolerance}${mktInfo}`, 'info');
-  } else {
-    addLog(`봇 시작 (최소 베팅: ${minBetAmount.toLocaleString()}원, 허용오차: ±${lineTolerance}${mktInfo})`, 'info');
-  }
-
-  // BTI 베팅카트 자동 금액 지우기 (최소베팅금액 자동입력 제거)
   findTabs().then(({ btiTab }) => {
     if (!btiTab) return;
     execAsyncInTab(btiTab, function() {
@@ -3209,12 +3141,12 @@ function startBot() {
         return { ok: true };
       } catch(e) { return { ok: false, reason: e.message }; }
     }, []).then(res => {
-      if (res && res.ok) addLog('BTI 베팅카트 금액 자동 제거 완료', 'info');
+      if (res && res.ok) addLog('텐텐뱃 베팅카트 금액 자동 제거 완료', 'info');
     }).catch(() => {});
   }).catch(() => {});
 
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(polyMode ? polyPollLoop : pollLoop, POLL_INTERVAL_MS);
+  pollTimer = setInterval(polyPollLoop, POLL_INTERVAL_MS);
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
   updateUI(null, null, null);
@@ -3282,27 +3214,18 @@ document.addEventListener('DOMContentLoaded', () => {
     searchRunning = true;
     startSearchBtn.disabled = true;
     stopSearchBtn.disabled = false;
-    const searchModeEl = document.getElementById('searchMode');
-    const searchModeVal = searchModeEl ? searchModeEl.value : 'poly';
-    const modeLabel = {
-      poly: '10x10+Polymarket',
-      bti: '피나클+BTI',
-      sbo: '피나클+SBO',
-      both: 'BTI+SBO 전체'
-    }[searchModeVal] || searchModeVal;
-    addLog(`자동 서치 시작... (모드: ${modeLabel})`, 'info');
-    chrome.runtime.sendMessage({ type: 'START_SEARCH', mode: searchModeVal }, (resp) => {
+    addLog('자동 서치 시작... (텐텐뱃 + Polymarket)', 'info');
+    chrome.runtime.sendMessage({ type: 'START_SEARCH', mode: 'poly' }, (resp) => {
       if (resp && resp.ok && resp.result) {
         renderSearchResult({ type: 'SEARCH_RESULT', ...resp.result });
         const s = resp.result.stats || {};
-        const pinTotal = (s.pinSoccer||0)+(s.pinBaseball||0)+(s.pinBasketball||0);
-        if (s.btiTabFound === false && (searchModeVal === 'bti' || searchModeVal === 'both' || searchModeVal === 'poly')) {
-          addLog('⚠️ 10벳(BTI) 탭 미발견 — x10x10s.com 스포츠 화면을 열어주세요', 'warn');
+        if (s.btiTabFound === false) {
+          addLog('⚠️ 텐텐뱃 탭 미발견 — x10x10s.com 스포츠 화면을 열어주세요', 'warn');
         }
-        if (searchModeVal === 'poly' && s.polyTabFound === false) {
+        if (s.polyTabFound === false) {
           addLog('💡 Polymarket 탭도 열어두면 슬립 비교가 가능합니다', 'info');
         }
-        addLog(`서치 완료: 피나클 ${pinTotal}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
+        addLog(`서치 완료: 텐텐뱃 ${s.btiTotal||0}경기 / Poly ${s.polyTotal||0}경기 / 양방 ${s.matched||0}개`, 'success');
       } else if (resp && !resp.ok) {
         addLog('서치 오류: ' + (resp.error || '알 수 없음'), 'error');
       }
@@ -3442,7 +3365,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!s) return;
     if (s.minBet) document.getElementById('minBet').value = s.minBet;
     if (s.usdtRate) { usdtRate = s.usdtRate; const el = document.getElementById('usdtRate'); if(el) el.value = s.usdtRate; }
-    if (s.anchorSite) { anchorSite = s.anchorSite; updateSiteSelectUI(); }
     if (s.lineTolerance !== undefined) document.getElementById('lineTolerance').value = s.lineTolerance;
     const autoEl = document.getElementById('autoDetect');
     if (autoEl && s.autoDetect !== undefined) {
@@ -3618,36 +3540,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── 봇 시작 전 슬립 미리보기 (0.5초마다) ──
   async function previewSlip() {
     if (botRunning) return;
-    const { pinSlipTab, btiTab, sboTab, polyTab } = await findTabs();
-    const polyMode = isPolySlipMode();
+    const { btiTab, polyTab } = await findTabs();
 
-    let leftSlip = null;
-    let rightSlip = null;
-
-    if (polyMode) {
-      leftSlip = cachedBtiSlip;
-      rightSlip = cachedPolySlip;
-      if (!leftSlip && btiTab) {
-        leftSlip = await readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0);
-      }
-      if (!rightSlip && polyTab) {
-        rightSlip = await readPolySlipFromTab(polyTab);
-      }
-    } else {
-      const opponentTab = sboTab || btiTab;
-      if (sboTab) { window._sboTabId = sboTab.id; window._sboFrameId = sboTab.frameId || 0; }
-      leftSlip = cachedPinSlip;
-      rightSlip = sboTab ? cachedSboSlip : cachedBtiSlip;
-      if (!leftSlip && pinSlipTab) {
-        leftSlip = await execInTab(pinSlipTab, pinnacleReadSlipFn);
-      }
-      if (!rightSlip && opponentTab) {
-        if (!sboTab) {
-          rightSlip = await readBtiSlipFromFrame(opponentTab.id, opponentTab.frameId ?? 0);
-        } else {
-          rightSlip = await execInTab(opponentTab, sbobetReadSlipFn);
-        }
-      }
+    let leftSlip = cachedBtiSlip;
+    let rightSlip = cachedPolySlip;
+    if (!leftSlip && btiTab) {
+      leftSlip = await readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0);
+    }
+    if (!rightSlip && polyTab) {
+      rightSlip = await readPolySlipFromTab(polyTab);
     }
 
     const profit = (leftSlip && rightSlip && leftSlip.odds > 1 && rightSlip.odds > 1)
@@ -3784,207 +3685,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // ── 사이트 선택 버튼 핸들러 ──
-  ['siteSelectPin', 'siteSelectBti', 'siteSelectSbo'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      anchorSite = btn.dataset.site;
-      updateSiteSelectUI();
-      readSettings();
-      // 금액 레이블 및 단위 업데이트
-      updateBetCalc(null, null);
-    });
-  });
-
-  // ── minBet / usdtRate 입력 변경 시 즉시 계산 업데이트 ──
   const minBetEl = document.getElementById('minBet');
   const usdtRateEl = document.getElementById('usdtRate');
   if (minBetEl) minBetEl.addEventListener('input', () => {
     const v = parseFloat(minBetEl.value);
     if (!isNaN(v) && v > 0) {
       minBetAmount = v;
-      if (isPolySlipMode()) updateBetCalc(cachedBtiSlip, cachedPolySlip);
-      else updateBetCalc(cachedPinSlip, cachedBtiSlip || cachedSboSlip);
+      updateBetCalc(cachedBtiSlip, cachedPolySlip);
     }
   });
   if (usdtRateEl) usdtRateEl.addEventListener('input', () => {
     const r = parseFloat(usdtRateEl.value);
     if (!isNaN(r) && r > 0) {
       usdtRate = r;
-      if (isPolySlipMode()) updateBetCalc(cachedBtiSlip, cachedPolySlip);
-      else updateBetCalc(cachedPinSlip, cachedBtiSlip || cachedSboSlip);
+      updateBetCalc(cachedBtiSlip, cachedPolySlip);
     }
   });
-
-  const searchModeEl = document.getElementById('searchMode');
-  if (searchModeEl) {
-    searchModeEl.addEventListener('change', () => {
-      updateSiteSelectUI();
-      if (isPolySlipMode()) updateBetCalc(cachedBtiSlip, cachedPolySlip);
-    });
-  }
-
-  // 초기 UI 상태 설정
-  updateSiteSelectUI();
-
-  // SBO 토큰 상태 확인 - findTabs로 SBO 탭 찾아서 직접 토큰 요청
-  async function checkSboTokenStatus() {
-    const statusEl = document.getElementById('sboTokenStatus');
-    if (!statusEl) return;
-    // 1) background.js에 저장된 토큰 먼저 확인
-    chrome.runtime.sendMessage({ type: 'GET_SBO_TOKEN_STATUS' }, async (bgResp) => {
-      if (bgResp && bgResp.hasToken) {
-        statusEl.textContent = '✅ SBO 토큰: 연결됨';
-        statusEl.style.color = '#4ade80';
-        return;
-      }
-      // 2) SBO 탭 찾아서 execInTab으로 URL에서 토큰 직접 추출 (sendMessage 방식 제거)
-      try {
-        const { sboTab } = await findTabs();
-        if (!sboTab) {
-          statusEl.textContent = '⚠️ SBO 탭 없음 → wg88ss.com SBOBET 페이지를 먼저 열어주세요';
-          statusEl.style.color = '#fbbf24';
-          return;
-        }
-        window._sboTabId = sboTab.id;
-        window._sboFrameId = sboTab.frameId || 0;
-        // execInTab으로 MAIN world에서 URL 파라미터에서 token 직접 추출
-        const tokenInfo = await execInTab(sboTab, function() {
-          const urlParams = new URLSearchParams(window.location.search);
-          const tokenFromUrl = urlParams.get('token');
-          if (tokenFromUrl) {
-            const apiBase = 'https://queennew-prod.' + location.hostname.split('.').slice(-2).join('.');
-            return { token: tokenFromUrl, apiBase, hostname: location.hostname };
-          }
-          // 스크립트 태그에서 토큰 추출 시도
-          try {
-            const scripts = document.querySelectorAll('script');
-            for (const s of scripts) {
-              const t = s.textContent || '';
-              const m = t.match(/["']token["']\s*:\s*["']([A-Za-z0-9+/=%.]+)["']/);
-              if (m && m[1].length > 20) {
-                const apiBase = 'https://queennew-prod.' + location.hostname.split('.').slice(-2).join('.');
-                return { token: decodeURIComponent(m[1]), apiBase, hostname: location.hostname };
-              }
-            }
-          } catch(e) {}
-          return null;
-        });
-        if (!tokenInfo || !tokenInfo.token) {
-          statusEl.textContent = '⚠️ SBO 토큰 추출 실패 → wg88ss.com SBOBET 페이지에서 로그인 후 실행하세요';
-          statusEl.style.color = '#f87171';
-          return;
-        }
-        // 토큰 background.js에 등록
-        chrome.runtime.sendMessage({ type: 'SBOBET_TOKEN', token: tokenInfo.token, apiBase: tokenInfo.apiBase, hostname: tokenInfo.hostname });
-        statusEl.textContent = '✅ SBO 토큰: 연결됨 (' + (tokenInfo.hostname || '') + ')';
-        statusEl.style.color = '#4ade80';
-      } catch(e) {
-        statusEl.textContent = '⚠️ SBO 탭 탐색 오류: ' + e.message;
-        statusEl.style.color = '#f87171';
-      }
-    });
-  }
-  checkSboTokenStatus();
-  setInterval(checkSboTokenStatus, 5000);
-
-  // 경기 집중 모니터링 버튼
-  const startFocusBtn = document.getElementById('startFocusBtn');
-  const stopFocusBtn = document.getElementById('stopFocusBtn');
-  if (startFocusBtn) startFocusBtn.addEventListener('click', () => startFocusMatch());
-  if (stopFocusBtn) stopFocusBtn.addEventListener('click', () => {
-    stopFocusMatch();
-    addLog('경기 집중 모니터링 정지', 'info');
-  });
-
-  // 미러 모드 토글 버튼
-  const autoMirrorToggle = document.getElementById('autoMirrorToggle');
-  if (autoMirrorToggle) {
-    autoMirrorToggle.addEventListener('click', () => {
-      autoMirrorEnabled = !autoMirrorEnabled;
-      autoMirrorLastKey = '';
-      if (autoMirrorEnabled) {
-        autoMirrorToggle.textContent = '🔄 미러 ON';
-        autoMirrorToggle.style.background = '#059669';
-        addLog('미러 모드 ON: 피나클 클릭 시 BTI 자동 반대편 담기', 'info');
-      } else {
-        autoMirrorToggle.textContent = '🔄 미러 OFF';
-        autoMirrorToggle.style.background = '#6b7280';
-        addLog('미러 모드 OFF', 'info');
-      }
-    });
-  }
+  updateBetCalc(cachedBtiSlip, cachedPolySlip);
 });
 
 // ── 사이트 선택 UI 업데이트 함수 (DOMContentLoaded 밖에서도 호출 가능) ──
 function updateSiteSelectUI() {
-  const polyMode = isPolySlipMode();
-  const betSiteRow = document.getElementById('betSiteRow');
-  const betSiteLabel = document.getElementById('betSiteLabel');
-  const polyBetHint = document.getElementById('polyBetHint');
-  const usdtRateBox = document.getElementById('usdtRateBox');
-  const usdtRateLabel = document.getElementById('usdtRateLabel');
-  const usdtRateUnit = document.getElementById('usdtRateUnit');
-
-  if (polyMode) {
-    if (betSiteRow) betSiteRow.style.display = 'none';
-    if (betSiteLabel) betSiteLabel.style.display = 'none';
-    if (polyBetHint) polyBetHint.style.display = 'block';
-    if (usdtRateBox) usdtRateBox.style.display = '';
-  } else {
-    if (betSiteRow) betSiteRow.style.display = '';
-    if (betSiteLabel) betSiteLabel.style.display = '';
-    if (polyBetHint) polyBetHint.style.display = 'none';
-  }
-
-  const btns = {
-    pin: document.getElementById('siteSelectPin'),
-    bti: document.getElementById('siteSelectBti'),
-    sbo: document.getElementById('siteSelectSbo')
-  };
-  const activeClasses = { pin: 'active', bti: 'bti-active', sbo: 'sbo-active' };
-
-  Object.keys(btns).forEach(site => {
-    const btn = btns[site];
-    if (!btn) return;
-    btn.className = 'bet-site-btn' + (site === anchorSite ? ' ' + activeClasses[site] : '');
-  });
-
-  const labelEl = document.getElementById('betAmountLabel');
-  const unitEl = document.getElementById('betAmountUnit');
-  const minBetEl = document.getElementById('minBet');
-
-  if (polyMode) {
-    if (labelEl) labelEl.textContent = '텐텐뱃 베팅금';
-    if (unitEl) unitEl.textContent = '원 (KRW)';
-    if (usdtRateLabel) usdtRateLabel.textContent = 'USD 환율 (원)';
-    if (usdtRateUnit) usdtRateUnit.textContent = '원/USD';
-    if (minBetEl) minBetEl.step = '1000';
-    anchorSite = 'bti';
-  } else if (anchorSite === 'pin') {
-    if (labelEl) labelEl.textContent = '피나클 베팅금';
-    if (unitEl) unitEl.textContent = '원 (KRW)';
-    if (usdtRateLabel) usdtRateLabel.textContent = 'USDT 환율 (원)';
-    if (usdtRateUnit) usdtRateUnit.textContent = '원/USDT (빗썸 기준)';
-    if (minBetEl) minBetEl.step = '1000';
-    if (minBetEl && parseFloat(minBetEl.value) < 1000) minBetEl.value = '12000';
-  } else if (anchorSite === 'bti') {
-    if (labelEl) labelEl.textContent = 'BTI 베팅금';
-    if (unitEl) unitEl.textContent = '원 (KRW)';
-    if (usdtRateLabel) usdtRateLabel.textContent = 'USDT 환율 (원)';
-    if (usdtRateUnit) usdtRateUnit.textContent = '원/USDT (빗썸 기준)';
-    if (minBetEl) minBetEl.step = '1000';
-    if (minBetEl && parseFloat(minBetEl.value) < 1000) minBetEl.value = '12000';
-  } else if (anchorSite === 'sbo') {
-    if (labelEl) labelEl.textContent = 'SBOBET 베팅금';
-    if (unitEl) unitEl.textContent = 'USDT (정수)';
-    if (usdtRateLabel) usdtRateLabel.textContent = 'USDT 환율 (원)';
-    if (usdtRateUnit) usdtRateUnit.textContent = '원/USDT (빗썸 기준)';
-    if (minBetEl) minBetEl.step = '1';
-    if (minBetEl && parseFloat(minBetEl.value) > 1000) minBetEl.value = '10';
-    if (usdtRateBox) usdtRateBox.style.display = '';
-  }
+  // poly-only: no legacy site selector
 }
 
 

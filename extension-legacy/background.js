@@ -2074,7 +2074,7 @@ async function findArbOpportunitiesSbo(pinMatchups, sboMatchups, sportId) {
 // 자동 서치 상태
 let searchRunning = false;
 let searchInterval = null;
-let searchMode = SITE_CONFIG.DEFAULT_SEARCH_MODE; // 'poly' | 'bti' | 'sbo' | 'both'
+let searchMode = 'poly';
 
 async function findPolymarketTab() {
   const tabs = await chrome.tabs.query({});
@@ -2203,101 +2203,29 @@ function findPolyArbitrageOpportunities(btiMatchups, polyMatchups, sportId) {
 }
 
 async function runSearchOnce() {
-  if (searchMode === 'poly') {
-    const btiTab = await pickBtiTab();
-    let btiAll = [];
-    if (btiTab) {
-      try { btiAll = await getBtiLiveMatchups(btiTab.id); } catch (e) {
-        console.warn('[10x10] BTI 라이브 수집 실패:', e.message);
-      }
-    }
-    let polyAll = [];
-    try { polyAll = await getPolymarketSportsMatchups(150); } catch (e) {
-      console.warn('[Polymarket] API 실패:', e.message);
-    }
-    const polyTab = await findPolymarketTab();
-    const opps = findPolyArbitrageOpportunities(btiAll, polyAll, 29);
-    return {
-      opportunities: opps,
-      stats: {
-        searchMode: 'poly',
-        btiTotal: btiAll.length,
-        btiTabFound: !!btiTab,
-        polyTotal: polyAll.length,
-        polyTabFound: !!polyTab,
-        matched: opps.length,
-        wrapper: btiTab ? wrapperLabel(btiTab.url) : null
-      }
-    };
-  }
-
-  const hasSboToken = !!sbobetToken;
-  const useBti = (searchMode === 'bti' || searchMode === 'both');
-  const useSbo = (searchMode === 'sbo' || searchMode === 'both');
-
-  // BTI 탭 ID 선택적 탐색
-  let btiTabId = null;
-  if (useBti) {
-    btiTabId = await findBtiTabId();
-    if (!btiTabId) console.warn('[BTI] 탭 없음 - x10x10s.com 또는 pbc00.com BTI 화면을 열어주세요');
-  }
-
-  // 피나클 라이브 경기 조회 (항상)
-  const [pinSoccer, pinBaseball, pinBasketball] = await Promise.all([
-    getPinLiveMatchups(PIN_SPORT_IDS.soccer),
-    getPinLiveMatchups(PIN_SPORT_IDS.baseball),
-    getPinLiveMatchups(PIN_SPORT_IDS.basketball)
-  ]);
-
-  // BTI 양방 탐색 (bti 또는 both 모드일 때)
+  const btiTab = await pickBtiTab();
   let btiAll = [];
-  let btiOpps = [];
-  if (useBti && btiTabId) {
-    btiAll = await getBtiLiveMatchups(btiTabId);
-    btiOpps = [
-      ...findArbitrageOpportunities(pinSoccer, btiAll, 29),
-      ...findArbitrageOpportunities(pinBaseball, btiAll, 3),
-      ...findArbitrageOpportunities(pinBasketball, btiAll, 4)
-    ];
+  if (btiTab) {
+    try { btiAll = await getBtiLiveMatchups(btiTab.id); } catch (e) {
+      console.warn('[텐텐뱃] 라이브 수집 실패:', e.message);
+    }
   }
-
-  // SBOBET 양방 탐색 (토큰 있을 때만)
-  let sboOpps = [];
-  let sboStats = { sboSoccer: 0, sboBaseball: 0, sboBasketball: 0 };
-  if (hasSboToken && useSbo) {
-    const [sboSoccer, sboBaseball, sboBasketball] = await Promise.all([
-      getSboLiveMatchups('Soccer'),
-      getSboLiveMatchups('Baseball'),
-      getSboLiveMatchups('Basketball')
-    ]);
-    sboStats = {
-      sboSoccer: sboSoccer.length,
-      sboBaseball: sboBaseball.length,
-      sboBasketball: sboBasketball.length
-    };
-
-    const [sboOppsSoccer, sboOppsBaseball, sboOppsBasketball] = await Promise.all([
-      findArbOpportunitiesSbo(pinSoccer, sboSoccer, 29),
-      findArbOpportunitiesSbo(pinBaseball, sboBaseball, 3),
-      findArbOpportunitiesSbo(pinBasketball, sboBasketball, 4)
-    ]);
-    sboOpps = [...sboOppsSoccer, ...sboOppsBaseball, ...sboOppsBasketball];
+  let polyAll = [];
+  try { polyAll = await getPolymarketSportsMatchups(150); } catch (e) {
+    console.warn('[Polymarket] API 실패:', e.message);
   }
-
-  const allOpps = [...btiOpps, ...sboOpps]
-    .sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
-
+  const polyTab = await findPolymarketTab();
+  const opps = findPolyArbitrageOpportunities(btiAll, polyAll, 29);
   return {
-    opportunities: allOpps,
+    opportunities: opps,
     stats: {
-      pinSoccer: pinSoccer.length,
-      pinBaseball: pinBaseball.length,
-      pinBasketball: pinBasketball.length,
+      searchMode: 'poly',
       btiTotal: btiAll.length,
-      btiTabFound: !!btiTabId,
-      matched: allOpps.length,
-      hasSboToken,
-      ...sboStats
+      btiTabFound: !!btiTab,
+      polyTotal: polyAll.length,
+      polyTabFound: !!polyTab,
+      matched: opps.length,
+      wrapper: btiTab ? wrapperLabel(btiTab.url) : null
     }
   };
 }
@@ -2614,7 +2542,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // 서치 모드 설정
   if (msg.type === 'SET_SEARCH_MODE') {
-    searchMode = msg.mode || 'bti';
+    searchMode = 'poly';
     sendResponse({ ok: true, mode: searchMode });
     return true;
   }
@@ -2682,7 +2610,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // 자동 서치 시작 (1회 즉시 실행 후 결과 반환)
   if (msg.type === 'START_SEARCH') {
-    if (msg.mode) searchMode = msg.mode;
+    searchMode = 'poly';
     if (searchRunning) { sendResponse({ ok: true, msg: '이미 실행 중' }); return true; }
     searchRunning = true;
     runSearchOnce().then(result => {
