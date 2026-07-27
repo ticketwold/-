@@ -475,6 +475,25 @@ function validateBtiOdds(targetOdds) {
   return { valid: true, actualOdds: curOdds };
 }
 
+function findBtiBetInput() {
+  return document.getElementById('counter')
+    || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[class*="counter"], input[class*="Counter"]');
+}
+
+function probeBtiBetFrame() {
+  const cards = getRealSlipCards();
+  const input = findBtiBetInput();
+  const betBtn = findBtiBetButton();
+  const slip = cards.length ? readBtiSlip() : null;
+  return {
+    hasSlip: cards.length > 0,
+    hasInput: !!input,
+    hasBtn: !!betBtn,
+    slipOdds: slip?.odds > 1 ? slip.odds : 0,
+    href: location.href
+  };
+}
+
 function findBtiBetButton() {
   const allBtns = Array.from(document.querySelectorAll('button')).filter((b) => !b.disabled);
   for (const btn of allBtns) {
@@ -603,8 +622,7 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
     const realCards = getRealSlipCards();
     if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
 
-    const input = document.getElementById('counter')
-      || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"]');
+    const input = findBtiBetInput();
     if (!input) return { success: false, reason: '금액 입력 필드 없음' };
 
     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -815,14 +833,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse(scrapeBoardSelections());
     return false;
   }
+  if (msg.type === 'PROBE_BET_FRAME') {
+    sendResponse(probeBtiBetFrame());
+    return false;
+  }
   if (msg.type === 'PING') {
+    const probe = probeBtiBetFrame();
     sendResponse({
       ok: true,
-      version: '2.24',
+      version: '2.25',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
-      hasSlip: !!readBtiSlip()
+      hasSlip: probe.hasSlip,
+      hasInput: probe.hasInput,
+      hasBtn: probe.hasBtn,
+      slipOdds: probe.slipOdds
     });
     return false;
   }
@@ -862,4 +888,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.24');
+console.log('[텐텐뱃] content script v2.25');
