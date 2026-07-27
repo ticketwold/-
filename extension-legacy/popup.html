@@ -48,6 +48,8 @@
   .tolerance-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   .tolerance-row span { font-size: 11px; color: #888; }
   .tolerance-row input { width: 60px; background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 3px 6px; border-radius: 4px; font-size: 11px; }
+  .profit-range-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .profit-range-box input { width: 100%; background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
   .bet-amount-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
   .bet-amount-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; }
   .bet-amount-box label { font-size: 10px; color: #888; margin-bottom: 3px; display: block; }
@@ -91,8 +93,18 @@
 <!-- 라이브 서치 -->
 <div class="tab-content active" id="tab-search">
   <div class="section">
-    <label>최소 수익률 (%)</label>
-    <input type="number" id="minProfit" value="0" min="0" max="20" step="0.5" style="width:100%; background:#0f3460; border:1px solid #1e4080; color:#eee; padding:4px 8px; border-radius:4px; font-size:12px; margin-bottom:8px;">
+    <div class="section-title">수익 구간 설정</div>
+    <div class="profit-range-row">
+      <div class="profit-range-box">
+        <label>최소 수익률 (%)</label>
+        <input type="number" id="minProfit" value="1" min="0" max="50" step="0.1">
+      </div>
+      <div class="profit-range-box">
+        <label>최대 수익률 (%)</label>
+        <input type="number" id="maxProfit" value="0" min="0" max="50" step="0.1" placeholder="0=무제한">
+      </div>
+    </div>
+    <div style="font-size:10px; color:#666; margin-bottom:8px;">이 구간 안에서만 서치 표시 · 봇 자동 베팅 (최대 0 = 무제한)</div>
     <div style="display:flex; gap:8px;">
       <button class="btn btn-search" id="startSearchBtn">🔍 서치 시작</button>
       <button class="btn btn-search-stop" id="stopSearchBtn" disabled>■ 정지</button>
@@ -134,6 +146,17 @@
       <div class="pct" id="profit">-</div>
       <div style="font-size:11px;color:#aaa;margin-top:2px;" id="profitSub">양쪽 슬립에 담으세요 (Poly는 금액 입력)</div>
     </div>
+    <div class="profit-range-row" style="margin-top:8px;">
+      <div class="profit-range-box">
+        <label>최소 수익률 (%)</label>
+        <input type="number" id="minProfitSlip" value="1" min="0" max="50" step="0.1">
+      </div>
+      <div class="profit-range-box">
+        <label>최대 수익률 (%)</label>
+        <input type="number" id="maxProfitSlip" value="0" min="0" max="50" step="0.1" placeholder="0=무제한">
+      </div>
+    </div>
+    <div style="font-size:10px; color:#666; margin-top:4px;">구간 안일 때만 봇이 자동 베팅합니다</div>
   </div>
 
   <div class="section">

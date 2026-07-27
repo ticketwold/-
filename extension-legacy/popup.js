@@ -1,8 +1,69 @@
 // popup.js - chrome.scripting.executeScript로 직접 탭에 함수 주입
 // BTI 사이트가 chrome.runtime을 재정의하는 문제 우회
 
-const MIN_PROFIT_PCT = 1.0;
+let minProfitPct = 1.0;
+let maxProfitPct = 999;
 const POLL_INTERVAL_MS = 100;
+
+function readProfitRange() {
+  const minEl = document.getElementById('minProfit') || document.getElementById('minProfitSlip');
+  const maxEl = document.getElementById('maxProfit') || document.getElementById('maxProfitSlip');
+  let min = parseFloat(minEl?.value);
+  let max = parseFloat(maxEl?.value);
+  if (isNaN(min) || min < 0) min = 0;
+  if (isNaN(max) || max <= 0) max = 999;
+  if (max < min) max = min;
+  minProfitPct = min;
+  maxProfitPct = max;
+  return { min: minProfitPct, max: maxProfitPct };
+}
+
+function formatProfitRangeLabel() {
+  readProfitRange();
+  if (maxProfitPct >= 999) return `${minProfitPct}% 이상`;
+  return `${minProfitPct}% ~ ${maxProfitPct}%`;
+}
+
+function isProfitInRange(profit) {
+  if (profit === null || profit === undefined || isNaN(profit)) return false;
+  readProfitRange();
+  return profit >= minProfitPct && profit <= maxProfitPct;
+}
+
+function formatProfitRangeReject(profit) {
+  readProfitRange();
+  if (profit < minProfitPct) return `${profit.toFixed(2)}% < 최소 ${minProfitPct}%`;
+  if (maxProfitPct < 999 && profit > maxProfitPct) return `${profit.toFixed(2)}% > 최대 ${maxProfitPct}%`;
+  return `${profit.toFixed(2)}% (구간 ${formatProfitRangeLabel()} 밖)`;
+}
+
+function syncProfitRangeInputs(sourceId) {
+  const pairs = [
+    ['minProfit', 'minProfitSlip'],
+    ['maxProfit', 'maxProfitSlip']
+  ];
+  for (const [a, b] of pairs) {
+    if (sourceId !== a && sourceId !== b) continue;
+    const from = document.getElementById(sourceId);
+    const to = document.getElementById(sourceId === a ? b : a);
+    if (from && to) to.value = from.value;
+  }
+  readProfitRange();
+}
+
+function onProfitRangeInput(sourceId) {
+  syncProfitRangeInputs(sourceId);
+  readSettings();
+  if (window._lastFullOpportunities) {
+    renderSearchResult({
+      opportunities: window._lastFullOpportunities,
+      stats: window._lastSearchStats
+    });
+  }
+  if (cachedBtiSlip && cachedPolySlip && cachedBtiSlip.odds && cachedPolySlip.odds) {
+    updateUI(cachedBtiSlip, cachedPolySlip, calcProfit(cachedBtiSlip.odds, cachedPolySlip.odds));
+  }
+}
 
 let botRunning = false;
 let betInProgress = false;
@@ -1805,11 +1866,13 @@ function updateUI(pSlip, bSlip, profit) {
   if (profitSub) {
     if (!pSlip || !bSlip) profitSub.textContent = '양쪽 슬립에 담고 (Polymarket은 금액 입력)';
     else if (cachedPolySlip?.needsStake) profitSub.textContent = 'Polymarket 금액 입력 후 당첨금 확인';
+    else if (profit !== null && !isProfitInRange(profit)) profitSub.textContent = `수익 구간 밖 (설정: ${formatProfitRangeLabel()})`;
+    else if (profit !== null && isProfitInRange(profit)) profitSub.textContent = `수익 구간 충족 (${formatProfitRangeLabel()})`;
     else profitSub.textContent = '';
   }
   if (profitEl) {
     profitEl.textContent = profit !== null ? profit.toFixed(2) + '%' : '-';
-    profitEl.className = 'pct' + (profit !== null && profit >= MIN_PROFIT_PCT ? ' profit-positive' : ' profit-neutral');
+    profitEl.className = 'pct' + (profit !== null && isProfitInRange(profit) ? ' profit-positive' : ' profit-neutral');
   }
   if (statusEl) {
     const span = statusEl.querySelector('span');
@@ -2120,7 +2183,7 @@ async function pollLoop() {
   if (oddsKey !== lastOddsKey) {
     lastOddsKey = oddsKey;
     const pLabel = pSlip.marketKey ? marketKeyToLabel(pSlip.marketKey) : '';
-    const cls = profit >= MIN_PROFIT_PCT ? 'success' : profit >= 0 ? 'info' : 'log';
+    const cls = isProfitInRange(profit) ? 'success' : profit >= 0 ? 'info' : 'log';
     addLog(`[${pLabel}] 피나클 ${pSlip.odds} / BTI ${bSlip.odds} → ${profit.toFixed(2)}%`, cls);
 
     // BTI 배당 변경 시 피나클 배당 재조회 (피나클 슬립 재클릭)
@@ -2142,8 +2205,8 @@ async function pollLoop() {
     }
   }
 
-  if (profit >= MIN_PROFIT_PCT) {
-    addLog(`🎯 양방 발견! 수익률 ${profit.toFixed(2)}%`, 'success');
+  if (isProfitInRange(profit)) {
+    addLog(`🎯 양방 발견! 수익률 ${profit.toFixed(2)}% (${formatProfitRangeLabel()})`, 'success');
     betInProgress = true;
     await executeBets(pinSlipTab, activeOpponentTab, pSlip, bSlip, profit, activeOpponentSource);
   }
@@ -2404,12 +2467,12 @@ async function polyPollLoop() {
   if (oddsKey !== lastOddsKey) {
     lastOddsKey = oddsKey;
     const { polyUsd } = calcPolyBetAmounts(bSlip.odds, pSlip.odds);
-    const cls = profit >= MIN_PROFIT_PCT ? 'success' : profit >= 0 ? 'info' : 'log';
+    const cls = isProfitInRange(profit) ? 'success' : profit >= 0 ? 'info' : 'log';
     addLog(`텐텐뱃 ${bSlip.odds.toFixed(3)} / Poly ${pSlip.odds.toFixed(3)} → ${profit.toFixed(2)}% (Poly $${polyUsd.toFixed(2)})`, cls);
   }
 
-  if (profit >= MIN_PROFIT_PCT) {
-    addLog(`🎯 양방 발견! 수익률 ${profit.toFixed(2)}%`, 'success');
+  if (isProfitInRange(profit)) {
+    addLog(`🎯 양방 발견! 수익률 ${profit.toFixed(2)}% (${formatProfitRangeLabel()})`, 'success');
     betInProgress = true;
     await executePolyBets(btiTab, polyTab, bSlip, pSlip, profit);
   }
@@ -2759,13 +2822,16 @@ function renderSearchResult(msg) {
   const oppCount = document.getElementById('oppCount');
   if (!oppList) return;
 
-  const minProfit = parseFloat(document.getElementById('minProfit')?.value || '0');
-  const filtered = (opportunities || []).filter(o => parseFloat(o.profit) >= minProfit);
+  window._lastFullOpportunities = opportunities || [];
+  window._lastSearchStats = stats;
+  const filtered = (opportunities || []).filter(o => isProfitInRange(parseFloat(o.profit)));
 
   if (oppCount) oppCount.textContent = filtered.length + '개';
 
   if (filtered.length === 0) {
-    oppList.innerHTML = '<div style="text-align:center; color:#555; padding:20px; font-size:12px;">양방 기회 없음</div>';
+    const rangeLabel = formatProfitRangeLabel();
+    oppList.innerHTML = `<div style="text-align:center; color:#555; padding:20px; font-size:12px;">수익 구간(${rangeLabel})에 맞는 양방 기회 없음</div>`;
+    window._lastOpportunities = [];
     return;
   }
 
@@ -2775,7 +2841,7 @@ function renderSearchResult(msg) {
     const tenOdds = typeof opp.btiOdds === 'number' ? opp.btiOdds.toFixed(3) : opp.btiOdds;
     const polyLabel = opp.polyTeam || opp.pinSide || 'Poly';
     return `<div class="opp-item" data-idx="${idx}" onclick="selectOpp(${idx})">
-      <span class="opp-profit ${profit < 1 ? 'zero' : ''}">${profit.toFixed(2)}%</span>
+      <span class="opp-profit ${isProfitInRange(profit) ? '' : 'zero'}">${profit.toFixed(2)}%</span>
       <div class="opp-teams">${opp.home} vs ${opp.away}</div>
       <div class="opp-detail">
         <span class="opp-badge">${opp.sport}</span>
@@ -3104,6 +3170,7 @@ function readSettings() {
   if (tolInput) { const t = parseFloat(tolInput.value); if (!isNaN(t) && t >= 0) lineTolerance = t; }
   const usdtRateInput = document.getElementById('usdtRate');
   if (usdtRateInput) { const r = parseFloat(usdtRateInput.value); if (!isNaN(r) && r > 0) usdtRate = r; }
+  readProfitRange();
   const autoDetect = document.getElementById('autoDetect');
   if (autoDetect && !autoDetect.checked) {
     manualMarket = {
@@ -3114,12 +3181,15 @@ function readSettings() {
   } else {
     manualMarket = null;
   }
+  const maxProfitStored = maxProfitPct >= 999 ? 0 : maxProfitPct;
   chrome.storage.local.set({
     arbSettings: {
       minBet: minBetAmount,
       lineTolerance,
       anchorSite,
       usdtRate,
+      minProfit: minProfitPct,
+      maxProfit: maxProfitStored,
       autoDetect: autoDetect ? autoDetect.checked : true,
       mktPeriod: document.getElementById('mktPeriod')?.value,
       mktType: document.getElementById('mktType')?.value,
@@ -3132,7 +3202,7 @@ function startBot() {
   readSettings();
   botRunning = true; betInProgress = false; lastOddsKey = null; lastBtiLineKey = null;
   const mktInfo = manualMarket ? ` | 마켓: ${manualMarket.period} ${manualMarket.type} ${manualMarket.side}` : ' | 자동 감지';
-  addLog(`봇 시작 [텐텐뱃+Poly] ${minBetAmount.toLocaleString()}원 · 환율 ${usdtRate}원/USD · 허용오차 ±${lineTolerance}${mktInfo}`, 'info');
+  addLog(`봇 시작 [텐텐뱃+Poly] ${minBetAmount.toLocaleString()}원 · 환율 ${usdtRate}원/USD · 수익 ${formatProfitRangeLabel()} · 허용오차 ±${lineTolerance}${mktInfo}`, 'info');
 
   findTabs().then(({ btiTab }) => {
     if (!btiTab) return;
@@ -3221,7 +3291,8 @@ document.addEventListener('DOMContentLoaded', () => {
     searchRunning = true;
     startSearchBtn.disabled = true;
     stopSearchBtn.disabled = false;
-    addLog('자동 서치 시작... (텐텐뱃 + Polymarket)', 'info');
+    readProfitRange();
+    addLog(`자동 서치 시작... (텐텐뱃 + Polymarket · 수익 ${formatProfitRangeLabel()})`, 'info');
     chrome.runtime.sendMessage({ type: 'START_SEARCH', mode: 'poly' }, (resp) => {
       if (resp && resp.ok && resp.result) {
         renderSearchResult({ type: 'SEARCH_RESULT', ...resp.result });
@@ -3349,8 +3420,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const profit = calcProfit(pSlipNow.odds, bSlipNow.odds);
-    if (profit < MIN_PROFIT_PCT) {
-      addLog(`⚠️ 수익률 부족 (${profit.toFixed(2)}% < ${MIN_PROFIT_PCT}%) → 취소`, 'warn');
+    if (!isProfitInRange(profit)) {
+      addLog(`⚠️ 수익률 구간 밖 (${formatProfitRangeReject(profit)}) → 취소`, 'warn');
       return;
     }
 
@@ -3373,6 +3444,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (s.minBet) document.getElementById('minBet').value = s.minBet;
     if (s.usdtRate) { usdtRate = s.usdtRate; const el = document.getElementById('usdtRate'); if(el) el.value = s.usdtRate; }
     if (s.lineTolerance !== undefined) document.getElementById('lineTolerance').value = s.lineTolerance;
+    if (s.minProfit !== undefined) {
+      const el1 = document.getElementById('minProfit');
+      const el2 = document.getElementById('minProfitSlip');
+      if (el1) el1.value = s.minProfit;
+      if (el2) el2.value = s.minProfit;
+    }
+    if (s.maxProfit !== undefined) {
+      const el1 = document.getElementById('maxProfit');
+      const el2 = document.getElementById('maxProfitSlip');
+      if (el1) el1.value = s.maxProfit;
+      if (el2) el2.value = s.maxProfit;
+    }
+    readProfitRange();
     const autoEl = document.getElementById('autoDetect');
     if (autoEl && s.autoDetect !== undefined) {
       autoEl.checked = s.autoDetect;
@@ -3707,6 +3791,10 @@ document.addEventListener('DOMContentLoaded', () => {
       usdtRate = r;
       updateBetCalc(cachedBtiSlip, cachedPolySlip);
     }
+  });
+  ['minProfit', 'maxProfit', 'minProfitSlip', 'maxProfitSlip'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => onProfitRangeInput(id));
   });
   updateBetCalc(cachedBtiSlip, cachedPolySlip);
 });
@@ -4393,7 +4481,7 @@ async function focusMatchLoop() {
 
     const profit = calcProfit(pin.odds, bti.odds);
     allMatchedMarkets.push({ pin, bti, profit, oppKey: pin.marketKey });
-    if (profit >= MIN_PROFIT_PCT) {
+    if (isProfitInRange(profit)) {
       opportunities.push({ pin, bti, profit, oppKey: pin.marketKey });
     }
   }
@@ -4410,9 +4498,9 @@ async function focusMatchLoop() {
     allMatchedMarkets.sort((a, b) => b.profit - a.profit);
 
     liveRowsEl.innerHTML = allMatchedMarkets.map(m => {
-      const isArb = m.profit >= MIN_PROFIT_PCT;
+      const isArb = isProfitInRange(m.profit);
       const rowColor = isArb ? '#052e16' : 'transparent';
-      const profitColor = m.profit >= MIN_PROFIT_PCT ? '#4ade80' : m.profit >= 0 ? '#fbbf24' : '#f87171';
+      const profitColor = isArb ? '#4ade80' : m.profit >= 0 ? '#fbbf24' : '#f87171';
       const profitSign = m.profit >= 0 ? '+' : '';
 
       // 마켓 타입 표시명
@@ -4564,8 +4652,8 @@ async function focusMatchLoop() {
     }
 
     const finalProfit = calcProfit(pSlipNow.odds, bSlipNow.odds);
-    if (finalProfit < MIN_PROFIT_PCT) {
-      addLog(`⚠️ 슬립 재확인 수익률 부족: ${finalProfit.toFixed(2)}% → 취소`, 'warn');
+    if (!isProfitInRange(finalProfit)) {
+      addLog(`⚠️ 슬립 재확인 수익률 구간 밖: ${formatProfitRangeReject(finalProfit)} → 취소`, 'warn');
       focusBetInProgress = false;
       if (focusRunning) focusTimer = setTimeout(focusMatchLoop, 1000);
       return;
