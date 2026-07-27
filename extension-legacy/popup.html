@@ -390,26 +390,29 @@
   <div class="section">
     <div class="section-title">베팅 금액 설정</div>
 
-    <!-- 기준 사이트 선택 -->
-    <div style="font-size:10px; color:#888; margin-bottom:5px;">기준 사이트 (이 사이트 금액 직접 입력)</div>
-    <div class="bet-site-row">
+    <!-- 기준 사이트 선택 (레거시: 피나클+BTI/SBO) -->
+    <div id="betSiteLabel" style="font-size:10px; color:#888; margin-bottom:5px;">기준 사이트 (이 사이트 금액 직접 입력)</div>
+    <div class="bet-site-row" id="betSiteRow">
       <button class="bet-site-btn active" id="siteSelectPin" data-site="pin">🏔 피나클</button>
       <button class="bet-site-btn" id="siteSelectBti" data-site="bti">🎯 BTI</button>
       <button class="bet-site-btn" id="siteSelectSbo" data-site="sbo">💎 SBOBET</button>
     </div>
 
     <!-- 금액 입력 -->
-    <div class="bet-amount-row">
+    <div class="bet-amount-row" id="betAmountRow">
       <div class="bet-amount-box">
         <label id="betAmountLabel">피나클 베팅금</label>
-        <input type="number" id="minBet" value="12000" min="1" step="1">
+        <input type="number" id="minBet" value="10000" min="1" step="1">
         <div class="unit" id="betAmountUnit">원 (KRW)</div>
       </div>
       <div class="bet-amount-box" id="usdtRateBox">
-        <label>USDT 환율 (원)</label>
+        <label id="usdtRateLabel">USDT 환율 (원)</label>
         <input type="number" id="usdtRate" value="1400" min="100" step="10">
-        <div class="unit">원/USDT (빗썸 기준)</div>
+        <div class="unit" id="usdtRateUnit">원/USDT (빗썸 기준)</div>
       </div>
+    </div>
+    <div id="polyBetHint" style="display:none; font-size:10px; color:#888; margin-top:4px;">
+      텐텐뱃 금액 기준 → Polymarket $ 자동 계산 (등배당)
     </div>
 
     <!-- 반대편 금액 계산 표시 -->
