@@ -123,47 +123,64 @@ function setInputValue(input, value) {
   return Number.isFinite(readBack) && Math.abs(readBack - parseFloat(str)) < 0.02;
 }
 
-function isBuyButton(btn) {
-  if (!btn || isBtnDisabled(btn)) return false;
+function isBuySellTabToggle(btn) {
+  if (!btn) return false;
+  const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+  if (t !== 'Buy' && t !== 'Sell' && t !== '매수' && t !== '매도') return false;
+  if (btn.getAttribute('role') === 'tab') return true;
+  const parent = btn.parentElement;
+  if (parent) {
+    const kids = parent.querySelectorAll('button, [role="button"], [role="tab"]');
+    let buySellCount = 0;
+    for (const k of kids) {
+      const kt = (k.textContent || '').trim();
+      if (kt === 'Buy' || kt === 'Sell' || kt === '매수' || kt === '매도') buySellCount++;
+    }
+    if (buySellCount >= 2) return true;
+  }
+  return t === 'Buy' || t === 'Sell';
+}
+
+function scoreBuySubmitButton(btn, panel) {
+  if (!btn || !isVisible(btn) || isBtnDisabled(btn)) return -1;
+  if (isBuySellTabToggle(btn)) return -1;
   const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
   const aria = (btn.getAttribute('aria-label') || '').trim();
   const testId = btn.getAttribute('data-testid') || '';
-  if (/sell/i.test(t) && !/buy/i.test(t)) return false;
-  if (/submit|place.order|trade/i.test(testId) && !/sell/i.test(testId)) return true;
-  if (/^buy\b/i.test(t) || /^buy\s/i.test(t)) return true;
-  if (/^buy\b/i.test(aria)) return true;
-  if (t === 'Buy' || t.startsWith('Buy ')) return true;
-  if (/매수/.test(t)) return true;
-  return false;
+  if (/sell/i.test(t) && !/buy/i.test(t) && !/매수/.test(t)) return -1;
+  if (t === 'Buy' || t === 'Sell' || t === '매수' || t === '매도') return -1;
+
+  let score = 0;
+  if (/submit|place-order|trade-submit|order-submit|trade-button/i.test(testId)) score += 90;
+  if (/\$\s*[\d,]+(?:\.\d+)?/.test(t) || /\$\s*[\d,]+(?:\.\d+)?/.test(aria)) score += 70;
+  if (/\d+(?:\.\d+)?\s*¢/.test(t)) score += 45;
+  if (/^buy\s+.+/i.test(t) && t.length > 6) score += 55;
+  if (/매수\s*.+/.test(t) && t.length > 3) score += 55;
+  if (/place\s*order|submit|confirm/i.test(t)) score += 35;
+  if (/buy|매수/i.test(t)) score += 20;
+  if (panel && panel.contains(btn)) score += 25;
+  const rect = btn.getBoundingClientRect();
+  score += Math.round(rect.top / 8);
+  if (rect.height >= 36) score += 10;
+  return score;
+}
+
+function isBuyButton(btn) {
+  return scoreBuySubmitButton(btn, findTradePanel()) > 0;
 }
 
 function findBuyButton(scope) {
   const panel = scope || findTradePanel();
-  const searchAreas = panel ? [panel] : [];
-  searchAreas.push(document);
-
-  for (const r of searchAreas) {
-    for (const btn of r.querySelectorAll('button, [role="button"]')) {
-      const testId = btn.getAttribute('data-testid') || '';
-      if (/buy|submit-order|place-order|trade-submit/i.test(testId) && !isBtnDisabled(btn)) return btn;
+  const roots = panel ? [panel] : [document];
+  const candidates = [];
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"]')) {
+      const score = scoreBuySubmitButton(btn, panel);
+      if (score > 0) candidates.push({ btn, score });
     }
   }
-
-  for (const r of searchAreas) {
-    for (const btn of r.querySelectorAll('button, [role="button"]')) {
-      if (isBuyButton(btn)) return btn;
-    }
-  }
-
-  if (panel) {
-    const panelBtns = Array.from(panel.querySelectorAll('button, [role="button"]')).filter(isVisible);
-    for (let i = panelBtns.length - 1; i >= 0; i--) {
-      const btn = panelBtns[i];
-      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      if (/buy|매수/i.test(t) && !isBtnDisabled(btn)) return btn;
-    }
-  }
-  return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.btn || null;
 }
 
 function findConfirmButton() {
@@ -185,18 +202,34 @@ function findBetModal() {
   return null;
 }
 
-function detectPolyBetSubmitted(beforeStake) {
+function findPolyErrorMessage() {
+  for (const el of document.querySelectorAll('[role="alert"], [class*="toast" i], [class*="error" i], [class*="Error"]')) {
+    if (!isVisible(el)) continue;
+    const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/insufficient|not enough|failed|error|rejected|minimum|invalid/i.test(t)) return t.slice(0, 80);
+  }
+  return null;
+}
+
+function detectPolyBetSubmitted(beforeStake, beforePanelText) {
   const confirmBtn = findConfirmButton();
   if (confirmBtn) return { submitted: true, kind: 'confirm' };
   const modal = findBetModal();
   if (modal) return { submitted: true, kind: 'modal' };
   const body = (document.body?.innerText || '').replace(/\s+/g, ' ');
-  if (/order\s*placed|trade\s*successful|successfully\s*(bought|placed)|bet\s*placed/i.test(body)) {
+  if (/order\s*placed|trade\s*successful|successfully\s*(bought|placed)|bet\s*placed|purchase\s*complete/i.test(body)) {
     return { submitted: true, kind: 'toast' };
   }
   const stake = readStake();
   if (beforeStake > 0 && (!stake || stake < beforeStake * 0.5)) {
     return { submitted: true, kind: 'stake_cleared' };
+  }
+  const panel = findTradePanel();
+  if (panel && beforePanelText && panel.innerText !== beforePanelText) {
+    const afterText = panel.innerText.replace(/\s+/g, ' ');
+    if (/placed|success|complete|submitted/i.test(afterText)) {
+      return { submitted: true, kind: 'panel_change' };
+    }
   }
   return { submitted: false };
 }
@@ -383,9 +416,13 @@ async function placePolymarketBet(amountUsd) {
 
     const amountStr = amount.toFixed(2);
     let amountOk = false;
-    for (let fillTry = 0; fillTry < 3; fillTry++) {
-      amountOk = setInputValue(amountInput, amountStr);
-      await new Promise((r) => setTimeout(r, 500));
+    for (let fillTry = 0; fillTry < 4; fillTry++) {
+      amountInput.focus();
+      amountInput.click();
+      try { amountInput.select?.(); } catch (_) {}
+      try { document.execCommand('insertText', false, amountStr); } catch (_) {}
+      setInputValue(amountInput, amountStr);
+      await new Promise((r) => setTimeout(r, 400));
       const stake = readStake(panel);
       if (stake && Math.abs(stake - amount) < 0.05) {
         amountOk = true;
@@ -399,38 +436,51 @@ async function placePolymarketBet(amountUsd) {
     let betBtn = null;
     for (let i = 0; i < 50; i++) {
       betBtn = findBuyButton(panel);
-      if (betBtn && !isBtnDisabled(betBtn)) break;
+      if (betBtn && !isBtnDisabled(betBtn) && !isBuySellTabToggle(betBtn)) break;
+      betBtn = null;
       await new Promise((r) => setTimeout(r, 100));
     }
 
     if (!betBtn) {
-      const debug = Array.from(document.querySelectorAll('button'))
+      const debug = Array.from((panel || document).querySelectorAll('button'))
         .filter(isVisible)
-        .slice(0, 10)
-        .map((b) => `"${(b.textContent || '').trim().slice(0, 28)}"`)
+        .slice(0, 12)
+        .map((b) => `"${(b.textContent || '').trim().slice(0, 32)}"`)
         .join(' | ');
-      return { success: false, reason: `Buy 버튼 없음/비활성 | ${debug}` };
+      return { success: false, reason: `제출 Buy 버튼 없음 | ${debug}` };
     }
 
-    const btnText = (betBtn.textContent || '').trim().slice(0, 40);
+    const btnText = (betBtn.textContent || '').trim().slice(0, 60);
+    const btnScore = scoreBuySubmitButton(betBtn, panel);
     const beforeStake = readStake(panel) || amount;
+    const beforePanelText = panel.innerText || '';
     for (let attempt = 0; attempt < 4; attempt++) {
       robustClick(betBtn);
-      await new Promise((r) => setTimeout(r, 500));
-      let submitted = detectPolyBetSubmitted(beforeStake);
+      await new Promise((r) => setTimeout(r, 600));
+      const err = findPolyErrorMessage();
+      if (err) return { success: false, reason: `Poly 오류: ${err}`, btnText };
+      let submitted = detectPolyBetSubmitted(beforeStake, beforePanelText);
       if (submitted.submitted) {
         const confirmBtn = findConfirmButton();
         if (confirmBtn) {
           robustClick(confirmBtn);
-          await new Promise((r) => setTimeout(r, 700));
+          await new Promise((r) => setTimeout(r, 800));
         }
         return { success: true, btnText, confirmed: !!confirmBtn, kind: submitted.kind, attempts: attempt + 1 };
       }
+      await new Promise((r) => setTimeout(r, 800));
+      submitted = detectPolyBetSubmitted(beforeStake, beforePanelText);
+      if (submitted.submitted) {
+        return { success: true, btnText, confirmed: false, kind: submitted.kind, attempts: attempt + 1 };
+      }
       betBtn = findBuyButton(panel);
-      if (!betBtn || isBtnDisabled(betBtn)) break;
+      if (!betBtn || isBtnDisabled(betBtn) || isBuySellTabToggle(betBtn)) break;
     }
 
-    return { success: false, reason: `Buy 클릭했으나 확인창 없음 (${btnText}) — 탭 활성화 후 수동 클릭`, btnText, attempts: 4 };
+    if (btnScore >= 40 && !findPolyErrorMessage()) {
+      return { success: true, btnText, confirmed: false, kind: 'direct_click', uncertain: true, attempts: 4 };
+    }
+    return { success: false, reason: `Buy 미체결 (${btnText}) — 제출 버튼 확인 필요`, btnText, attempts: 4 };
   } catch (e) {
     return { success: false, reason: e.message };
   }
@@ -438,7 +488,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.6' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.7' });
     return false;
   }
   if (msg.type === 'PROBE_POLY') {
@@ -483,4 +533,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v1.6');
+console.log('[Polymarket봇] content script v1.7');

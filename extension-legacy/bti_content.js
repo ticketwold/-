@@ -686,6 +686,13 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
     const betBtn = findBtiBetButton();
     if (!betBtn) return { success: false, reason: '베팅 버튼 없음 (금액 미입력 또는 최소금액 미달?)' };
 
+    const rect = betBtn.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+    betBtn.dispatchEvent(new MouseEvent('mousedown', opts));
+    betBtn.dispatchEvent(new MouseEvent('mouseup', opts));
+    betBtn.dispatchEvent(new MouseEvent('click', opts));
     betBtn.click();
     const confirm = await confirmBtiBet();
     if (!confirm.confirmed) {

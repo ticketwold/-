@@ -1878,6 +1878,13 @@ function btiClickBetBtnInject() {
           }
         }
         if (betBtn) {
+          const rect = betBtn.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+          betBtn.dispatchEvent(new MouseEvent('mousedown', opts));
+          betBtn.dispatchEvent(new MouseEvent('mouseup', opts));
+          betBtn.dispatchEvent(new MouseEvent('click', opts));
           betBtn.click();
           resolve({ success: true, btnText: betBtn.textContent.trim().substring(0, 30), elapsed });
           return;
@@ -2671,28 +2678,45 @@ function polyPlaceBetInject(amountUsd) {
         }
         return null;
       }
-      function isBuyBtn(btn) {
-        if (!btn || isBtnDisabled(btn)) return false;
+      function isBuySellTab(btn) {
+        if (!btn) return false;
+        const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t !== 'Buy' && t !== 'Sell') return false;
+        if (btn.getAttribute('role') === 'tab') return true;
+        const parent = btn.parentElement;
+        if (parent) {
+          let n = 0;
+          for (const k of parent.querySelectorAll('button, [role="button"], [role="tab"]')) {
+            const kt = (k.textContent || '').trim();
+            if (kt === 'Buy' || kt === 'Sell') n++;
+          }
+          if (n >= 2) return true;
+        }
+        return t === 'Buy' || t === 'Sell';
+      }
+      function scoreBuyBtn(btn, panel) {
+        if (!btn || !isVis(btn) || isBtnDisabled(btn) || isBuySellTab(btn)) return -1;
         const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
         const testId = btn.getAttribute('data-testid') || '';
-        if (/sell/i.test(t) && !/buy/i.test(t)) return false;
-        if (/buy|submit-order|place-order|trade-submit/i.test(testId)) return true;
-        return /^buy\b/i.test(t) || t.startsWith('Buy ') || /매수/.test(t);
+        if (/sell/i.test(t) && !/buy/i.test(t)) return -1;
+        if (t === 'Buy' || t === 'Sell') return -1;
+        let score = 0;
+        if (/submit|place-order|trade-submit|order-submit|trade-button/i.test(testId)) score += 90;
+        if (/\$\s*[\d,]+(?:\.\d+)?/.test(t)) score += 70;
+        if (/^buy\s+.+/i.test(t) && t.length > 6) score += 55;
+        if (/buy/i.test(t)) score += 20;
+        if (panel && panel.contains(btn)) score += 25;
+        score += Math.round(btn.getBoundingClientRect().top / 8);
+        return score;
       }
       function findBuy(panel) {
-        const roots = panel ? [panel, document] : [document];
-        for (const r of roots) {
-          for (const btn of r.querySelectorAll('button, [role="button"]')) {
-            const testId = btn.getAttribute('data-testid') || '';
-            if (/buy|submit-order|place-order|trade-submit/i.test(testId) && !isBtnDisabled(btn)) return btn;
-          }
+        const candidates = [];
+        for (const btn of (panel || document).querySelectorAll('button, [role="button"]')) {
+          const score = scoreBuyBtn(btn, panel);
+          if (score > 0) candidates.push({ btn, score });
         }
-        for (const r of roots) {
-          for (const btn of r.querySelectorAll('button, [role="button"]')) {
-            if (isBuyBtn(btn)) return btn;
-          }
-        }
-        return null;
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0]?.btn || null;
       }
       function findConfirm() {
         for (const btn of document.querySelectorAll('button, [role="button"]')) {
@@ -2702,17 +2726,16 @@ function polyPlaceBetInject(amountUsd) {
         }
         return null;
       }
-      function detectSubmitted(beforeStake) {
+      function detectSubmitted(beforeStake, beforePanelText) {
         const confirmBtn = findConfirm();
         if (confirmBtn) return { submitted: true, kind: 'confirm' };
-        for (const el of document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="Modal"]')) {
-          if (!isVis(el)) continue;
-          const t = (el.innerText || '').replace(/\s+/g, ' ');
-          if (/confirm|place\s*order|review/i.test(t)) return { submitted: true, kind: 'modal' };
-        }
         const stake = readStake(findPanel());
         if (beforeStake > 0 && (!stake || stake < beforeStake * 0.5)) {
           return { submitted: true, kind: 'stake_cleared' };
+        }
+        const panelNow = findPanel();
+        if (panelNow && beforePanelText && panelNow.innerText !== beforePanelText) {
+          return { submitted: true, kind: 'panel_change' };
         }
         return { submitted: false };
       }
@@ -2722,8 +2745,11 @@ function polyPlaceBetInject(amountUsd) {
       if (!input) { resolve({ success: false, reason: '금액 input 없음' }); return; }
       const amountStr = amount.toFixed(2);
       let amountOk = false;
-      for (let fillTry = 0; fillTry < 3; fillTry++) {
+      for (let fillTry = 0; fillTry < 4; fillTry++) {
         input.focus();
+        input.click();
+        try { input.select?.(); } catch (_) {}
+        try { document.execCommand('insertText', false, amountStr); } catch (_) {}
         const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
         if (setter) setter.call(input, amountStr);
         else input.value = amountStr;
@@ -2732,7 +2758,7 @@ function polyPlaceBetInject(amountUsd) {
         try {
           input.dispatchEvent(new InputEvent('input', { bubbles: true, data: amountStr, inputType: 'insertText' }));
         } catch (_) {}
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 400));
         const stake = readStake(panel);
         if (stake && Math.abs(stake - amount) < 0.05) { amountOk = true; break; }
       }
@@ -2743,37 +2769,62 @@ function polyPlaceBetInject(amountUsd) {
       let buyBtn = null;
       for (let i = 0; i < 50; i++) {
         buyBtn = findBuy(panel);
-        if (buyBtn && !isBtnDisabled(buyBtn)) break;
+        if (buyBtn && !isBtnDisabled(buyBtn) && !isBuySellTab(buyBtn)) break;
+        buyBtn = null;
         await new Promise((r) => setTimeout(r, 100));
       }
       if (!buyBtn) {
-        const dbg = Array.from(document.querySelectorAll('button')).filter(isVis).slice(0, 8)
-          .map((b) => `"${(b.textContent || '').trim().slice(0, 24)}"`).join(' | ');
-        resolve({ success: false, reason: `Buy 없음/비활성 | ${dbg}` });
+        const dbg = Array.from((panel || document).querySelectorAll('button')).filter(isVis).slice(0, 10)
+          .map((b) => `"${(b.textContent || '').trim().slice(0, 28)}"`).join(' | ');
+        resolve({ success: false, reason: `제출 Buy 없음 | ${dbg}` });
         return;
       }
-      const btnText = (buyBtn.textContent || '').trim().slice(0, 40);
+      const btnText = (buyBtn.textContent || '').trim().slice(0, 60);
+      const btnScore = scoreBuyBtn(buyBtn, panel);
       const beforeStake = readStake(panel) || amount;
+      const beforePanelText = panel.innerText || '';
       for (let attempt = 0; attempt < 4; attempt++) {
         robustClick(buyBtn);
-        await new Promise((r) => setTimeout(r, 500));
-        const submitted = detectSubmitted(beforeStake);
+        await new Promise((r) => setTimeout(r, 600));
+        let submitted = detectSubmitted(beforeStake, beforePanelText);
         if (submitted.submitted) {
           const confirmBtn = findConfirm();
           if (confirmBtn) {
             robustClick(confirmBtn);
-            await new Promise((r) => setTimeout(r, 700));
+            await new Promise((r) => setTimeout(r, 800));
           }
           resolve({ success: true, btnText, confirmed: !!confirmBtn, kind: submitted.kind, attempts: attempt + 1 });
           return;
         }
+        await new Promise((r) => setTimeout(r, 800));
+        submitted = detectSubmitted(beforeStake, beforePanelText);
+        if (submitted.submitted) {
+          resolve({ success: true, btnText, confirmed: false, kind: submitted.kind, attempts: attempt + 1 });
+          return;
+        }
         buyBtn = findBuy(panel);
-        if (!buyBtn || isBtnDisabled(buyBtn)) break;
+        if (!buyBtn || isBtnDisabled(buyBtn) || isBuySellTab(buyBtn)) break;
       }
-      resolve({ success: false, reason: `Buy 클릭했으나 확인창 없음 (${btnText})`, btnText, attempts: 4 });
+      if (btnScore >= 40) {
+        resolve({ success: true, btnText, confirmed: false, kind: 'direct_click', uncertain: true, attempts: 4 });
+        return;
+      }
+      resolve({ success: false, reason: `Buy 미체결 (${btnText})`, btnText, attempts: 4 });
     } catch (e) {
       resolve({ success: false, reason: e.message });
     }
+  });
+}
+
+async function verifyBtiSlipCleared(btiTab) {
+  return execInTab(btiTab, () => {
+    const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
+      .filter((el) => {
+        const cn = String(el.className || '');
+        return !cn.includes('wrapper') && !cn.includes('counter') && !cn.includes('PlaceBet') && !cn.includes('Tab');
+      });
+    const okMsg = !!(document.body?.innerText || '').match(/베팅.*(완료|성공|접수)|Bet.*(accepted|placed)/i);
+    return { slipLeft: cards.length, okMsg, placed: cards.length === 0 || okMsg };
   });
 }
 
@@ -2829,13 +2880,23 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
       }
     }
     addLog(`텐텐뱃 프레임: #${resolvedBtiTab.frameId} slip=${probe?.hasSlip} input=${probe?.hasInput} btn=${probe?.hasBtn}`, 'info');
-    if (!probe?.hasSlip && !(resolvedBtiTab.slip?.odds > 1)) {
+    const hasBtiSlipData = probe?.hasSlip || bSlip?.odds > 1 || cachedBtiSlip?.odds > 1 || resolvedBtiTab.slip?.odds > 1;
+    if (!hasBtiSlipData) {
       addLog('❌ 텐텐뱃 베팅카트 없음 — 슬립에 배당을 담아주세요', 'error');
       lastBetFailAt = Date.now();
       betInProgress = false;
       stopBot();
       addLog('봇 자동 정지 (베팅카트 없음)', 'warn');
       return;
+    }
+    if (!probe?.hasInput) {
+      const retryFrame = await findBtiBetFrame(resolvedBtiTab.id);
+      if (retryFrame?.probe?.hasInput) {
+        resolvedBtiTab = retryFrame;
+        lastBtiBetFrame = { tabId: retryFrame.id, frameId: retryFrame.frameId };
+        probe = retryFrame.probe;
+        addLog(`텐텐뱃 프레임 재탐색: #${retryFrame.frameId} input=true`, 'info');
+      }
     }
     if (!probe?.hasInput) {
       addLog('❌ 텐텐뱃 금액입력 없음 — 베팅카트가 열려 있는지 확인', 'error');
@@ -2891,6 +2952,17 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
       addLog('봇 자동 정지 (베팅 실패)', 'warn');
       return;
     }
+
+    await new Promise((r) => setTimeout(r, 600));
+    const btiVerify = await verifyBtiSlipCleared(resolvedBtiTab);
+    if (!btiVerify?.placed) {
+      addLog(`❌ 텐텐뱃 베팅 미체결 — 슬립 ${btiVerify?.slipLeft ?? '?'}건 남음`, 'error');
+      lastBetFailAt = Date.now();
+      betInProgress = false;
+      stopBot();
+      addLog('봇 자동 정지 (텐텐뱃 미체결)', 'warn');
+      return;
+    }
     addLog('✅ 텐텐뱃 베팅 성공', 'success');
 
     await new Promise((r) => setTimeout(r, 500));
@@ -2918,6 +2990,9 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
     } else {
       const confirmNote = polyResult.confirmed ? 'Confirm' : (polyResult.kind || 'Buy');
       addLog(`✅ Polymarket $${polyUsd.toFixed(2)} 베팅 (${confirmNote}: ${polyResult.btnText || 'Buy'})`, 'success');
+      if (polyResult.uncertain) {
+        addLog('⚠️ Polymarket 체결 확인 불확실 — 포지션 탭에서 확인 권장', 'warn');
+      }
       addLog(`🏁 양방 완료! 예상 수익률 ${profit.toFixed(2)}%`, 'success');
     }
   } catch (e) {
