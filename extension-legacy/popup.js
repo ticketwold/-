@@ -2551,6 +2551,118 @@ function calcPolyBetAmounts(btiOdds, polyOdds) {
   return { btiBet, polyUsd: polyUsdRounded };
 }
 
+async function ensurePolyContentScript(polyTab) {
+  if (!polyTab?.id) return false;
+  const frameId = polyTab.frameId || 0;
+  try {
+    const ping = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(polyTab.id, { type: 'PING' }, { frameId }, (res) => resolve(res));
+    });
+    if (ping?.ok) return true;
+  } catch (_) {}
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      files: ['polymarket_content.js']
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function probePolyBetFrame(polyTab) {
+  if (!polyTab?.id) return null;
+  const frameId = polyTab.frameId || 0;
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(polyTab.id, { type: 'PROBE_POLY' }, { frameId }, (res) => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(res || null);
+    });
+  });
+}
+
+function polyPlaceBetInject(amountUsd) {
+  return new Promise(async (resolve) => {
+    try {
+      const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+      function isVis(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
+      function findPanel() {
+        let best = null, bestLen = Infinity;
+        for (const el of document.querySelectorAll('div, section, aside, form')) {
+          if (!isVis(el)) continue;
+          const t = el.innerText || '';
+          if (!/to\s*win/i.test(t) || !/\$\s*[\d,]+/.test(t) || !el.querySelector('input')) continue;
+          if (t.length > bestLen || t.length > 2500) continue;
+          best = el; bestLen = t.length;
+        }
+        return best;
+      }
+      function findInput(panel) {
+        const root = panel || document;
+        for (const inp of root.querySelectorAll('input')) {
+          if (!isVis(inp)) continue;
+          const ph = (inp.placeholder || '').toLowerCase();
+          if (ph.includes('amount') || ph.includes('$') || ph === '0' || inp.inputMode === 'decimal') return inp;
+        }
+        return root.querySelector('input');
+      }
+      function isBuyBtn(btn) {
+        if (!btn || btn.disabled) return false;
+        const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/sell/i.test(t) && !/buy/i.test(t)) return false;
+        return /^buy\b/i.test(t) || t.startsWith('Buy ') || /매수/.test(t);
+      }
+      function findBuy(panel) {
+        const roots = panel ? [panel, document] : [document];
+        for (const r of roots) {
+          for (const btn of r.querySelectorAll('button, [role="button"]')) {
+            if (isBuyBtn(btn)) return btn;
+          }
+        }
+        return null;
+      }
+      const panel = findPanel();
+      if (!panel) { resolve({ success: false, reason: '주문 패널 없음' }); return; }
+      const input = findInput(panel);
+      if (!input) { resolve({ success: false, reason: '금액 input 없음' }); return; }
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      input.focus();
+      if (setter) setter.call(input, amount.toFixed(2));
+      else input.value = amount.toFixed(2);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 600));
+      let buyBtn = null;
+      for (let i = 0; i < 30; i++) {
+        buyBtn = findBuy(panel);
+        if (buyBtn) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (!buyBtn) {
+        const dbg = Array.from(document.querySelectorAll('button')).filter(isVis).slice(0, 8)
+          .map((b) => `"${(b.textContent || '').trim().slice(0, 24)}"`).join(' | ');
+        resolve({ success: false, reason: `Buy 없음 | ${dbg}` });
+        return;
+      }
+      buyBtn.click();
+      await new Promise((r) => setTimeout(r, 500));
+      for (const btn of document.querySelectorAll('button')) {
+        const t = (btn.textContent || '').trim();
+        if (/^confirm$/i.test(t) || /^place\s*order$/i.test(t)) { btn.click(); break; }
+      }
+      resolve({ success: true, btnText: (buyBtn.textContent || '').trim().slice(0, 40) });
+    } catch (e) {
+      resolve({ success: false, reason: e.message });
+    }
+  });
+}
+
 async function placePolyBetViaMessage(polyTab, amountUsd) {
   if (!polyTab) return { success: false, reason: 'Polymarket 탭 없음' };
   const frameId = polyTab.frameId || 0;
@@ -2654,23 +2766,27 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
     addLog('✅ 텐텐뱃 베팅 성공', 'success');
 
     await new Promise((r) => setTimeout(r, 500));
+    await ensurePolyContentScript(polyTab);
+    const polyProbe = await probePolyBetFrame(polyTab);
+    if (polyProbe) {
+      addLog(`Polymarket: panel=${polyProbe.hasPanel} input=${polyProbe.hasInput} buy=${polyProbe.hasBuyBtn} $${polyUsd.toFixed(2)}`, 'info');
+    }
+
     let polyResult = await placePolyBetViaMessage(polyTab, polyUsd);
     if (!polyResult?.success) {
-      addLog('Polymarket inject 폴백 시도...', 'warn');
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: polyTab.id, frameIds: [polyTab.frameId || 0] },
-          files: ['polymarket_content.js']
-        });
-      } catch (_) {}
-      await new Promise((r) => setTimeout(r, 300));
+      addLog(`Polymarket 메시지 실패: ${polyResult?.reason || '?'} → inject 시도`, 'warn');
+      polyResult = await execAsyncInTab(polyTab, polyPlaceBetInject, [polyUsd]);
+    }
+    if (!polyResult?.success) {
+      await ensurePolyContentScript(polyTab);
       polyResult = await placePolyBetViaMessage(polyTab, polyUsd);
     }
 
     if (!polyResult?.success) {
       addLog(`❌ Polymarket 베팅 실패: ${polyResult?.reason || '?'} (텐텐뱃만 체결)`, 'error');
+      addLog('💡 Polymarket 탭에서 Buy+금액 입력 후 수동 확인 필요 (지갑 승인)', 'warn');
     } else {
-      addLog(`✅ Polymarket $${polyUsd.toFixed(2)} 베팅 성공`, 'success');
+      addLog(`✅ Polymarket $${polyUsd.toFixed(2)} 베팅 클릭 (${polyResult.btnText || 'Buy'})`, 'success');
       addLog(`🏁 양방 완료! 예상 수익률 ${profit.toFixed(2)}%`, 'success');
     }
   } catch (e) {
