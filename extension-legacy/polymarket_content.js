@@ -52,8 +52,13 @@ function readStake(scope) {
 function readToWinAndPrice(scope) {
   const t = (scope?.innerText || document.body?.innerText || '').replace(/\s+/g, ' ');
   let toWin = null;
-  const tw = t.match(/to\s*win[^$]*\$\s*([\d,]+(?:\.\d+)?)/i);
-  if (tw) toWin = parseFloat(tw[1].replace(/,/g, ''));
+  const twMatches = [...t.matchAll(/to\s*win[^$]{0,40}\$\s*([\d,]+(?:\.\d+)?)/gi)];
+  if (twMatches.length) {
+    const values = twMatches
+      .map((m) => parseFloat(m[1].replace(/,/g, '')))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    if (values.length) toWin = Math.max(...values);
+  }
 
   let price = null;
   const avg = t.match(/avg(?:\.|erage)?\s*price[^0-9]*(\d+(?:\.\d+)?)\s*¢/i);
@@ -90,16 +95,27 @@ function readTeamLabel(panel) {
 }
 
 function calcOddsFromStake(stake, toWin, price) {
+  // ¢ 가격이 있으면 1/price가 가장 정확 (To win 파싱 오류 방지)
+  if (price && price > 0 && price < 1) {
+    const dec = priceToDecimal(price);
+    if (dec) {
+      const payout = stake ? stake * dec : null;
+      const profit = payout != null && stake ? payout - stake : null;
+      return { odds: dec, payout, profit };
+    }
+  }
+
   if (stake && toWin) {
+    // To win이 stake보다 훨씬 작으면 잘못 파싱된 값일 가능성이 큼
+    if (toWin < stake * 0.5) {
+      return { odds: null, payout: null, profit: null };
+    }
     if (toWin >= stake * 0.85) {
       return { odds: toWin / stake, payout: toWin, profit: toWin - stake };
     }
     return { odds: (stake + toWin) / stake, payout: stake + toWin, profit: toWin };
   }
-  if (price) {
-    const dec = priceToDecimal(price);
-    if (dec) return { odds: dec, payout: null, profit: null };
-  }
+
   return { odds: null, payout: null, profit: null };
 }
 
@@ -131,9 +147,8 @@ function readPolymarketSlip() {
   const priceCents = price != null ? Math.round(price * 100) : null;
   const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
 
-  if (!odds && !price) return null;
-
-  const finalOdds = odds || priceToDecimal(price);
+  const priceOdds = price ? priceToDecimal(price) : null;
+  const finalOdds = priceOdds || odds;
   if (!finalOdds || finalOdds <= 1.001) return null;
 
   return {
@@ -191,7 +206,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.2' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.3' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
@@ -232,4 +247,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v1.2');
+console.log('[Polymarket봇] content script v1.3');

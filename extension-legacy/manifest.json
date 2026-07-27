@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "x10x10s.com (10벳) + Polymarket 양방 서치 및 슬립 비교 베팅",
   "permissions": [
     "storage",
