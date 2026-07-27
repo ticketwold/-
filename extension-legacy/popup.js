@@ -82,9 +82,15 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   // 미리보기 업데이트
   if (!botRunning) {
-    const p = cachedPinSlip, b = cachedBtiSlip;
-    const profit = (p && b && p.odds > 1 && b.odds > 1) ? calcProfit(p.odds, b.odds) : null;
-    updateUI(p, b, profit);
+    if (isPolySlipMode()) {
+      const b = cachedBtiSlip, p = cachedPolySlip;
+      const profit = (b && p && b.odds > 1 && p.odds > 1) ? calcProfit(b.odds, p.odds) : null;
+      updateUI(b, p, profit);
+    } else {
+      const p = cachedPinSlip, b = cachedBtiSlip;
+      const profit = (p && b && p.odds > 1 && b.odds > 1) ? calcProfit(p.odds, b.odds) : null;
+      updateUI(p, b, profit);
+    }
   }
 });
 
