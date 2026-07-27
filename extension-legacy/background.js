@@ -1,4 +1,6 @@
 // background.js - Service Worker
+importScripts('sites_config.js');
+
 const PIN_API_KEY = 'CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R';
 
 // 피나클 스포츠 ID 매핑 (라이브 대상)
@@ -285,7 +287,7 @@ const PBC_BTI_GAMECODES = ['19', '20', '21', '22', '23'];
 // manifest host_permissions와 동일 — executeScript/sendMessage 가능 도메인만
 const INJECTABLE_HOST_SUFFIXES = [
   'auremi88.com', 'bti-sports.com', 'bti-sports.io', 'eviran66.com',
-  'indonesiawinner.com', 'jjddgg.com', 'mervani99.com', 'pbc00.com',
+  'indonesiawinner.com', 'jjddgg.com', 'mervani99.com', 'pbc00.com', 'x10x10s.com',
   'pinnacle.com', 'live8588.com', 'fxf774.com', 'wg88ss.com',
   'zzddqq.com', 'zzllrrcc33.com', 'arcadia.pinnacle.com'
 ];
@@ -336,10 +338,7 @@ function isInjectableBtiFrame(url) {
 }
 
 function scorePbcBtiTab(url) {
-  if (!url || !url.includes('pbc00.com')) return 0;
-  const m = url.match(/[?&]gamecode=(\d+)/);
-  if (m && PBC_BTI_GAMECODES.includes(m[1])) return 10;
-  return 1;
+  return scoreWrapperBtiTab(url);
 }
 
 async function getAllTabFrames(tabId) {
@@ -596,8 +595,8 @@ async function pickBtiTab() {
 
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (tab.url.includes('pbc00.com')) {
-      const score = scorePbcBtiTab(tab.url);
+    if (isSiteWrapperUrl(tab.url)) {
+      const score = scoreWrapperBtiTab(tab.url);
       if (score >= 10 && (!bestPbc || score > bestPbc.score)) {
         bestPbc = { tab, score };
       }
@@ -611,7 +610,7 @@ async function pickBtiTab() {
     }
   }
 
-  // pbc00 BTI 화면(gamecode=19) 최우선 — polymarket 등 다른 /sports 탭보다 우선
+  // x10x10s / pbc00 BTI 화면(gamecode=19) 최우선
   if (bestPbc) return { id: bestPbc.tab.id, url: bestPbc.tab.url };
   if (bestDirect) return { id: bestDirect.tab.id, url: bestDirect.tab.url };
   return null;
@@ -622,11 +621,11 @@ async function diagBtiSearch() {
   const btiTab = await pickBtiTab();
   if (!btiTab) {
     const tabs = await chrome.tabs.query({});
-    const pbcAny = tabs.filter((t) => t.url?.includes('pbc00.com')).map((t) => t.url).slice(0, 3);
+    const pbcAny = tabs.filter((t) => isSiteWrapperUrl(t.url || '')).map((t) => t.url).slice(0, 3);
     return {
       ok: false,
-      error: 'BTI 탭 없음 — pbc00.com?gamecode=19 BTI 화면을 열어주세요 (polymarket 등 /sports 탭은 BTI가 아님)',
-      pbcTabsOpen: pbcAny
+      error: 'BTI 탭 없음 — x10x10s.com?gamecode=19 (10벳 스포츠) 화면을 열어주세요',
+      wrapperTabsOpen: tabs.filter((t) => isSiteWrapperUrl(t.url || '')).map((t) => t.url).slice(0, 3)
     };
   }
 
@@ -2075,9 +2074,163 @@ async function findArbOpportunitiesSbo(pinMatchups, sboMatchups, sportId) {
 // 자동 서치 상태
 let searchRunning = false;
 let searchInterval = null;
-let searchMode = 'bti'; // 'bti' | 'sbo' | 'both'
+let searchMode = SITE_CONFIG.DEFAULT_SEARCH_MODE; // 'poly' | 'bti' | 'sbo' | 'both'
+
+async function findPolymarketTab() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.url && isPolymarketUrl(tab.url)) return { id: tab.id, url: tab.url, frameId: 0 };
+  }
+  return null;
+}
+
+function polyPriceToDecimal(price) {
+  const p = parseFloat(price);
+  if (!p || p <= 0 || p >= 1) return null;
+  return 1 / p;
+}
+
+function parsePolyOutcomes(market) {
+  try {
+    const outcomes = typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : (market.outcomes || []);
+    const prices = typeof market.outcomePrices === 'string'
+      ? JSON.parse(market.outcomePrices)
+      : (market.outcome_prices || market.outcomePrices || []);
+    return { outcomes, prices };
+  } catch (_) {
+    return { outcomes: [], prices: [] };
+  }
+}
+
+function parsePolymarketSportsEvents(events) {
+  const result = [];
+  for (const e of events || []) {
+    const title = e.title || '';
+    const vs = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s+-|\s*\(|$)/i);
+    if (!vs) continue;
+    const home = vs[1].trim();
+    const away = vs[2].trim();
+    const ml = [];
+    for (const m of (e.markets || [])) {
+      const { outcomes, prices } = parsePolyOutcomes(m);
+      if (outcomes.length !== 2 || prices.length < 2) continue;
+      if (outcomes.includes('Yes') && outcomes.includes('No')) {
+        const win = (m.question || '').match(/Will (.+?) win/i);
+        if (win) {
+          ml.push({ team: win[1].trim(), side: 'yes', price: parseFloat(prices[0]), decimal: polyPriceToDecimal(prices[0]) });
+        }
+        continue;
+      }
+      for (let i = 0; i < 2; i++) {
+        const dec = polyPriceToDecimal(prices[i]);
+        if (dec) ml.push({ team: outcomes[i], side: i === 0 ? 'home' : 'away', price: parseFloat(prices[i]), decimal: dec });
+      }
+    }
+    if (!ml.length) continue;
+    result.push({
+      id: String(e.id),
+      home,
+      away,
+      title,
+      league: e.seriesSlug || '',
+      startTime: e.startDate || e.endDate || null,
+      ml,
+      sportId: 29
+    });
+  }
+  return result;
+}
+
+async function getPolymarketSportsMatchups(limit = 120) {
+  const url = `${SITE_CONFIG.GAMMA_API}/events?tag_id=100639&active=true&closed=false&limit=${limit}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Polymarket API ${res.status}`);
+  const data = await res.json();
+  return parsePolymarketSportsEvents(data);
+}
+
+function findPolyArbitrageOpportunities(btiMatchups, polyMatchups, sportId) {
+  const opportunities = [];
+  const sportLabel = PIN_SPORT_LABEL[sportId] || '스포츠';
+  for (const bti of btiMatchups) {
+    if (bti.sportId && bti.sportId !== sportId) continue;
+    const btiOdds = bti.rawRow ? parseBtiOddsFromRow(bti.rawRow) : parseBtiOdds(bti.markets || []);
+    const mlH = btiOdds.ml.find((m) => m.side === 'H' || m.side === 'Home');
+    const mlA = btiOdds.ml.find((m) => m.side === 'A' || m.side === 'Away');
+    if (!mlH?.odds || !mlA?.odds) continue;
+
+    for (const poly of polyMatchups) {
+      if (!matchupTeamsMatch(
+        { home: bti.home, away: bti.away, homeEn: bti.homeEn, awayEn: bti.awayEn },
+        { home: poly.home, away: poly.away, homeEn: poly.home, awayEn: poly.away }
+      )) continue;
+
+      for (const pm of poly.ml) {
+        if (!pm.decimal) continue;
+        const btiHome = teamMatch(pm.team, bti.home) || teamMatch(pm.team, bti.homeEn);
+        const btiAway = teamMatch(pm.team, bti.away) || teamMatch(pm.team, bti.awayEn);
+        let btiOppOdds = null;
+        let btiOppSide = '';
+        if (btiHome) { btiOppOdds = mlA.odds; btiOppSide = 'away'; }
+        else if (btiAway) { btiOppOdds = mlH.odds; btiOppSide = 'home'; }
+        else continue;
+
+        const profit = calcArb(pm.decimal, btiOppOdds);
+        if (profit === null || profit < 0) continue;
+        opportunities.push({
+          sport: sportLabel,
+          market: 'ML',
+          period: 'ft',
+          home: bti.home,
+          away: bti.away,
+          league: bti.league || poly.league,
+          pinSide: pm.side,
+          pinOdds: pm.decimal.toFixed(3),
+          btiSide: btiOppSide,
+          btiOdds: btiOppOdds,
+          profit: profit.toFixed(2),
+          polyTeam: pm.team,
+          polyPrice: pm.price,
+          btiEventId: bti.id,
+          polyEventId: poly.id,
+          startTime: bti.startTime || poly.startTime,
+          source: 'poly'
+        });
+      }
+    }
+  }
+  return opportunities.sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
+}
 
 async function runSearchOnce() {
+  if (searchMode === 'poly') {
+    const btiTab = await pickBtiTab();
+    let btiAll = [];
+    if (btiTab) {
+      try { btiAll = await getBtiLiveMatchups(btiTab.id); } catch (e) {
+        console.warn('[10x10] BTI 라이브 수집 실패:', e.message);
+      }
+    }
+    let polyAll = [];
+    try { polyAll = await getPolymarketSportsMatchups(150); } catch (e) {
+      console.warn('[Polymarket] API 실패:', e.message);
+    }
+    const polyTab = await findPolymarketTab();
+    const opps = findPolyArbitrageOpportunities(btiAll, polyAll, 29);
+    return {
+      opportunities: opps,
+      stats: {
+        searchMode: 'poly',
+        btiTotal: btiAll.length,
+        btiTabFound: !!btiTab,
+        polyTotal: polyAll.length,
+        polyTabFound: !!polyTab,
+        matched: opps.length,
+        wrapper: btiTab ? wrapperLabel(btiTab.url) : null
+      }
+    };
+  }
+
   const hasSboToken = !!sbobetToken;
   const useBti = (searchMode === 'bti' || searchMode === 'both');
   const useSbo = (searchMode === 'sbo' || searchMode === 'both');
@@ -2086,7 +2239,7 @@ async function runSearchOnce() {
   let btiTabId = null;
   if (useBti) {
     btiTabId = await findBtiTabId();
-    if (!btiTabId) console.warn('[BTI] 탭 없음 - pbc00.com을 열어주세요');
+    if (!btiTabId) console.warn('[BTI] 탭 없음 - x10x10s.com 또는 pbc00.com BTI 화면을 열어주세요');
   }
 
   // 피나클 라이브 경기 조회 (항상)

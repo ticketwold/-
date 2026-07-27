@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "3.16",
-  "description": "피나클/BTI/SBOBET 자동 양방 서치 + 슬립 비교 베팅 (pbc00.com + prod188 BTI + live8588.com AVA BTI + wg88ss SBOBET 지원)",
+  "version": "4.0.0",
+  "description": "x10x10s.com (10벳) + Polymarket 양방 서치 및 슬립 비교 베팅",
   "permissions": [
     "storage",
     "tabs",
@@ -10,6 +10,10 @@
     "webNavigation"
   ],
   "host_permissions": [
+    "*://*.x10x10s.com/*",
+    "*://polymarket.com/*",
+    "*://*.polymarket.com/*",
+    "*://gamma-api.polymarket.com/*",
     "*://*.auremi88.com/*",
     "*://*.bti-sports.com/*",
     "*://*.bti-sports.io/*",
@@ -39,7 +43,8 @@
         "*://*.mervani99.com/*",
         "*://*.auremi88.com/*",
         "*://*.pinnacle.com/*",
-        "*://*.pbc00.com/*"
+        "*://*.pbc00.com/*",
+        "*://*.x10x10s.com/*"
       ],
       "js": [
         "pinnacle_main.js"
@@ -54,7 +59,8 @@
         "*://*.mervani99.com/*",
         "*://*.auremi88.com/*",
         "*://*.pinnacle.com/*",
-        "*://*.pbc00.com/*"
+        "*://*.pbc00.com/*",
+        "*://*.x10x10s.com/*"
       ],
       "js": [
         "pinnacle_content.js"
@@ -70,6 +76,7 @@
         "*://*.live8588.com/*",
         "*://*.fxf774.com/*",
         "*://*.pbc00.com/*",
+        "*://*.x10x10s.com/*",
         "*://*.eviran66.com/*",
         "*://*.auremi88.com/*"
       ],
@@ -78,6 +85,16 @@
       ],
       "run_at": "document_idle",
       "all_frames": true
+    },
+    {
+      "matches": [
+        "*://polymarket.com/*",
+        "*://*.polymarket.com/*"
+      ],
+      "js": [
+        "polymarket_content.js"
+      ],
+      "run_at": "document_idle"
     },
     {
       "matches": [
@@ -98,6 +115,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "양방 봇"
+    "default_title": "양방 봇 (10x10 + Polymarket)"
   }
 }

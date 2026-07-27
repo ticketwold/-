@@ -19,11 +19,11 @@ site_a:
 
 # ★ 10벳 공통 URL + 페이지 내 종목 탭(nav_texts)으로 전환
 site_b:
-  name: "PBC00"
+  name: "x10x10s"
   enabled: true
-  base_url: "https://pbc00.com"
+  base_url: "https://www.x10x10s.com"
   adapter: pbc00
-  page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+  page_url: "https://www.x10x10s.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
   gamecode: "19"
   game_child_seq: "3659"
   event: "N"

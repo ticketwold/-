@@ -300,10 +300,17 @@ const SBOBET_PATTERNS = ['zzllrrcc33.com', 'jjddgg.com', 'zzddqq.com', 'sports-s
 const SBOBET_WRAPPER_PATTERNS = ['wg88ss.com'];
 function isSbobetUrl(url) { return url && SBOBET_PATTERNS.some(p => url.includes(p)); }
 function isSbobetWrapperUrl(url) { return url && SBOBET_WRAPPER_PATTERNS.some(p => url.includes(p)); }
-// pbc00.com = 피나클/BTI 공용 래퍼 사이트
-const WRAPPER_PATTERNS = ['pbc00.com'];
-const PINNACLE_WRAPPER_PATTERNS = ['pbc00.com'];  // pbc00.com 안에 피나클 iframe
-const BTI_WRAPPER_PATTERNS = ['pbc00.com'];       // pbc00.com 안에 BTI iframe도 있음
+// pbc00.com / x10x10s.com = 10벳/BTI 공용 래퍼 사이트
+const WRAPPER_PATTERNS = SITE_CONFIG.WRAPPER_HOSTS;
+const PINNACLE_WRAPPER_PATTERNS = SITE_CONFIG.WRAPPER_HOSTS;
+const BTI_WRAPPER_PATTERNS = SITE_CONFIG.WRAPPER_HOSTS;
+const POLYMARKET_PATTERNS = SITE_CONFIG.POLYMARKET_HOSTS;
+
+function isWrapperUrl(url) { return isSiteWrapperUrl(url); }
+function isPbcBtiUrl(url) { return isWrapperBtiUrl(url); }
+function isPbcPinnacleUrl(url) { return isWrapperPinUrl(url); }
+
+function isPolymarketGameUrl(url) { return isPolymarketUrl(url); }
 
 // 피나클 URL 판별 - account/my-bets 등 비게임 페이지 제외
 const PINNACLE_EXCLUDE = ['/account/', '/my-bets', '/login', '/register', '/deposit', '/withdraw'];
@@ -312,13 +319,6 @@ function isPinnacleGameUrl(url) {
   if (!isPinnacleUrl(url)) return false;
   if (PINNACLE_EXCLUDE.some(e => url.includes(e))) return false;
   return true;
-}
-// pbc00.com URL에서 gamecode로 피나클 구분 (gamecode=1 = 피나클)
-function isPbcPinnacleUrl(url) {
-  if (!url || !url.includes('pbc00.com')) return false;
-  const m = url.match(/[?&]gamecode=(\d+)/);
-  // gamecode=1 = 피나클, gamecode=19 = BTI (필요시 확장)
-  return m ? ['1','2','3','4','5'].includes(m[1]) : false;
 }
 function isBtiUrl(url) { return url && BTI_PATTERNS.some(p => url.includes(p)); }
 function isBtiFrameUrl(url) {
@@ -360,23 +360,22 @@ async function readBtiSlipFromFrame(tabId, frameId) {
   } catch (_) {}
   return execInTab({ id: tabId, frameId }, btiReadSlipFn);
 }
-// pbc00.com URL에서 gamecode로 BTI/피나클 구분 (gamecode=19 → BTI, gamecode=1 → 피나클)
-function isPbcBtiUrl(url) {
-  if (!url || !url.includes('pbc00.com')) return false;
-  // gamecode=19 = BTI, gamecode=1 = 피나클 (필요시 확장)
+// pbc00.com / x10x10s.com URL에서 gamecode로 BTI/피나클 구분 (레거시 호환)
+function isPbcBtiUrlLegacy(url) {
+  if (!isWrapperUrl(url)) return false;
   const m = url.match(/[?&]gamecode=(\d+)/);
-  if (m) return ['19','20','21','22','23'].includes(m[1]);  // BTI gamecode 목록
-  // gamecode 없으면 iframe URL로 판단
+  if (m) return SITE_CONFIG.BTI_GAMECODES.includes(m[1]);
   return false;
 }
 
 // ─── 탭 탐색 ─────────────────────────────────────────────────────────
-// 반환: { pinTab, pinSlipTab, btiTab }
-// pinTab/pinSlipTab: 피나클 슬립이 있는 mervani99.com iframe (pbc00.com wrapper)
-// btiTab: BTI 슬립 (직접 탭 또는 pbc00.com wrapper 안 iframe)
+// 반환: { pinTab, pinSlipTab, btiTab, polyTab, sboTab }
 async function findTabs() {
   const tabs = await chrome.tabs.query({});
-  let pinTab = null, pinSlipTab = null, btiTab = null, sboTab = null;
+  let pinTab = null, pinSlipTab = null, btiTab = null, sboTab = null, polyTab = null;
+
+  const directPoly = tabs.filter((t) => isPolymarketGameUrl(t.url));
+  if (directPoly.length) polyTab = { ...directPoly[directPoly.length - 1], frameId: 0 };
 
   const allDirectPin = tabs.filter(t => isPinnacleGameUrl(t.url));
   const directPin = allDirectPin.length > 0 ? allDirectPin[allDirectPin.length - 1] : null;
@@ -385,22 +384,19 @@ async function findTabs() {
     pinSlipTab = { ...directPin, frameId: 0 };
   }
 
-  const directBti = tabs.find(t => isBtiUrl(t.url) && !t.url.includes('pbc00.com'));
+  const directBti = tabs.find(t => isBtiUrl(t.url) && !isWrapperUrl(t.url));
   if (directBti) btiTab = { ...directBti, frameId: 0 };
 
   const directSbo = tabs.find(t => isSbobetUrl(t.url));
   if (directSbo) sboTab = { ...directSbo, frameId: 0 };
 
-  const scorePbcBti = (url) => {
-    const m = url.match(/[?&]gamecode=(\d+)/);
-    return m && ['19', '20', '21', '22', '23'].includes(m[1]) ? 10 : 1;
-  };
-  const allPbcTabs = tabs
-    .filter(t => t.url && t.url.includes('pbc00.com'))
-    .sort((a, b) => scorePbcBti(b.url) - scorePbcBti(a.url));
+  const scorePbcBti = (url) => scoreWrapperBtiTab(url);
+  const allWrapperTabs = tabs
+    .filter(t => t.url && isWrapperUrl(t.url))
+    .sort((a, b) => scoreWrapperBtiTab(b.url) - scoreWrapperBtiTab(a.url));
   const allWgTabs = tabs.filter(t => t.url && isSbobetWrapperUrl(t.url));
 
-  for (const wTab of [...allPbcTabs, ...allWgTabs]) {
+  for (const wTab of [...allWrapperTabs, ...allWgTabs]) {
     const frames = await getAllFrames(wTab.id);
     for (const frame of frames) {
       if (isPinnacleGameUrl(frame.url) && !frame.url.includes('dp-iframe')) {
@@ -417,14 +413,14 @@ async function findTabs() {
   }
 
   // BTI iframe URL 미매칭 시 — pbc00 모든 프레임에서 슬립 프로브
-  if (!btiTab && allPbcTabs.length) {
-    for (const pbc of allPbcTabs) {
-      const frames = await getAllFrames(pbc.id);
+  if (!btiTab && allWrapperTabs.length) {
+    for (const wrap of allWrapperTabs) {
+      const frames = await getAllFrames(wrap.id);
       const ordered = [...frames].sort((a, b) => (a.frameId === 0 ? 1 : 0) - (b.frameId === 0 ? 1 : 0));
       for (const frame of ordered) {
-        const slip = await readBtiSlipFromFrame(pbc.id, frame.frameId);
+        const slip = await readBtiSlipFromFrame(wrap.id, frame.frameId);
         if (slip && slip.odds > 1) {
-          btiTab = { id: pbc.id, url: frame.url || pbc.url, frameId: frame.frameId };
+          btiTab = { id: wrap.id, url: frame.url || wrap.url, frameId: frame.frameId };
           cachedBtiSlip = slip;
           break;
         }
@@ -433,7 +429,7 @@ async function findTabs() {
     }
   }
 
-  return { pinTab, pinSlipTab, btiTab, sboTab };
+  return { pinTab, pinSlipTab, btiTab, sboTab, polyTab };
 }
 
 // ─── 마켓 매칭 키 생성 헬퍼 ──────────────────────────────────────────
@@ -3016,16 +3012,24 @@ document.addEventListener('DOMContentLoaded', () => {
     startSearchBtn.disabled = true;
     stopSearchBtn.disabled = false;
     const searchModeEl = document.getElementById('searchMode');
-    const searchModeVal = searchModeEl ? searchModeEl.value : 'bti';
-    const modeLabel = {'bti':'피나클+BTI','sbo':'피나클+SBO','both':'BTI+SBO 전체'}[searchModeVal] || searchModeVal;
+    const searchModeVal = searchModeEl ? searchModeEl.value : 'poly';
+    const modeLabel = {
+      poly: '10x10+Polymarket',
+      bti: '피나클+BTI',
+      sbo: '피나클+SBO',
+      both: 'BTI+SBO 전체'
+    }[searchModeVal] || searchModeVal;
     addLog(`자동 서치 시작... (모드: ${modeLabel})`, 'info');
     chrome.runtime.sendMessage({ type: 'START_SEARCH', mode: searchModeVal }, (resp) => {
       if (resp && resp.ok && resp.result) {
         renderSearchResult({ type: 'SEARCH_RESULT', ...resp.result });
         const s = resp.result.stats || {};
         const pinTotal = (s.pinSoccer||0)+(s.pinBaseball||0)+(s.pinBasketball||0);
-        if (s.btiTabFound === false && (searchModeVal === 'bti' || searchModeVal === 'both')) {
-          addLog('⚠️ BTI 탭 미발견 - pbc00.com을 먼저 열어주세요', 'warn');
+        if (s.btiTabFound === false && (searchModeVal === 'bti' || searchModeVal === 'both' || searchModeVal === 'poly')) {
+          addLog('⚠️ 10벳(BTI) 탭 미발견 — x10x10s.com 스포츠 화면을 열어주세요', 'warn');
+        }
+        if (searchModeVal === 'poly' && s.polyTabFound === false) {
+          addLog('💡 Polymarket 탭도 열어두면 슬립 비교가 가능합니다', 'info');
         }
         addLog(`서치 완료: 피나클 ${pinTotal}경기 / BTI ${s.btiTotal||0}경기 / 매칭 ${s.matched||0}개`, 'success');
       } else if (resp && !resp.ok) {
