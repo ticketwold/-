@@ -556,6 +556,8 @@ async function findTabs() {
     const betFrame = await findBtiBetFrame(wTab.id, preferFrame);
     if (betFrame) {
       btiTab = betFrame;
+      lastBtiBetFrame = { tabId: wTab.id, frameId: betFrame.frameId };
+      if (betFrame.slip) cachedBtiSlip = betFrame.slip;
       break;
     }
   }
@@ -1712,40 +1714,67 @@ function btiSlipStabilizeInject(targetOdds) {
     const MAX_WAIT = 5000;
     const CHECK_INTERVAL = 80;
     let elapsed = 0;
-    function checkReady() {
-      const hasUpdateNotif = !!document.querySelector('[class*="UpdateNotification"]');
-      const allBtns = Array.from(document.querySelectorAll('button'));
-      const betBtn = allBtns.find((b) =>
-        !b.disabled && (
-          ((b.className || '').includes('sportsbook-Button') && b.textContent.trim().includes('베팅하기')) ||
-          ((b.className || '').includes('PlaceBetBlock') && !(b.className || '').includes('clearAll'))
-        )
-      );
-      let curOdds = 0;
-      const cards = Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
-        .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
-          !el.className.includes('badge') && !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
-      if (cards.length > 0) {
-        const atM = cards[0].textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
-        if (atM) curOdds = btiSlipOddsFromTextInject(atM[1]);
-        if (!curOdds) {
-          for (const sp of cards[0].querySelectorAll('span')) {
-            if ((sp.className || '').includes('UpdateNotification')) continue;
-            const n = btiSlipOddsFromTextInject(sp.textContent);
-            if (n) { curOdds = n; break; }
-          }
+
+    function getSlipCards() {
+      const selectors = [
+        '[class*="betslip_fe_BetSecondary_bet"]',
+        '[class*="BetSecondary_bet"]',
+        '[class*="betslip"][class*="bet"]'
+      ];
+      const seen = new Set();
+      const cards = [];
+      for (const sel of selectors) {
+        for (const el of document.querySelectorAll(sel)) {
+          if (seen.has(el)) continue;
+          const cn = String(el.className || '');
+          if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
+          seen.add(el);
+          cards.push(el);
         }
       }
-      const oddsOk = !targetOdds || curOdds === 0 || Math.abs(curOdds - targetOdds) <= 0.06;
-      if (betBtn && !hasUpdateNotif && oddsOk) {
+      return cards;
+    }
+
+    function readCurOdds(card) {
+      for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
+        const n = btiSlipOddsFromTextInject(sp.textContent);
+        if (n) return n;
+      }
+      const atM = card.textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+      if (atM) {
+        const n = btiSlipOddsFromTextInject(atM[1]);
+        if (n) return n;
+      }
+      const found = [];
+      for (const sp of card.querySelectorAll('span')) {
+        const n = btiSlipOddsFromTextInject(sp.textContent);
+        if (n) found.push(n);
+      }
+      return found.length ? found[found.length - 1] : 0;
+    }
+
+    function checkReady() {
+      const hasUpdateNotif = !!document.querySelector('[class*="UpdateNotification"]');
+      const cards = getSlipCards();
+      const hasSlip = cards.length > 0;
+      const curOdds = hasSlip ? readCurOdds(cards[0]) : 0;
+      const oddsOk = !targetOdds || curOdds === 0 || Math.abs(curOdds - targetOdds) <= 0.08;
+
+      // 베팅하기 버튼은 금액 입력 후에만 나타남 — 슬립+배당만 확인
+      if (hasSlip && !hasUpdateNotif && oddsOk) {
         resolve({ ready: true, curOdds, elapsed, frame: location.href });
         return;
       }
+      if (elapsed >= 2500 && hasSlip && !hasUpdateNotif) {
+        resolve({ ready: true, curOdds, elapsed, forced: true, frame: location.href });
+        return;
+      }
+
       elapsed += CHECK_INTERVAL;
       if (elapsed >= MAX_WAIT) {
         resolve({
           ready: false,
-          reason: `타임아웃: UpdateNotif=${hasUpdateNotif}, betBtn=${!!betBtn}, curOdds=${curOdds}, target=${targetOdds}`,
+          reason: `타임아웃: UpdateNotif=${hasUpdateNotif}, slip=${hasSlip}, curOdds=${curOdds}, target=${targetOdds}`,
           curOdds, elapsed
         });
         return;
@@ -1754,6 +1783,22 @@ function btiSlipStabilizeInject(targetOdds) {
     }
     checkReady();
   });
+}
+
+async function stabilizeBtiSlip(btiTab, targetOdds) {
+  if (!btiTab?.id) return { ready: false, reason: '탭 없음' };
+  const frameId = btiTab.frameId ?? 0;
+  await ensureBtiContentInFrame(btiTab.id, frameId);
+  const viaMsg = await new Promise((resolve) => {
+    chrome.tabs.sendMessage(
+      btiTab.id,
+      { type: 'STABILIZE_SLIP', targetOdds, maxWait: 5000 },
+      { frameId },
+      (res) => resolve(res || null)
+    );
+  });
+  if (viaMsg?.ready) return viaMsg;
+  return execAsyncInTab(btiTab, btiSlipStabilizeInject, [targetOdds]);
 }
 
 function btiClickBetBtnInject() {
@@ -2537,13 +2582,11 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
       return;
     }
 
-    const btiReady = await execAsyncInTab(resolvedBtiTab, btiSlipStabilizeInject, [btiOdds]);
+    const btiReady = await stabilizeBtiSlip(resolvedBtiTab, btiOdds);
     if (!btiReady?.ready) {
-      addLog(`⚠️ 텐텐뱃 슬립 안정화 실패: ${btiReady?.reason || '?'} → 베팅 취소`, 'warn');
-      lastBetFailAt = Date.now();
-      betInProgress = false;
-      stopBot();
-      return;
+      addLog(`⚠️ 텐텐뱃 슬립 안정화 경고: ${btiReady?.reason || '?'} → 베팅 계속 시도`, 'warn');
+    } else {
+      addLog(`텐텐뱃 슬립 준비 (${btiReady.curOdds || btiOdds})`, 'info');
     }
 
     let btiResult = await placeBtiBetViaMessage(resolvedBtiTab, btiBet, bSlip);

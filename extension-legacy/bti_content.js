@@ -600,6 +600,35 @@ function confirmBtiBet() {
   });
 }
 
+async function waitSlipStable(targetOdds, maxWaitMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const hasUpdateNotif = !!document.querySelector('[class*="UpdateNotification"]');
+    const cards = getRealSlipCards();
+    if (!cards.length) {
+      await new Promise((r) => setTimeout(r, 80));
+      continue;
+    }
+    const slip = readBtiSlip();
+    const curOdds = slip?.odds > 1 ? slip.odds : 0;
+    if (!hasUpdateNotif) {
+      if (!targetOdds || !curOdds || Math.abs(curOdds - targetOdds) <= 0.08) {
+        return { ready: true, curOdds, elapsed: Date.now() - start };
+      }
+    }
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  const cards = getRealSlipCards();
+  const slip = readBtiSlip();
+  if (cards.length && !document.querySelector('[class*="UpdateNotification"]')) {
+    return { ready: true, curOdds: slip?.odds || 0, elapsed: maxWaitMs, forced: true };
+  }
+  return {
+    ready: false,
+    reason: `슬립 안정화 타임아웃 (슬립=${cards.length > 0}, 배당=${slip?.odds || 0})`
+  };
+}
+
 // ── BTI 베팅 실행 ──
 async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
   try {
@@ -844,6 +873,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse(scrapeBoardSelections());
     return false;
   }
+  if (msg.type === 'STABILIZE_SLIP') {
+    waitSlipStable(msg.targetOdds, msg.maxWait || 5000).then((result) => sendResponse(result));
+    return true;
+  }
   if (msg.type === 'PROBE_BET_FRAME') {
     sendResponse(probeBtiBetFrame());
     return false;
@@ -852,7 +885,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const probe = probeBtiBetFrame();
     sendResponse({
       ok: true,
-      version: '2.26',
+      version: '2.27',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -899,4 +932,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.26');
+console.log('[텐텐뱃] content script v2.27');
