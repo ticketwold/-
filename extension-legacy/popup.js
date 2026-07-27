@@ -361,13 +361,37 @@ async function getAllFrames(tabId) {
 
 async function readPolySlipFromTab(polyTab) {
   if (!polyTab) return null;
-  try {
-    const msg = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(polyTab.id, { type: 'READ_SLIP' }, { frameId: polyTab.frameId || 0 }, resolve);
+  const frameId = polyTab.frameId || 0;
+  const tryRead = () => new Promise((resolve) => {
+    chrome.tabs.sendMessage(polyTab.id, { type: 'READ_SLIP' }, { frameId }, (res) => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(res?.slip || null);
     });
-    if (msg?.slip) return msg.slip;
+  });
+
+  let slip = await tryRead();
+  if (slip?.odds > 1) return slip;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      files: ['polymarket_content.js']
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    slip = await tryRead();
+    if (slip?.odds > 1) return slip;
   } catch (_) {}
-  return null;
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      func: () => (typeof readPolymarketSlip === 'function' ? readPolymarketSlip() : null)
+    });
+    slip = results?.[0]?.result;
+    if (slip?.odds > 1) return slip;
+  } catch (_) {}
+
+  return slip || null;
 }
 
 async function readBtiSlipFromFrame(tabId, frameId) {
@@ -1782,6 +1806,7 @@ function renderSavedLogs() {
 
 function formatSlipOdds(slip) {
   if (!slip) return '-';
+  if (slip.displayLabel) return slip.displayLabel;
   if (slip.source === 'polymarket' || slip.priceCents != null) {
     const cents = slip.priceCents != null ? `${slip.priceCents}¢` : '';
     const dec = slip.odds > 1 ? slip.odds.toFixed(3) : '';

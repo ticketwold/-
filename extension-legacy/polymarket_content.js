@@ -1,4 +1,4 @@
-// Polymarket content script — ¢ 가격 / 주문패널 / 당첨금 기반 슬립 읽기
+// Polymarket content script — ¢ 가격 / 주문패널 / To win 당첨금
 
 function parseCentsPrice(text) {
   const t = String(text || '').trim();
@@ -15,160 +15,129 @@ function priceToDecimal(price) {
   return 1 / price;
 }
 
-function isHighlightedButton(btn) {
-  if (!btn || btn.disabled) return false;
-  if (btn.getAttribute('aria-pressed') === 'true') return true;
-  if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') return true;
-  if (/\bselected\b/i.test(btn.className)) return true;
-  try {
-    const bg = getComputedStyle(btn).backgroundColor;
-    if (bg && !/rgba?\(\s*0\s*,\s*0\s*,\s*0|transparent/i.test(bg)) {
-      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-      if (m) {
-        const r = +m[1], g = +m[2], b = +m[3];
-        if (r > 120 || g > 80 || b > 120) return true;
-      }
-    }
-  } catch (_) {}
-  return false;
+function isVisible(el) {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
 }
 
 function findTradePanel() {
-  const selectors = [
-    '[class*="TradingWidget"]',
-    '[class*="trading-widget"]',
-    '[class*="TradeForm"]',
-    '[class*="trade-form"]',
-    '[class*="OrderPanel"]',
-    '[class*="order-panel"]',
-    '[data-testid*="trade"]',
-    'aside'
-  ];
-  for (const sel of selectors) {
-    for (const el of document.querySelectorAll(sel)) {
-      const t = el.textContent || '';
-      if (!el.querySelector('input')) continue;
-      if (/to win|you.ll receive|buy|shares|amount|avg/i.test(t)) return el;
-    }
+  let best = null;
+  let bestLen = Infinity;
+  for (const el of document.querySelectorAll('div, section, aside, form, article')) {
+    if (!isVisible(el)) continue;
+    const t = el.innerText || '';
+    if (!/to\s*win/i.test(t)) continue;
+    if (!/\$\s*[\d,]+/.test(t)) continue;
+    if (!el.querySelector('input')) continue;
+    if (t.length > bestLen || t.length > 2500) continue;
+    best = el;
+    bestLen = t.length;
   }
-  return null;
+  return best;
 }
 
-function scrapeMoneylineButtons() {
-  const out = [];
-  const body = document.body?.innerText || '';
-  const sections = Array.from(document.querySelectorAll('h2, h3, h4, div, span, p')).filter((el) => {
-    const t = (el.textContent || '').trim();
-    return /^moneyline$/i.test(t) || /^series lines$/i.test(t);
-  });
-
-  let root = document.body;
-  if (sections.length) {
-    let p = sections[0].parentElement;
-    for (let i = 0; i < 4 && p; i++) {
-      if (p.querySelectorAll('button').length >= 2) { root = p; break; }
-      p = p.parentElement;
-    }
-  }
-
-  for (const btn of root.querySelectorAll('button')) {
-    const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!txt || txt.includes('--')) continue;
-    const price = parseCentsPrice(txt);
-    if (price === null) continue;
-    const team = txt.replace(/\d+(?:\.\d+)?\s*¢.*$/, '').trim();
-    if (!team || team.length > 40) continue;
-    out.push({ btn, team, price, priceCents: Math.round(price * 100), text: txt, highlighted: isHighlightedButton(btn) });
-  }
-  return out;
-}
-
-function readStakeFromPanel(panel) {
-  const scope = panel || document;
-  for (const inp of scope.querySelectorAll('input')) {
-    if (inp.offsetParent === null) continue;
-    const ph = (inp.placeholder || '').toLowerCase();
-    const raw = String(inp.value || '').replace(/,/g, '').trim();
-    const v = parseFloat(raw);
+function readStake(scope) {
+  const root = scope || document;
+  for (const inp of root.querySelectorAll('input')) {
+    const v = parseFloat(String(inp.value || '').replace(/,/g, ''));
     if (v > 0) return v;
-    if (ph.includes('amount') || ph.includes('usdc') || inp.type === 'number') {
-      if (v > 0) return v;
-    }
   }
+  const t = (root.innerText || '').replace(/\s+/g, ' ');
+  const m = t.match(/amount[^$\d]{0,20}\$?\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) return parseFloat(m[1].replace(/,/g, ''));
   return null;
 }
 
-function readPayoutFromPanel(panel) {
-  const text = (panel?.innerText || document.body?.innerText || '').replace(/\s+/g, ' ');
-  let stake = null;
+function readToWinAndPrice(scope) {
+  const t = (scope?.innerText || document.body?.innerText || '').replace(/\s+/g, ' ');
   let toWin = null;
-  let payout = null;
+  const tw = t.match(/to\s*win[^$]*\$\s*([\d,]+(?:\.\d+)?)/i);
+  if (tw) toWin = parseFloat(tw[1].replace(/,/g, ''));
 
-  const toWinM = text.match(/(?:to win|you(?:'|')?ll receive|potential profit|profit)\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
-  if (toWinM) toWin = parseFloat(toWinM[1].replace(/,/g, ''));
-
-  const payoutM = text.match(/(?:payout|total return|receive)\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
-  if (payoutM) payout = parseFloat(payoutM[1].replace(/,/g, ''));
-
-  const sharesM = text.match(/([\d,]+(?:\.\d+)?)\s*shares?\s*@\s*(\d+(?:\.\d+)?)\s*¢/i);
-  if (sharesM) {
-    const shares = parseFloat(sharesM[1].replace(/,/g, ''));
-    const p = parseFloat(sharesM[2]) / 100;
-    if (shares > 0 && p > 0) {
-      stake = shares * p;
-      payout = shares * 1;
-      toWin = payout - stake;
+  let price = null;
+  const avg = t.match(/avg(?:\.|erage)?\s*price[^0-9]*(\d+(?:\.\d+)?)\s*¢/i);
+  if (avg) price = parseFloat(avg[1]) / 100;
+  if (!price) {
+    const cents = t.match(/(\d{1,2}(?:\.\d+)?)\s*¢/g);
+    if (cents && cents.length) {
+      price = parseCentsPrice(cents[cents.length - 1]);
     }
   }
+  return { toWin, price };
+}
 
-  return { stake, toWin, payout };
+function readTeamLabel(panel) {
+  const panelText = panel?.innerText || '';
+  const buyM = panelText.match(/(?:Buy|매수)\s+([^\n]+)/i);
+  if (buyM) return buyM[1].replace(/\$[\d,.]+.*$/, '').trim().slice(0, 80);
+
+  const lines = panelText.split('\n').map((s) => s.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/^(amount|to win|buy|deposit|cash|portfolio)/i.test(line)) continue;
+    if (/^\$/.test(line)) continue;
+    if (/^\d+\s*¢/.test(line)) continue;
+    if (line.length >= 3 && line.length <= 60) return line;
+  }
+
+  const h1 = document.querySelector('h1');
+  if (h1) {
+    const title = h1.textContent.trim();
+    const vs = title.match(/(.+?)\s+vs\.?\s+(.+)/i);
+    if (vs) return vs[1].trim();
+  }
+  return '';
+}
+
+function calcOddsFromStake(stake, toWin, price) {
+  if (stake && toWin) {
+    if (toWin >= stake * 0.85) {
+      return { odds: toWin / stake, payout: toWin, profit: toWin - stake };
+    }
+    return { odds: (stake + toWin) / stake, payout: stake + toWin, profit: toWin };
+  }
+  if (price) {
+    const dec = priceToDecimal(price);
+    if (dec) return { odds: dec, payout: null, profit: null };
+  }
+  return { odds: null, payout: null, profit: null };
 }
 
 function readPolymarketSlip() {
   const panel = findTradePanel();
-  const stakeFromInput = readStakeFromPanel(panel);
-  const { stake: stakeFromText, toWin, payout: payoutFromText } = readPayoutFromPanel(panel);
-  const stake = stakeFromInput || stakeFromText;
+  const scope = panel || document.body;
+  const stake = readStake(scope);
+  const { toWin, price: panelPrice } = readToWinAndPrice(scope);
+  let teamLabel = readTeamLabel(panel);
 
-  const mlButtons = scrapeMoneylineButtons();
-  let pick = mlButtons.find((b) => b.highlighted);
-  if (!pick && mlButtons.length === 2) {
-    const panelText = (panel?.textContent || '').toLowerCase();
-    pick = mlButtons.find((b) => panelText.includes(b.team.toLowerCase().slice(0, 4)));
-  }
-
-  let price = pick?.price ?? null;
-  let teamLabel = pick?.team || '';
-  let priceCents = pick?.priceCents ?? null;
-
+  let price = panelPrice;
   if (!price && panel) {
-    const avgM = (panel.textContent || '').match(/avg(?:\.|erage)?\s*price[:\s]*(\d+(?:\.\d+)?)\s*¢/i);
-    if (avgM) {
-      price = parseFloat(avgM[1]) / 100;
-      priceCents = Math.round(price * 100);
+    for (const btn of document.querySelectorAll('button')) {
+      const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt.includes('¢') || txt.includes('--')) continue;
+      const p = parseCentsPrice(txt);
+      if (!p) continue;
+      const team = txt.replace(/\s*\d+(?:\.\d+)?\s*¢.*$/, '').trim();
+      if (team && teamLabel && team.toLowerCase().includes(teamLabel.toLowerCase().slice(0, 5))) {
+        price = p;
+        break;
+      }
+      if (!teamLabel && team.length >= 2) teamLabel = team;
+      if (!price) price = p;
     }
   }
 
-  const panelText = panel?.textContent || '';
-  const buyM = panelText.match(/(?:Buy|매수)\s+(?:Yes|No)?\s*[·•\-]?\s*([^\n]+)/i);
-  if (buyM && !teamLabel) teamLabel = buyM[1].trim().slice(0, 80);
-
-  let payout = payoutFromText;
-  if (!payout && stake && toWin) payout = stake + toWin;
-  if (!payout && stake && price) payout = stake / price;
-
-  let odds = null;
-  if (stake && payout && payout > stake) {
-    odds = payout / stake;
-  } else if (price) {
-    odds = priceToDecimal(price);
-  }
-
+  const { odds, payout, profit } = calcOddsFromStake(stake, toWin, price);
+  const priceCents = price != null ? Math.round(price * 100) : null;
   const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
 
-  if (!price && !odds) return null;
+  if (!odds && !price) return null;
 
-  const base = {
+  const finalOdds = odds || priceToDecimal(price);
+  if (!finalOdds || finalOdds <= 1.001) return null;
+
+  return {
+    odds: finalOdds,
     price,
     priceCents,
     outcome: teamLabel,
@@ -180,41 +149,25 @@ function readPolymarketSlip() {
     marketKey: `poly_ml_${(teamLabel || 'out').slice(0, 20)}`,
     source: 'polymarket',
     selectionText: teamLabel
-      ? `${teamLabel} @ ${priceCents != null ? priceCents + '¢' : ''}`
+      ? `${teamLabel}${priceCents != null ? ' @ ' + priceCents + '¢' : ''}`
       : (priceCents != null ? `${priceCents}¢` : ''),
     stake: stake || null,
-    toWin: toWin || (payout && stake ? payout - stake : null),
-    payout: payout || null
-  };
-
-  if (!odds || odds <= 1.001) {
-    return {
-      ...base,
-      odds: price ? priceToDecimal(price) : null,
-      needsStake: !stake,
-      hint: stake ? '당첨금 계산 중…' : '금액 입력 후 당첨금이 표시됩니다'
-    };
-  }
-
-  return {
-    ...base,
-    odds,
+    toWin: profit,
+    payout: payout || (stake && profit != null ? stake + profit : null),
     displayLabel: priceCents != null
-      ? `${priceCents}¢ (${odds.toFixed(3)})`
-      : odds.toFixed(3),
-    hint: stake && toWin != null ? `당첨 $${toWin.toFixed(2)}` : null
+      ? `${priceCents}¢ (${finalOdds.toFixed(3)})`
+      : finalOdds.toFixed(3),
+    hint: stake && profit != null
+      ? `베팅 $${stake} → 수령 $${(payout || stake + profit).toFixed(2)}`
+      : (stake ? '' : '금액 입력 필요')
   };
 }
 
 async function placePolymarketBet(amountUsd) {
   try {
     const panel = findTradePanel() || document;
-    const inputs = Array.from(panel.querySelectorAll('input')).filter((inp) => inp.offsetParent !== null);
-    const amountInput = inputs.find((inp) => {
-      const ph = (inp.placeholder || '').toLowerCase();
-      return ph.includes('amount') || ph.includes('usdc') || inp.type === 'number';
-    }) || inputs[0];
-
+    const inputs = Array.from(panel.querySelectorAll('input')).filter(isVisible);
+    const amountInput = inputs[0];
     if (!amountInput) return { success: false, reason: '금액 입력 필드 없음' };
 
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -238,7 +191,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.1' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.2' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
@@ -266,7 +219,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   function schedule() {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(check, 50);
+    timer = setTimeout(check, 40);
   }
   if (document.body) {
     const obs = new MutationObserver(schedule);
@@ -275,8 +228,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       attributeFilter: ['class', 'value', 'aria-pressed', 'data-state']
     });
     document.addEventListener('input', schedule, true);
-    check();
+    schedule();
   }
 })();
 
-console.log('[Polymarket봇] content script v1.1 (¢/슬립/당첨금)');
+console.log('[Polymarket봇] content script v1.2');
