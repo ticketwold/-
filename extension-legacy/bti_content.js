@@ -505,10 +505,26 @@ function probeBtiBetFrame() {
   };
 }
 
+function isBtiPrimaryBetButtonText(txt) {
+  const t = String(txt || '').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  if (t.includes('슬립') || t.includes('내 베팅') || t.includes('로그인') || t.includes('정리')) return false;
+  if (t === '최대' || t.includes('전체') || t.includes('리그') || /^\+\s*[\d,]+\s*₩/.test(t)) return false;
+  if (t.includes('배당 수락') || t.includes('배당수락')) return true;
+  if (/수락.*베팅|베팅.*수락/i.test(t)) return true;
+  if (t.includes('베팅하기') || t === 'Place Bet' || t === 'Bet Now' || t === 'Bet') return true;
+  if (t === '베팅 확인' || t.includes('베팅 확인')) return true;
+  return false;
+}
+
 function findBtiBetButton() {
   const allBtns = Array.from(document.querySelectorAll('button')).filter((b) => !b.disabled);
   for (const btn of allBtns) {
-    if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
+    const txt = btn.textContent.trim();
+    if (txt.includes('배당 수락') || txt.includes('배당수락')) return btn;
+  }
+  for (const btn of allBtns) {
+    if ((btn.className || '').includes('sportsbook-Button') && isBtiPrimaryBetButtonText(btn.textContent)) {
       return btn;
     }
   }
@@ -518,12 +534,7 @@ function findBtiBetButton() {
     }
   }
   for (const btn of allBtns) {
-    const txt = btn.textContent.trim();
-    if ((txt === '베팅하기' || txt === 'Place Bet' || txt === 'Bet Now' ||
-         txt.includes('베팅하기') || txt.includes('베팅 확인')) &&
-        !txt.includes('슬립') && !txt.includes('내 베팅') && !txt.includes('로그인')) {
-      return btn;
-    }
+    if (isBtiPrimaryBetButtonText(btn.textContent)) return btn;
   }
   return null;
 }
@@ -885,7 +896,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const probe = probeBtiBetFrame();
     sendResponse({
       ok: true,
-      version: '2.27',
+      version: '2.28',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -932,4 +943,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.27');
+console.log('[텐텐뱃] content script v2.28');

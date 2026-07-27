@@ -1583,8 +1583,12 @@ function btiPlaceBetFn(amount, targetLine, lineTolerance, targetOdds) {
       b => !b.disabled && !b.hasAttribute('disabled') && !(b.className || '').includes('disabled')
     );
     let betBtn = null;
-    // 1순위: sportsbook-Button + 베팅하기
     for (const btn of allBtns) {
+      const t = btn.textContent.trim();
+      if (t.includes('배당 수락') || t.includes('배당수락')) { betBtn = btn; break; }
+    }
+    for (const btn of allBtns) {
+      if (betBtn) break;
       if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
         betBtn = btn; break;
       }
@@ -1610,6 +1614,8 @@ function btiPlaceBetFn(amount, targetLine, lineTolerance, targetOdds) {
         const t = btn.textContent.trim();
         const cls = btn.className || '';
         if (t.includes('전체') || t.includes('리그') || t.includes('정리') || cls.includes('clearAll')) continue;
+        if (t === '최대' || /^\+\s*[\d,]+\s*₩/.test(t)) continue;
+        if (t.includes('배당 수락') || /수락.*베팅|베팅.*수락/i.test(t)) { betBtn = btn; break; }
         if (t.includes('베팅') || t.includes('확인')) { betBtn = btn; break; }
       }
     }
@@ -1690,9 +1696,11 @@ function probeBtiBetFrameInject() {
     || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[class*="counter"], input[class*="Counter"]');
   const betBtn = Array.from(document.querySelectorAll('button')).find((b) =>
     !b.disabled && (
-      ((b.className || '').includes('sportsbook-Button') && b.textContent.includes('베팅하기')) ||
-      (b.textContent.trim() === '베팅하기')
-    ));
+      (b.textContent || '').includes('배당 수락') ||
+      ((b.className || '').includes('sportsbook-Button') && /베팅|수락/i.test(b.textContent || '')) ||
+      (b.textContent || '').trim() === '베팅하기'
+    ) && !/^\+\s*[\d,]+\s*₩/.test((b.textContent || '').trim()) && (b.textContent || '').trim() !== '최대'
+  );
   return { hasSlip, hasInput: !!input, hasBtn: !!betBtn, href: location.href };
 }
 
@@ -1806,14 +1814,31 @@ function btiClickBetBtnInject() {
     const MAX_WAIT = 4000;
     const INTERVAL = 100;
     let elapsed = 0;
+    function isBetBtnText(t) {
+      const txt = String(t || '').replace(/\s+/g, ' ').trim();
+      if (!txt || txt === '최대' || /^\+\s*[\d,]+\s*₩/.test(txt)) return false;
+      if (txt.includes('슬립') || txt.includes('내 베팅') || txt.includes('로그인')) return false;
+      if (txt.includes('배당 수락') || txt.includes('배당수락')) return true;
+      if (/수락.*베팅|베팅.*수락/i.test(txt)) return true;
+      if (txt.includes('베팅하기') || txt === 'Place Bet' || txt === 'Bet Now') return true;
+      if (txt.includes('베팅 확인')) return true;
+      return false;
+    }
     function tryClick() {
       try {
         const allBtns = Array.from(document.querySelectorAll('button'));
         let betBtn = null;
         for (const btn of allBtns) {
           if (btn.disabled) continue;
-          if ((btn.className || '').includes('sportsbook-Button') && btn.textContent.trim().includes('베팅하기')) {
-            betBtn = btn; break;
+          const t = btn.textContent.trim();
+          if (t.includes('배당 수락') || t.includes('배당수락')) { betBtn = btn; break; }
+        }
+        if (!betBtn) {
+          for (const btn of allBtns) {
+            if (btn.disabled) continue;
+            if ((btn.className || '').includes('sportsbook-Button') && isBetBtnText(btn.textContent)) {
+              betBtn = btn; break;
+            }
           }
         }
         if (!betBtn) {
@@ -1827,8 +1852,7 @@ function btiClickBetBtnInject() {
         if (!betBtn) {
           for (const btn of allBtns) {
             if (btn.disabled) continue;
-            const t = btn.textContent.trim();
-            if (t === '베팅하기' || t === 'Place Bet' || t === 'Bet Now') { betBtn = btn; break; }
+            if (isBetBtnText(btn.textContent)) { betBtn = btn; break; }
           }
         }
         if (betBtn) {
@@ -2720,7 +2744,7 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
         betInProgress = false;
         return;
       }
-      const btiReady = await execAsyncInTab(btiTab, btiSlipStabilizeInject, [bOdds]);
+      const btiReady = await stabilizeBtiSlip(btiTab, bOdds);
       if (!btiReady?.ready) {
         addLog(`⚠️ BTI 슬립 안정화 실패: ${btiReady?.reason || btiReady?.error || '응답 없음'} → 베팅 취소`, 'warn');
         betInProgress = false;
@@ -2929,7 +2953,7 @@ async function executeBets(pinSlipTab, opponentTab, pSlip, bSlip, profit, oppone
       // 피나클 베팅 후 BTI 슬립 재확인 (배당변경/버튼비활성 대응)
       btiTab = await resolveBtiBetTab(opponentTab);
       addLog(`피나클 완료 → BTI 재확인 (frame=${btiTab.frameId})`, 'info');
-      const btiReady2 = await execAsyncInTab(btiTab, btiSlipStabilizeInject, [bOdds]);
+      const btiReady2 = await stabilizeBtiSlip(btiTab, bOdds);
       if (!btiReady2?.ready) {
         addLog(`❌ 피나클 후 BTI 슬립 불안정: ${btiReady2?.reason || btiReady2?.error || '?'} — BTI만 미체결`, 'error');
         betInProgress = false;
