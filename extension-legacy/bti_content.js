@@ -13,7 +13,7 @@
 // ─ 금액 입력: input#counter (class: betslip_fe_CounterSecondary_input)
 // ─ 베팅 버튼: button.sportsbook-Button (텍스트: "베팅하기")
 
-// BTI content script v2.23
+// BTI content script v2.24
 
 function parseOddsText(txt) {
   const t = String(txt || '').trim();
@@ -23,28 +23,81 @@ function parseOddsText(txt) {
   return n;
 }
 
+function isStruckThrough(el) {
+  if (!el || el.nodeType !== 1) return false;
+  try {
+    const cs = window.getComputedStyle(el);
+    if ((cs.textDecorationLine || '').includes('line-through')) return true;
+    if ((cs.textDecoration || '').includes('line-through')) return true;
+  } catch (_) {}
+  const cn = String(el.className || '');
+  if (/old|previous|strike|strikethrough|deprecated|crossed/i.test(cn)) return true;
+  const parent = el.parentElement;
+  if (parent && parent !== el) return isStruckThrough(parent);
+  return false;
+}
+
 function readOddsFromSlipCard(card) {
   if (!card) return null;
+
+  // 배당 변경 알림 = 현재 적용 배당 (최우선)
   for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
+    if (isStruckThrough(sp)) continue;
     const n = parseOddsText(sp.textContent);
     if (n) return n;
   }
+
+  for (const sel of ['[class*="odds"]', '[class*="Odds"]', '[class*="price"]', '[class*="Price"]']) {
+    for (const el of card.querySelectorAll(sel)) {
+      if (isStruckThrough(el)) continue;
+      const n = parseOddsText(el.textContent);
+      if (n) return n;
+    }
+  }
+
   const atM = (card.textContent || '').match(/@\s*(\d+(?:\.\d{1,4})?)/);
   if (atM) {
     const n = parseOddsText(atM[1]);
     if (n) return n;
   }
+
+  const found = [];
   for (const sp of card.querySelectorAll('span')) {
-    if ((sp.className || '').includes('UpdateNotification')) continue;
+    if (isStruckThrough(sp)) continue;
     const n = parseOddsText(sp.textContent);
-    if (n) return n;
+    if (n) found.push(n);
   }
+  if (found.length) return found[found.length - 1];
+
   return null;
 }
 
 function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
   const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
   if (!selectionText) return null;
+
+  const wMatch = String(selectionText).trim().match(/^W([12])$/i);
+  if (wMatch && slipMktType === 'ml') {
+    const pickFirst = wMatch[1] === '1';
+    const mlLines = Array.from(document.querySelectorAll('[class*="MoneyLineSelection_line"]'));
+    if (mlLines.length >= 2) {
+      const line = pickFirst ? mlLines[0] : mlLines[mlLines.length - 1];
+      const oddsEl = line.querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]');
+      const n = oddsEl ? parseOddsText(oddsEl.textContent) : null;
+      if (n) return n;
+      const btn = line.querySelector('button') || line;
+      const parsed = parseSelectionButton(btn);
+      if (parsed?.odds) return parsed.odds;
+    }
+    const mlBtns = Array.from(allBtns).filter((b) =>
+      b.querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]')
+    );
+    if (mlBtns.length >= 2) {
+      const btn = pickFirst ? mlBtns[0] : mlBtns[1];
+      const parsed = parseSelectionButton(btn);
+      if (parsed?.odds) return parsed.odds;
+    }
+  }
 
   const slipLineMatch = selectionText.match(/([+-]\d+\.?\d*)\s*$/);
   const slipLine = slipLineMatch ? parseFloat(slipLineMatch[1]) : null;
@@ -79,8 +132,8 @@ function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
       continue;
     }
     if (slipLine !== null && parsed.line != null && Math.abs(parsed.line - slipLine) > 0.02) continue;
-    if (!best || parsed.odds) best = parsed.odds;
     if (teamClean.length > 1 && btnClean.includes(teamClean)) return parsed.odds;
+    if (!best) best = parsed.odds;
   }
   return best;
 }
@@ -122,10 +175,9 @@ function readBtiSlip() {
     return 'ml';
   })();
 
-  // ── 3. 배당 읽기: 슬립 카드 → 배당판(실시간) 우선 ──
-  let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  // ── 3. 배당 읽기: 슬립 카드(변동 반영) → 배당판 폴백 ──
   const slipCardOdds = readOddsFromSlipCard(card);
-  if (!odds && slipCardOdds) odds = slipCardOdds;
+  let odds = slipCardOdds || readOddsFromBoardForSelection(selectionText, allText, slipMktType);
 
   let matchedLine = null;
   let matchedSide = null;
@@ -301,8 +353,6 @@ function readBtiSlip() {
     }
   }
 
-  // 배당을 못 찾아도 기준점/마켓 정보는 반환
-  if (!odds && slipCardOdds) odds = slipCardOdds;
   if (!odds) odds = 0;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
@@ -406,17 +456,8 @@ function getRealSlipCards() {
 function readSlipOddsFromDom() {
   const cards = getRealSlipCards();
   if (!cards.length) return 0;
-  const atM = cards[0].textContent.match(/@\s*(\d+(?:\.\d{1,4})?)/);
-  if (atM) {
-    const n = slipOddsFromText(atM[1]);
-    if (n) return n;
-  }
-  for (const sp of cards[0].querySelectorAll('span')) {
-    if ((sp.className || '').includes('UpdateNotification')) continue;
-    const n = slipOddsFromText(sp.textContent);
-    if (n) return n;
-  }
-  return 0;
+  const n = readOddsFromSlipCard(cards[0]);
+  return n || 0;
 }
 
 function validateBtiOdds(targetOdds) {
@@ -777,7 +818,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'PING') {
     sendResponse({
       ok: true,
-      version: '2.23',
+      version: '2.24',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -816,9 +857,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       attributes: true, attributeFilter: ['class', 'data-testid', 'aria-label']
     });
     document.addEventListener('input', scheduleCheck, true);
-    pollTimer = setInterval(checkAndNotify, 400);
+    pollTimer = setInterval(checkAndNotify, 250);
     scheduleCheck();
   }
 })();
 
-console.log('[텐텐뱃] content script v2.23');
+console.log('[텐텐뱃] content script v2.24');

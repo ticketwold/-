@@ -422,22 +422,26 @@ async function readPolySlipFromTab(polyTab) {
 }
 
 async function readBtiSlipFromFrame(tabId, frameId) {
-  let slip = null;
+  let slipMsg = null;
+  let slipInject = null;
   try {
     const msg = await new Promise((resolve) => {
       chrome.tabs.sendMessage(tabId, { type: 'READ_SLIP' }, { frameId }, (res) => resolve(res));
     });
-    if (msg?.slip) slip = msg.slip;
+    if (msg?.slip) slipMsg = msg.slip;
   } catch (_) {}
 
   try {
-    const injected = await execInTab({ id: tabId, frameId }, btiReadSlipFn);
-    if (injected?.odds > 1) {
-      if (!slip?.odds || Math.abs(injected.odds - slip.odds) > 0.001) return injected;
-    }
+    slipInject = await execInTab({ id: tabId, frameId }, btiReadSlipFn);
   } catch (_) {}
 
-  return (slip?.odds > 1) ? slip : null;
+  const candidates = [slipMsg, slipInject].filter((s) => s?.odds > 1);
+  if (!candidates.length) return null;
+
+  if (slipMsg && slipInject && Math.abs(slipMsg.odds - slipInject.odds) > 0.001) {
+    return slipInject;
+  }
+  return slipInject || slipMsg;
 }
 // pbc00.com / x10x10s.com URL에서 gamecode로 BTI/피나클 구분 (레거시 호환)
 function isPbcBtiUrlLegacy(url) {
@@ -1090,6 +1094,19 @@ function btiReadSlipFn() {
     if (!/^\d+(\.\d{1,4})?$/.test(t)) return null;
     return n;
   }
+  function isStruckThrough(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try {
+      const cs = window.getComputedStyle(el);
+      if ((cs.textDecorationLine || '').includes('line-through')) return true;
+      if ((cs.textDecoration || '').includes('line-through')) return true;
+    } catch (_) {}
+    const cn = String(el.className || '');
+    if (/old|previous|strike|strikethrough|deprecated|crossed/i.test(cn)) return true;
+    const parent = el.parentElement;
+    if (parent && parent !== el) return isStruckThrough(parent);
+    return false;
+  }
   function parseTeamsLocal(text) {
     const raw = String(text || '').trim();
     if (!raw) return { homeTeam: '', awayTeam: '' };
@@ -1236,20 +1253,24 @@ function btiReadSlipFn() {
   let odds = 0;
   let matchedSide = null;
 
-  // 방법 1: UpdateNotification span
+  // 방법 1: UpdateNotification span (배당 변경 후 현재 배당)
   const updateSpans = card.querySelectorAll('[class*="UpdateNotification"]');
   for (const sp of updateSpans) {
+    if (isStruckThrough(sp)) continue;
     const n = parseOddsLocal(sp.textContent);
     if (n) { odds = n; break; }
   }
 
-  // 방법 2: 슬립 카드 내 모든 span에서 배당 숫자 탐색
+  // 방법 2: 슬립 카드 내 배당 span (취소선 제외, 마지막 값 = 최신)
   if (!odds) {
+    const foundOdds = [];
     const allSpans = card.querySelectorAll('span');
     for (const sp of allSpans) {
+      if (isStruckThrough(sp)) continue;
       const n = parseOddsLocal(sp.textContent);
-      if (n) { odds = n; break; }
+      if (n) foundOdds.push(n);
     }
+    if (foundOdds.length) odds = foundOdds[foundOdds.length - 1];
   }
 
   // 방법 2b: @ 1.8 형태 (BTI 슬립 푸터)
@@ -1261,7 +1282,31 @@ function btiReadSlipFn() {
     }
   }
 
-  // 방법 3: 배당판 버튼에서 팀명+기준점 매칭
+  // 방법 3: 배당판 버튼에서 W1/W2 또는 팀명+기준점 매칭
+  if (!odds) {
+    const wMatch = selectionText.trim().match(/^W([12])$/i);
+    if (wMatch && mktType === 'ml') {
+      const pickFirst = wMatch[1] === '1';
+      const mlLines = Array.from(document.querySelectorAll('[class*="MoneyLineSelection_line"]'));
+      if (mlLines.length >= 2) {
+        const line = pickFirst ? mlLines[0] : mlLines[mlLines.length - 1];
+        const oddsEl = line.querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]');
+        const n = oddsEl ? parseOddsLocal(oddsEl.textContent) : null;
+        if (n) odds = n;
+      }
+      if (!odds) {
+        let btns = Array.from(document.querySelectorAll('[class*="master_fe_Selections_selection"]'))
+          .filter((b) => b.querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]'));
+        if (btns.length >= 2) {
+          const btn = pickFirst ? btns[0] : btns[1];
+          const oddsEl = btn.querySelector('[class*="Selections_odds"], [class*="master_fe_Selections_odds"]');
+          const n = oddsEl ? parseOddsLocal(oddsEl.textContent) : null;
+          if (n) odds = n;
+        }
+      }
+    }
+  }
+
   if (!odds) {
     const lineStr = slipLine !== null ? String(Math.abs(slipLine)) : null;
     const teamClean = teamName.replace(/\s+/g, '').toLowerCase();
