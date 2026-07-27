@@ -140,15 +140,7 @@ function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
 
 function readBtiSlip() {
   // ── 1. 슬립 카드 탐색 ──
-  const betCards = document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]');
-  const realCards = Array.from(betCards).filter(el =>
-    !el.className.includes('wrapper') &&
-    !el.className.includes('counter') &&
-    !el.className.includes('bageGroup') &&
-    !el.className.includes('badge') &&
-    !el.className.includes('PlaceBet') &&
-    !el.className.includes('Tab')
-  );
+  const realCards = getRealSlipCards();
   if (!realCards.length) return null;
   const card = realCards[0];
 
@@ -447,10 +439,28 @@ function slipOddsFromText(txt) {
 }
 
 function getRealSlipCards() {
-  return Array.from(document.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"]'))
-    .filter((el) => !el.className.includes('wrapper') && !el.className.includes('counter') &&
-      !el.className.includes('bageGroup') && !el.className.includes('badge') &&
-      !el.className.includes('PlaceBet') && !el.className.includes('Tab'));
+  const selectors = [
+    '[class*="betslip_fe_BetSecondary_bet"]',
+    '[class*="BetSecondary_bet"]',
+    '[class*="betslip"][class*="bet"]'
+  ];
+  const seen = new Set();
+  const cards = [];
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (seen.has(el)) continue;
+      const cn = String(el.className || '');
+      if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('bageGroup') ||
+          cn.includes('badge') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
+      const hasTitle = el.querySelector('[class*="betInformation__title"]');
+      const txt = el.textContent || '';
+      const hasOdds = /@\s*\d+\.\d+/.test(txt) || el.querySelector('[class*="UpdateNotification"]');
+      if (!hasTitle && !hasOdds) continue;
+      seen.add(el);
+      cards.push(el);
+    }
+  }
+  return cards;
 }
 
 function readSlipOddsFromDom() {
@@ -481,12 +491,13 @@ function findBtiBetInput() {
 }
 
 function probeBtiBetFrame() {
+  const slip = readBtiSlip();
   const cards = getRealSlipCards();
   const input = findBtiBetInput();
   const betBtn = findBtiBetButton();
-  const slip = cards.length ? readBtiSlip() : null;
+  const hasSlip = cards.length > 0 || (slip?.odds > 1);
   return {
-    hasSlip: cards.length > 0,
+    hasSlip,
     hasInput: !!input,
     hasBtn: !!betBtn,
     slipOdds: slip?.odds > 1 ? slip.odds : 0,
@@ -841,7 +852,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const probe = probeBtiBetFrame();
     sendResponse({
       ok: true,
-      version: '2.25',
+      version: '2.26',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -888,4 +899,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.25');
+console.log('[텐텐뱃] content script v2.26');
