@@ -19,6 +19,7 @@ let usdtRate = 1400;       // USDT 환율 (원/USDT)
 let cachedPinSlip = null;
 let cachedBtiSlip = null;
 let cachedSboSlip = null;
+let cachedPolySlip = null;
 let pendingPollTrigger = false;
 
 // 자동 서치 상태
@@ -38,6 +39,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
     if (msg.source === 'bti' && msg.slip) cachedBtiSlip = msg.slip;
     if (msg.source === 'sbobet' && msg.slip) cachedSboSlip = msg.slip;
+    if (msg.source === 'polymarket' && msg.slip) cachedPolySlip = msg.slip;
     if (botRunning && !betInProgress && !pendingPollTrigger) {
       pendingPollTrigger = true;
       setTimeout(() => { pendingPollTrigger = false; pollLoop(); }, 0);
@@ -349,6 +351,17 @@ async function getAllFrames(tabId) {
   return new Promise((resolve) => {
     chrome.webNavigation.getAllFrames({ tabId }, (frames) => resolve(frames || []));
   });
+}
+
+async function readPolySlipFromTab(polyTab) {
+  if (!polyTab) return null;
+  try {
+    const msg = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(polyTab.id, { type: 'READ_SLIP' }, { frameId: polyTab.frameId || 0 }, resolve);
+    });
+    if (msg?.slip) return msg.slip;
+  } catch (_) {}
+  return null;
 }
 
 async function readBtiSlipFromFrame(tabId, frameId) {
@@ -1761,19 +1774,57 @@ function renderSavedLogs() {
   });
 }
 
+function formatSlipOdds(slip) {
+  if (!slip) return '-';
+  if (slip.source === 'polymarket' || slip.priceCents != null) {
+    const cents = slip.priceCents != null ? `${slip.priceCents}¢` : '';
+    const dec = slip.odds > 1 ? slip.odds.toFixed(3) : '';
+    if (cents && dec) return `${cents} (${dec})`;
+    return cents || dec || '-';
+  }
+  return slip.odds > 1 ? slip.odds.toFixed(3) : '-';
+}
+
+function formatSlipMarket(slip) {
+  if (!slip) return '-';
+  if (slip.source === 'polymarket') {
+    const parts = [slip.selectionText || slip.teamLabel || slip.outcome || ''];
+    if (slip.hint) parts.push(slip.hint);
+    else if (slip.needsStake) parts.push('금액 입력 필요');
+    return parts.filter(Boolean).join(' · ').slice(0, 80) || 'Polymarket';
+  }
+  return slip.marketKey ? marketKeyToLabel(slip.marketKey) : (slip.selectionText || '-');
+}
+
+function isPolySlipMode() {
+  const el = document.getElementById('searchMode');
+  return !el || el.value === 'poly';
+}
+
 // ─── UI 업데이트 ──────────────────────────────────────────────────────
 function updateUI(pSlip, bSlip, profit) {
   const pOddsEl = document.getElementById('pOdds');
   const bOddsEl = document.getElementById('bOdds');
   const profitEl = document.getElementById('profit');
   const statusEl = document.getElementById('status');
-  if (pOddsEl) pOddsEl.textContent = (pSlip && pSlip.odds > 1) ? pSlip.odds.toFixed(3) : '-';
-  if (bOddsEl) bOddsEl.textContent = (bSlip && bSlip.odds > 1) ? bSlip.odds.toFixed(3) : '-';
-  // 마켓 레이블 표시
+  const pLabel = document.querySelector('#tab-slip label[for="pSlipBox"], #tab-slip .section label');
+  const slipLabels = document.querySelectorAll('#tab-slip .section > div:first-child label');
+  if (slipLabels.length >= 2 && isPolySlipMode()) {
+    slipLabels[0].textContent = '10벳 (BTI)';
+    slipLabels[1].textContent = 'Polymarket';
+  }
+  if (pOddsEl) pOddsEl.textContent = formatSlipOdds(pSlip);
+  if (bOddsEl) bOddsEl.textContent = formatSlipOdds(bSlip);
   const pMktEl = document.getElementById('pMarket');
   const bMktEl = document.getElementById('bMarket');
-  if (pMktEl) pMktEl.textContent = pSlip && pSlip.marketKey ? marketKeyToLabel(pSlip.marketKey) : '-';
-  if (bMktEl) bMktEl.textContent = bSlip && bSlip.marketKey ? marketKeyToLabel(bSlip.marketKey) : '-';
+  if (pMktEl) pMktEl.textContent = formatSlipMarket(pSlip);
+  if (bMktEl) bMktEl.textContent = formatSlipMarket(bSlip);
+  const profitSub = document.getElementById('profitSub');
+  if (profitSub) {
+    if (!pSlip || !bSlip) profitSub.textContent = '양쪽 슬립에 담고 (Polymarket은 금액 입력)';
+    else if (cachedPolySlip?.needsStake) profitSub.textContent = 'Polymarket 금액 입력 후 당첨금 확인';
+    else profitSub.textContent = '';
+  }
   if (profitEl) {
     profitEl.textContent = profit !== null ? profit.toFixed(2) + '%' : '-';
     profitEl.className = 'pct' + (profit !== null && profit >= MIN_PROFIT_PCT ? ' profit-positive' : ' profit-neutral');
@@ -3344,32 +3395,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ── 봇 시작 전 슬립 미리보기 (2초마다) ──
+  // ── 봇 시작 전 슬립 미리보기 (0.5초마다) ──
   async function previewSlip() {
     if (botRunning) return;
-    const { pinSlipTab, btiTab, sboTab } = await findTabs();
-    const opponentTab = sboTab || btiTab;
-    if (!pinSlipTab && !opponentTab) return;
-    if (sboTab) { window._sboTabId = sboTab.id; window._sboFrameId = sboTab.frameId || 0; }
+    const { pinSlipTab, btiTab, sboTab, polyTab } = await findTabs();
+    const polyMode = isPolySlipMode();
 
-    const opponentReadFn = sboTab ? sbobetReadSlipFn : btiReadSlipFn;
-    let pSlip = cachedPinSlip;
-    let bSlip = sboTab ? cachedSboSlip : cachedBtiSlip;
+    let leftSlip = null;
+    let rightSlip = null;
 
-    if (!pSlip && pinSlipTab) {
-      pSlip = await execInTab(pinSlipTab, pinnacleReadSlipFn);
-    }
-    if (!bSlip && opponentTab) {
-      if (!sboTab) {
-        bSlip = await readBtiSlipFromFrame(opponentTab.id, opponentTab.frameId ?? 0);
-      } else {
-        bSlip = await execInTab(opponentTab, opponentReadFn);
+    if (polyMode) {
+      leftSlip = cachedBtiSlip;
+      rightSlip = cachedPolySlip;
+      if (!leftSlip && btiTab) {
+        leftSlip = await readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0);
+      }
+      if (!rightSlip && polyTab) {
+        rightSlip = await readPolySlipFromTab(polyTab);
+      }
+    } else {
+      const opponentTab = sboTab || btiTab;
+      if (sboTab) { window._sboTabId = sboTab.id; window._sboFrameId = sboTab.frameId || 0; }
+      leftSlip = cachedPinSlip;
+      rightSlip = sboTab ? cachedSboSlip : cachedBtiSlip;
+      if (!leftSlip && pinSlipTab) {
+        leftSlip = await execInTab(pinSlipTab, pinnacleReadSlipFn);
+      }
+      if (!rightSlip && opponentTab) {
+        if (!sboTab) {
+          rightSlip = await readBtiSlipFromFrame(opponentTab.id, opponentTab.frameId ?? 0);
+        } else {
+          rightSlip = await execInTab(opponentTab, sbobetReadSlipFn);
+        }
       }
     }
 
-    const profit = (pSlip && bSlip && pSlip.odds > 1 && bSlip.odds > 1)
-      ? calcProfit(pSlip.odds, bSlip.odds) : null;
-    updateUI(pSlip, bSlip, profit);
+    const profit = (leftSlip && rightSlip && leftSlip.odds > 1 && rightSlip.odds > 1)
+      ? calcProfit(leftSlip.odds, rightSlip.odds) : null;
+    updateUI(leftSlip, rightSlip, profit);
   }
   setInterval(previewSlip, 500);
   previewSlip();
