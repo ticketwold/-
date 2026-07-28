@@ -416,46 +416,26 @@ function readTeamLabel(panel) {
 }
 
 function calcOddsFromStake(stake, toWin, price) {
-  let effective = null;
+  // 금액 + To win 있으면 ¢/Avg 무시 — 실제 수령액 기준 배당 (예: $10 → $191.83 = 19.183배)
   if (stake && toWin && toWin > 0) {
-    let dec, payout, profit;
-    if (toWin >= stake * 1.5) {
-      // To win = 총 수령액 (payout)
-      dec = toWin / stake;
-      payout = toWin;
-      profit = toWin - stake;
-    } else {
-      // To win = 순이익
-      dec = (stake + toWin) / stake;
-      payout = stake + toWin;
-      profit = toWin;
-    }
-    if (dec > 1.001) effective = { odds: dec, payout, profit };
-  }
-
-  const priceDec = (price && price > 0 && price < 1) ? priceToDecimal(price) : null;
-
-  if (effective && priceDec) {
-    const rel = Math.abs(effective.odds - priceDec) / Math.max(effective.odds, priceDec);
-    // Avg price(5¢→20x) vs 실제 버튼(4¢→25x) 차이 — 버튼 가격 우선
-    if (rel > 0.05) {
-      const payoutFromPrice = stake ? stake * priceDec : null;
+    const payout = toWin;
+    const dec = payout / stake;
+    if (dec > 1.001) {
       return {
-        odds: priceDec,
-        payout: payoutFromPrice,
-        profit: payoutFromPrice != null && stake ? payoutFromPrice - stake : effective.profit,
-        usedPrice: true
+        odds: dec,
+        payout,
+        profit: payout - stake,
+        fromToWin: true
       };
     }
   }
 
+  const priceDec = (price && price > 0 && price < 1) ? priceToDecimal(price) : null;
   if (priceDec) {
     const payout = stake ? stake * priceDec : null;
     const profit = payout != null && stake ? payout - stake : null;
     return { odds: priceDec, payout, profit, usedPrice: true };
   }
-
-  if (effective) return effective;
 
   return { odds: null, payout: null, profit: null };
 }
@@ -485,18 +465,22 @@ function readPolymarketSlip() {
     }
   }
 
-  const { odds, payout, profit } = calcOddsFromStake(stake, toWin, price);
-  const priceCents = price != null ? Math.round(price * 1000) / 10 : (odds ? Math.round(1000 / odds) / 10 : null);
-  const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
-
+  const { odds, payout, profit, fromToWin } = calcOddsFromStake(stake, toWin, price);
   const finalOdds = odds;
   if (!finalOdds || finalOdds <= 1.001) return null;
 
   const totalPayout = payout || (stake && profit != null ? stake + profit : null);
+  // To win 기준이면 implied ¢ 표시 (19.183배 → 약 5.2¢)
+  const priceCents = fromToWin
+    ? Math.round(1000 / finalOdds) / 10
+    : (price != null ? Math.round(price * 1000) / 10 : (finalOdds ? Math.round(1000 / finalOdds) / 10 : null));
+  const impliedPrice = priceCents != null ? priceCents / 100 : price;
+
+  const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
 
   return {
     odds: finalOdds,
-    price,
+    price: impliedPrice,
     priceCents,
     outcome: teamLabel,
     teamLabel,
@@ -628,7 +612,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.9' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '2.0' });
     return false;
   }
   if (msg.type === 'PROBE_POLY') {
@@ -673,4 +657,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v1.9');
+console.log('[Polymarket봇] content script v2.0');
