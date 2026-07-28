@@ -543,18 +543,19 @@ async function readPolySlipFromTab(polyTab) {
   return slip || null;
 }
 
-async function readBtiSlipFromFrame(tabId, frameId) {
+async function readBtiSlipFromFrame(tabId, frameId, hint) {
   let slipMsg = null;
   let slipInject = null;
+  const readHint = hint || {};
   try {
     const msg = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(tabId, { type: 'READ_SLIP' }, { frameId }, (res) => resolve(res));
+      chrome.tabs.sendMessage(tabId, { type: 'READ_BTI_ODDS', hint: readHint }, { frameId }, (res) => resolve(res));
     });
     if (msg?.slip) slipMsg = msg.slip;
   } catch (_) {}
 
   try {
-    slipInject = await execInTab({ id: tabId, frameId }, btiReadSlipFn);
+    slipInject = await execInTab({ id: tabId, frameId }, btiReadOddsInject, [readHint]);
   } catch (_) {}
 
   const candidates = [slipMsg, slipInject].filter((s) => s?.odds > 1 && !s?.suspended);
@@ -566,14 +567,34 @@ async function readBtiSlipFromFrame(tabId, frameId) {
   return slipInject || slipMsg;
 }
 
-async function findBtiSlipFrame(tabId) {
+function getBtiReadHint(polySlip) {
+  const autoDetect = document.getElementById('autoDetect')?.checked !== false;
+  if (!autoDetect) {
+    return {
+      marketKind: document.getElementById('mktType')?.value || 'ml',
+      period: document.getElementById('mktPeriod')?.value || 'ft',
+      side: document.getElementById('mktSide')?.value || 'home'
+    };
+  }
+  const polyTeam = polySlip?.teamLabel || polySlip?.outcome || polySlip?.selectionText || '';
+  if (polyTeam && String(polyTeam).length >= 2) {
+    return { marketKind: 'ml', period: 'ft', excludeTeam: polyTeam, polyTeam };
+  }
+  return { marketKind: 'ml', period: 'ft' };
+}
+
+async function readBtiOddsFromFrame(tabId, frameId, hint) {
+  return readBtiSlipFromFrame(tabId, frameId, hint || null);
+}
+
+async function findBtiSlipFrame(tabId, hint) {
   const frames = await getAllFrames(tabId);
   const ordered = [...frames].sort((a, b) => (b.frameId > 0 ? 1 : 0) - (a.frameId > 0 ? 1 : 0));
   let best = null;
   for (const frame of ordered) {
     if (frame.frameId === 0) continue;
     await ensureBtiContentInFrame(tabId, frame.frameId);
-    const slip = await readBtiSlipFromFrame(tabId, frame.frameId);
+    const slip = await readBtiOddsFromFrame(tabId, frame.frameId, hint);
     if (!isBtiSlipUsable(slip)) continue;
     if (!best || slip.odds > best.slip.odds) {
       best = { id: tabId, frameId: frame.frameId, url: frame.url || '', slip };
@@ -582,13 +603,26 @@ async function findBtiSlipFrame(tabId) {
   return best;
 }
 
-async function readBtiSlipAnyFrame(tabId, preferFrameId) {
+async function readBtiOddsAnyFrame(tabId, preferFrameId, hint) {
   if (preferFrameId > 0) {
-    const slip = await readBtiSlipFromFrame(tabId, preferFrameId);
+    const slip = await readBtiOddsFromFrame(tabId, preferFrameId, hint);
     if (isBtiSlipUsable(slip)) return slip;
   }
-  const found = await findBtiSlipFrame(tabId);
+  const found = await findBtiSlipFrame(tabId, hint);
   return found?.slip || null;
+}
+
+async function ensureBtiSlipOnBoard(btiTab, hint) {
+  if (!btiTab?.id) return { ok: false, reason: '탭 없음' };
+  const frameId = btiTab.frameId ?? 0;
+  await ensureBtiContentInFrame(btiTab.id, frameId);
+  try {
+    const res = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(btiTab.id, { type: 'ENSURE_BTI_SLIP', hint: hint || {} }, { frameId }, (r) => resolve(r));
+    });
+    if (res?.ok) return res;
+  } catch (_) {}
+  return execInTab(btiTab, btiEnsureSlipInject, [hint || {}]);
 }
 
 function isBtiSlipUsable(slip) {
@@ -597,19 +631,23 @@ function isBtiSlipUsable(slip) {
   return true;
 }
 
-async function readFreshBtiSlip(btiTab) {
+async function readFreshBtiSlip(btiTab, polySlip) {
   if (!btiTab?.id) return null;
-  const slip = await readBtiSlipAnyFrame(btiTab.id, btiTab.frameId);
+  const hint = getBtiReadHint(polySlip);
+  const slip = await readBtiOddsAnyFrame(btiTab.id, btiTab.frameId, hint);
   if (!isBtiSlipUsable(slip)) return null;
   return slip;
 }
 
-async function readFreshBtiSlipStrict(btiTab) {
-  const slip = await readFreshBtiSlip(btiTab);
+async function readFreshBtiSlipStrict(btiTab, polySlip) {
+  const slip = await readFreshBtiSlip(btiTab, polySlip);
   if (!slip) return null;
   const frameId = btiTab.frameId ?? 0;
   const probe = await probeBtiBetFrameMessage(btiTab.id, frameId)
     || await execInTab({ id: btiTab.id, frameId }, probeBtiBetFrameInject);
+  if (slip.fromSlip === false || slip.source === 'board') {
+    if (probe?.hasInput) return slip;
+  }
   if (probe && !probe.hasSlip && !probe.hasInput) return null;
   return slip;
 }
@@ -654,7 +692,7 @@ async function findTabs() {
       const ordered = [...frames].sort((a, b) => (a.frameId === 0 ? 1 : 0) - (b.frameId === 0 ? 1 : 0));
       for (const frame of ordered) {
         if (frame.frameId === 0) continue;
-        const slip = await readBtiSlipFromFrame(wrap.id, frame.frameId);
+        const slip = await readBtiOddsFromFrame(wrap.id, frame.frameId);
         if (slip && slip.odds > 1) {
           btiTab = { id: wrap.id, url: frame.url || wrap.url, frameId: frame.frameId };
           lastBtiBetFrame = { tabId: wrap.id, frameId: frame.frameId };
@@ -1263,6 +1301,18 @@ function pinnaclePlaceBetFn(amount) {
 // title[1]: "+5.5" (기준점만)
 // title[2]: "[7:1] 라이브 핸디캡 라이브 베팅" (마켓명)
 // title[3]: "웨이취엔 드래곤스 vs 중신 브라더스" (이벤트명)
+function btiReadOddsInject(hint) {
+  if (typeof window.__btiReadOdds === 'function') return window.__btiReadOdds(hint || {});
+  if (typeof readBtiOdds === 'function') return readBtiOdds(hint || {});
+  return null;
+}
+
+function btiEnsureSlipInject(hint) {
+  if (typeof window.__btiEnsureSlip === 'function') return window.__btiEnsureSlip(hint || {});
+  if (typeof ensureSlipFromBoard === 'function') return ensureSlipFromBoard(hint || {});
+  return { ok: false, reason: 'content script 미로드' };
+}
+
 function btiReadSlipFn() {
   function parseOddsLocal(txt) {
     const t = String(txt || '').trim();
@@ -3083,11 +3133,23 @@ async function placeBtiBetPipeline(resolvedBtiTab, btiBet, bSlip) {
 async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
   const t0 = Date.now();
   try {
-    const [freshBti, freshPoly, resolvedBtiTab] = await Promise.all([
-      readFreshBtiSlipStrict(btiTab),
-      readPolySlipFromTab(polyTab),
-      resolveBtiBetFrameForBet(btiTab.id, bSlip.odds)
+    const hint = getBtiReadHint(pSlip);
+    let resolvedBtiTab = await resolveBtiBetFrameForBet(btiTab.id, bSlip.odds);
+    if (!resolvedBtiTab?.probe?.hasSlip) {
+      const ensureTab = resolvedBtiTab || btiTab;
+      const ensured = await ensureBtiSlipOnBoard(ensureTab, hint);
+      if (ensured?.clicked) {
+        addLog(`텐텐뱃 배당판 클릭 → 슬립 담기 (${ensured.selectionText || ensured.targetOdds})`, 'info');
+        await new Promise((r) => setTimeout(r, 400));
+        resolvedBtiTab = await resolveBtiBetFrameForBet(btiTab.id, bSlip.odds);
+      }
+    }
+
+    const [freshBti, freshPoly] = await Promise.all([
+      readFreshBtiSlipStrict(btiTab, pSlip),
+      readPolySlipFromTab(polyTab)
     ]);
+    resolvedBtiTab = resolvedBtiTab || await resolveBtiBetFrameForBet(btiTab.id, freshBti?.odds || bSlip.odds);
 
     if (!freshBti) {
       cachedBtiSlip = null;
@@ -3162,10 +3224,11 @@ async function polyPollLoop() {
   const { btiTab, polyTab } = await findTabs();
   if (!btiTab || !polyTab) { updateUI(null, null, null); return; }
 
-  const [bSlip, pSlip] = await Promise.all([
-    btiTab?.id ? readBtiSlipAnyFrame(btiTab.id, btiTab.frameId ?? 0) : null,
-    readPolySlipFromTab(polyTab)
-  ]);
+  const pSlip = await readPolySlipFromTab(polyTab);
+  const hint = getBtiReadHint(pSlip);
+  const bSlip = btiTab?.id
+    ? await readBtiOddsAnyFrame(btiTab.id, btiTab.frameId ?? 0, hint)
+    : null;
 
   if (bSlip) cachedBtiSlip = bSlip;
   else cachedBtiSlip = null;
@@ -4359,19 +4422,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (botRunning) return;
     const { btiTab, polyTab } = await findTabs();
 
-    let leftSlip = cachedBtiSlip;
     let rightSlip = cachedPolySlip;
+    if (polyTab) {
+      const freshPoly = await readPolySlipFromTab(polyTab);
+      if (freshPoly) rightSlip = freshPoly;
+    }
+
+    let leftSlip = cachedBtiSlip;
     if (btiTab?.id) {
-      const fresh = await readBtiSlipAnyFrame(btiTab.id, btiTab.frameId ?? 0);
+      const hint = getBtiReadHint(rightSlip);
+      const fresh = await readBtiOddsAnyFrame(btiTab.id, btiTab.frameId ?? 0, hint);
       if (fresh) {
         leftSlip = fresh;
         cachedBtiSlip = fresh;
         if (btiTab.frameId > 0) lastBtiBetFrame = { tabId: btiTab.id, frameId: btiTab.frameId };
       }
     }
-    if (!rightSlip && polyTab) {
-      rightSlip = await readPolySlipFromTab(polyTab);
-    }
+    if (rightSlip) cachedPolySlip = rightSlip;
 
     const profit = (leftSlip && rightSlip && leftSlip.odds > 1 && rightSlip.odds > 1)
       ? calcProfit(leftSlip.odds, rightSlip.odds) : null;

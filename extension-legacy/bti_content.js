@@ -817,6 +817,7 @@ function parseEventTeams(eventText) {
 function detectMarketType(text) {
   const t = (text || '').toLowerCase();
   if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
+  if (t.includes('승리팀') || t.includes('승리') || t.includes('winner') || t.includes('winning team')) return 'ml';
   if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
   if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
   return 'ml';
@@ -856,7 +857,8 @@ function scrapeBoardSelections() {
       selectionText: parsed.label || parsed.rawText,
       marketText, marketKind, side, line: parsed.line, odds: parsed.odds,
       pointsText: parsed.pointsText,
-      eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null
+      eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
+      element: btn
     };
 
     if (!byEvent.has(eventKey)) byEvent.set(eventKey, []);
@@ -884,6 +886,234 @@ function scrapeBoardSelections() {
   };
 }
 
+function normalizeTeamName(s) {
+  return String(s || '').replace(/\s+/g, '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+}
+
+function teamNamesMatch(a, b) {
+  const na = normalizeTeamName(a);
+  const nb = normalizeTeamName(b);
+  if (!na || !nb || na.length < 2 || nb.length < 2) return false;
+  if (na === nb) return true;
+  const minLen = Math.min(na.length, nb.length, 5);
+  if (na.slice(0, minLen) === nb.slice(0, minLen)) return true;
+  return na.includes(nb) || nb.includes(na);
+}
+
+function matchPeriodInText(text, period) {
+  if (!period || period === 'ft') return true;
+  const t = (text || '').toLowerCase();
+  if (period === '1h') return t.includes('전반') || t.includes('1st half') || t.includes('1h');
+  if (period === '2h') return t.includes('후반') || t.includes('2nd half') || t.includes('2h');
+  if (period === 'set' || String(period).startsWith('set')) {
+    const setM = String(period).match(/(\d+)/);
+    if (setM) {
+      return t.includes(`${setM[1]}세트`) || t.includes(`set ${setM[1]}`) || t.includes('1st set')
+        || t.includes('첫') || t.includes('1세트');
+    }
+    return t.includes('세트') || t.includes('set');
+  }
+  const mapM = String(period).match(/map(\d+)/i);
+  if (mapM) return t.includes(`맵 ${mapM[1]}`) || t.includes(`map ${mapM[1]}`) || t.includes(`맵${mapM[1]}`);
+  return true;
+}
+
+function isElementVisible(el) {
+  if (!el || !el.getBoundingClientRect) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return false;
+  const vh = window.innerHeight || 800;
+  return r.top < vh + 40 && r.bottom > -40;
+}
+
+function pickVisibleBoardEvent(events) {
+  let best = null;
+  let bestScore = -1;
+  for (const ev of events) {
+    let visCount = 0;
+    let visArea = 0;
+    for (const sel of ev.selections) {
+      if (!sel.element || !isElementVisible(sel.element)) continue;
+      visCount++;
+      const r = sel.element.getBoundingClientRect();
+      visArea += r.width * r.height;
+    }
+    const score = visCount * 100 + visArea / 1000 + ev.selections.length;
+    if (score > bestScore) {
+      bestScore = score;
+      best = ev;
+    }
+  }
+  return best || events[0] || null;
+}
+
+function collectVisibleMlButtons() {
+  const mlLines = Array.from(document.querySelectorAll('[class*="MoneyLineSelection_line"]'))
+    .filter(isElementVisible);
+  if (mlLines.length >= 2) {
+    return mlLines.map((line, i) => {
+      const btn = line.querySelector('button[class*="master_fe_Selections_selection"]') || line.querySelector('button') || line;
+      const parsed = parseSelectionButton(btn);
+      if (!parsed) return null;
+      const marketText = (line.closest('[class*="market"], [class*="Market"]')
+        ?.querySelector('[class*="marketName"], [class*="MarketName"]')?.textContent || '').trim();
+      return {
+        selectionText: parsed.label || parsed.rawText,
+        marketText,
+        marketKind: 'ml',
+        side: i === 0 ? 'home' : 'away',
+        line: parsed.line,
+        odds: parsed.odds,
+        element: btn
+      };
+    }).filter(Boolean);
+  }
+
+  const btns = Array.from(document.querySelectorAll('button[class*="master_fe_Selections_selection"]'))
+    .filter(isElementVisible);
+  const mlBtns = btns.map((btn, i) => {
+    const parsed = parseSelectionButton(btn);
+    if (!parsed) return null;
+    const pointsText = parsed.pointsText || '';
+    if (/[+-]\d/.test(pointsText)) return null;
+    const raw = (parsed.rawText || '').toLowerCase();
+    if (raw.includes('오버') || raw.includes('언더') || raw.includes('over') || raw.includes('under')) return null;
+    return {
+      selectionText: parsed.label || parsed.rawText,
+      marketText: '',
+      marketKind: 'ml',
+      side: i === 0 ? 'home' : 'away',
+      line: parsed.line,
+      odds: parsed.odds,
+      element: btn
+    };
+  }).filter(Boolean);
+  return mlBtns.length >= 2 ? mlBtns : [];
+}
+
+function pickBoardSelection(pool, hint = {}) {
+  const { side, excludeTeam, preferTeam, polyTeam } = hint;
+  if (!pool.length) return null;
+
+  const oppose = excludeTeam || polyTeam;
+  if (oppose) {
+    let pick = pool.find((s) => !teamNamesMatch(s.selectionText, oppose) && !teamNamesMatch(s.label, oppose));
+    if (!pick && pool.length >= 2) {
+      const homeHit = pool.find((s) => teamNamesMatch(s.selectionText, oppose));
+      const awayHit = pool.find((s, i) => i > 0 && teamNamesMatch(s.selectionText, oppose));
+      if (homeHit) pick = pool.find((s) => s !== homeHit) || pool[pool.length - 1];
+      else if (awayHit) pick = pool[0];
+      else pick = pool[pool.length - 1];
+    }
+    if (pick) return pick;
+  }
+
+  if (preferTeam) {
+    const pick = pool.find((s) => teamNamesMatch(s.selectionText, preferTeam) || teamNamesMatch(s.label, preferTeam));
+    if (pick) return pick;
+  }
+
+  if (side) {
+    const sideMap = { home: 'home', h: 'home', away: 'away', a: 'away', u: 'u', o: 'o' };
+    const want = sideMap[side] || side;
+    const pick = pool.find((s) => s.side === want);
+    if (pick) return pick;
+    if (want === 'home' && pool[0]) return pool[0];
+    if (want === 'away' && pool.length > 1) return pool[pool.length - 1];
+  }
+
+  return pool[0] || null;
+}
+
+function readBtiBoardOdds(hint = {}) {
+  const marketKind = hint.marketKind || hint.type || 'ml';
+  const period = hint.period || 'ft';
+
+  const board = scrapeBoardSelections();
+  let event = board.events.length ? pickVisibleBoardEvent(board.events) : null;
+  let pool = [];
+
+  if (event) {
+    pool = event.selections.filter((s) => {
+      if (marketKind && s.marketKind !== marketKind) return false;
+      if (period && period !== 'ft' && !matchPeriodInText(`${s.marketText} ${s.selectionText}`, period)) return false;
+      return true;
+    });
+    if (!pool.length && marketKind === 'ml') {
+      pool = (event.moneyline.length ? event.moneyline : event.selections.filter((s) => s.marketKind === 'ml'));
+    }
+    if (!pool.length) pool = event.selections;
+  }
+
+  const visiblePool = pool.filter((s) => s.element && isElementVisible(s.element));
+  if (visiblePool.length >= 2) pool = visiblePool;
+  else if (!pool.length) pool = collectVisibleMlButtons();
+
+  const pick = pickBoardSelection(pool, hint);
+  if (!pick?.odds) return null;
+
+  const evText = event?.eventText || findEventNameNearButton(pick.element) || '';
+  const { home, away } = parseEventTeams(evText);
+  let resolvedSide = pick.side || 'home';
+  if (marketKind === 'ml' && home && away) {
+    if (teamNamesMatch(pick.selectionText, away)) resolvedSide = 'away';
+    else if (teamNamesMatch(pick.selectionText, home)) resolvedSide = 'home';
+  }
+
+  return {
+    odds: pick.odds,
+    eventId: pick.eventId || (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
+    marketKind: pick.marketKind || marketKind,
+    period,
+    side: resolvedSide,
+    line: pick.line ?? null,
+    marketKey: `${period}_${pick.marketKind || marketKind}_${resolvedSide}`,
+    mktText: pick.marketText || '',
+    selectionText: pick.selectionText || pick.label || '',
+    eventText: evText,
+    source: 'board',
+    fromSlip: false,
+    boardElement: !!pick.element
+  };
+}
+
+function readBtiOdds(hint) {
+  const slip = readBtiSlip();
+  if (slip?.odds > 1.01) return { ...slip, fromSlip: true, source: slip.source || 'slip' };
+  const board = readBtiBoardOdds(hint || {});
+  if (board?.odds > 1.01) return board;
+  return null;
+}
+
+function ensureSlipFromBoard(hint = {}) {
+  const existing = readBtiSlip();
+  if (existing?.odds > 1.01) return { ok: true, slip: existing, alreadyHad: true };
+
+  const board = readBtiBoardOdds(hint);
+  if (!board) return { ok: false, reason: '배당판 선택 없음' };
+
+  const boardData = scrapeBoardSelections();
+  let pool = [];
+  const event = boardData.events.length ? pickVisibleBoardEvent(boardData.events) : null;
+  if (event) {
+    pool = event.selections.filter((s) => s.marketKind === (hint.marketKind || hint.type || 'ml'));
+    if (!pool.length) pool = event.moneyline.length ? event.moneyline : event.selections;
+  }
+  if (!pool.length) pool = collectVisibleMlButtons();
+
+  const pick = pickBoardSelection(pool, hint);
+  if (!pick?.element) return { ok: false, reason: '배당 버튼 없음' };
+
+  try {
+    pick.element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    pick.element.click();
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+
+  return { ok: true, clicked: true, targetOdds: board.odds, selectionText: board.selectionText };
+}
+
 function normalizeQuery(q) {
   return (q || '').replace(/\s+/g, '').toLowerCase();
 }
@@ -907,6 +1137,14 @@ function searchBtiOdds(query) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readBtiSlip() });
+    return false;
+  }
+  if (msg.type === 'READ_BTI_ODDS') {
+    sendResponse({ slip: readBtiOdds(msg.hint || {}) });
+    return false;
+  }
+  if (msg.type === 'ENSURE_BTI_SLIP') {
+    sendResponse(ensureSlipFromBoard(msg.hint || {}));
     return false;
   }
   if (msg.type === 'PLACE_BET') {
@@ -949,7 +1187,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const probe = probeBtiBetFrame();
     sendResponse({
       ok: true,
-      version: '2.28',
+      version: '2.29',
       href: location.href,
       isTop: window === window.top,
       buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
@@ -969,7 +1207,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   let pollTimer = null;
 
   function checkAndNotify() {
-    const slip = readBtiSlip();
+    const slip = readBtiOdds();
     if (!slip || !slip.odds || slip.odds <= 1) {
       if (lastOddsKey !== '') {
         lastOddsKey = '';
@@ -1004,4 +1242,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.28');
+console.log('[텐텐뱃] content script v2.29');
+try {
+  window.__btiReadOdds = readBtiOdds;
+  window.__btiEnsureSlip = ensureSlipFromBoard;
+} catch (_) {}
