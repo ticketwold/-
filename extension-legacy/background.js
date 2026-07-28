@@ -10,6 +10,10 @@ const INJECTABLE_SUFFIXES = [
 
 let searchRunning = false;
 let searchInterval = null;
+let panelWindowId = null;
+
+const PANEL_WIDTH = 540;
+const PANEL_HEIGHT = 780;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -412,6 +416,46 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+
+  if (msg.type === 'OPEN_PANEL') {
+    openPanelWindow().then((id) => sendResponse({ ok: true, windowId: id }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+});
+
+async function openPanelWindow() {
+  if (panelWindowId != null) {
+    try {
+      const win = await chrome.windows.get(panelWindowId);
+      if (win) {
+        await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+        return panelWindowId;
+      }
+    } catch (_) {
+      panelWindowId = null;
+    }
+  }
+
+  const url = chrome.runtime.getURL('panel.html');
+  const win = await chrome.windows.create({
+    url,
+    type: 'popup',
+    width: PANEL_WIDTH,
+    height: PANEL_HEIGHT,
+    focused: true
+  });
+  panelWindowId = win.id;
+  return panelWindowId;
+}
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === panelWindowId) panelWindowId = null;
+});
+
+// 확장 아이콘 클릭 → 큰 패널 창 열기
+chrome.action.onClicked.addListener(() => {
+  openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
 console.log('[양방봇 v5] background loaded');

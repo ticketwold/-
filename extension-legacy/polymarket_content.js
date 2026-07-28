@@ -17,12 +17,18 @@ function findTradePanel() {
   for (const el of document.querySelectorAll('div, section, aside, form')) {
     if (!visible(el)) continue;
     const t = el.innerText || '';
-    if (!/to\s*win/i.test(t) || !el.querySelector('input')) continue;
-    if (t.length > 4000) continue;
+    if (!el.querySelector('input')) continue;
+    if (t.length > 5000) continue;
+
+    const hasToWin = /to\s*win/i.test(t);
+    const hasAmount = /\bamount\b/i.test(t);
+    const hasBuy = /buy\s+[A-Za-z0-9]/i.test(t);
+    if (!hasToWin && !(hasAmount && hasBuy)) continue;
 
     let score = 0;
-    if (/\bamount\b/i.test(t)) score += 30;
-    if (/buy\s+[A-Za-z0-9]/i.test(t)) score += 35;
+    if (hasAmount) score += 30;
+    if (hasBuy) score += 35;
+    if (hasToWin) score += 25;
     if (/(?:avg\.?\s*)?price\s*\d/i.test(t)) score += 20;
     score += Math.min(t.length / 10, 100);
     if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
@@ -120,7 +126,48 @@ function readPayoutAmount(panel, stake) {
 function readListedPriceCents(panel) {
   const t = (panel?.innerText || '').replace(/\s+/g, ' ');
   const m = t.match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);
-  return m ? parseFloat(m[1]) : null;
+  if (m) return parseFloat(m[1]);
+  return null;
+}
+
+function parseCentsFromText(txt) {
+  const t = String(txt || '').replace(/\s+/g, ' ').trim();
+  if (/^\+\s*\$/.test(t) || /^sell\s+/i.test(t)) return null;
+  const m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (!m) return null;
+  const c = parseFloat(m[1]);
+  if (c <= 0 || c >= 100) return null;
+  if (c <= 2 && !/[A-Za-z]{2,}/.test(t)) return null;
+  return c;
+}
+
+function readOutcomeButtonCents(teamHint) {
+  const candidates = [];
+  const roots = [findTradePanel(), document.body].filter(Boolean);
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+
+      let score = 0;
+      if (btn.getAttribute('aria-pressed') === 'true') score += 80;
+      if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 80;
+      if (btn.getAttribute('aria-selected') === 'true') score += 70;
+      const cls = String(btn.className || '');
+      if (/active|selected|checked|pressed/i.test(cls)) score += 50;
+      if (teamHint && new RegExp(teamHint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t)) score += 100;
+      if (/^buy\s+/i.test(t)) score += 20;
+
+      candidates.push({ cents, score, t });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
 }
 
 function readTeamLabel(panel) {
@@ -147,7 +194,8 @@ function readPolymarketSlip() {
   const stake = readStake(panel);
   const payout = readPayoutAmount(panel, stake);
   const team = readTeamLabel(panel);
-  const listedCents = readListedPriceCents(panel);
+  let listedCents = readListedPriceCents(panel);
+  if (!listedCents) listedCents = readOutcomeButtonCents(team);
 
   let odds = null;
   let fromPayout = false;
@@ -162,7 +210,19 @@ function readPolymarketSlip() {
     if (price > 0 && price < 1) odds = 1 / price;
   }
 
-  if (!odds || odds <= 1.001) return null;
+  if (!odds || odds <= 1.001) {
+    if (!stake) {
+      return {
+        source: 'polymarket',
+        odds: null,
+        needsStake: true,
+        teamLabel: team,
+        hint: 'Polymarket 탭에서 금액($) 입력 필요',
+        marketKind: 'ml'
+      };
+    }
+    return null;
+  }
 
   const priceCents = listedCents || decimalToCents(odds);
   const profit = fromPayout && payout >= stake ? payout - stake : null;
@@ -179,7 +239,9 @@ function readPolymarketSlip() {
     stake: stake || null,
     payout: fromPayout ? payout : (stake ? stake * odds : null),
     toWin: profit,
-    hint: stake && payout ? `베팅 $${stake} → 수령 $${payout.toFixed(2)}` : (stake ? '' : '금액 입력 필요'),
+    hint: stake && payout
+      ? `베팅 $${stake} → 수령 $${payout.toFixed(2)}`
+      : (stake ? '' : '금액 입력 시 To win 반영'),
     marketKind: 'ml',
     period: 'ft',
     marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
@@ -270,7 +332,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   let timer = null;
   function tick() {
     const slip = readPolymarketSlip();
-    if (!slip) return;
+    if (!slip?.odds) return;
     const key = `${slip.odds}_${slip.stake}_${slip.payout}`;
     if (key === last) return;
     last = key;
