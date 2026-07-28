@@ -345,7 +345,26 @@ function parseMoneyValue(text) {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
-function readToWinFromDom(scope) {
+function isLikelyCentPriceContext(contextText, value) {
+  const ctx = String(contextText || '');
+  if (/¢/.test(ctx)) return true;
+  if (/avg\.?\s*price|^\s*price\s*\d/i.test(ctx) && value > 0 && value <= 99) return true;
+  if (value > 0 && value <= 99 && /\bprice\b/i.test(ctx)) return true;
+  return false;
+}
+
+function isValidToWinCandidate(value, stake, contextText) {
+  if (!value || value <= 0) return false;
+  if (stake && Math.abs(value - stake) < 0.02) return false;
+  if (isLikelyCentPriceContext(contextText, value)) return false;
+  const hasCents = Math.abs(value - Math.round(value)) > 0.001;
+  const wellAboveStake = stake ? value >= stake * 1.35 : value >= 5;
+  // 정수 13(Avg Price) 같은 센트값 오인식 차단 — 소수점 달러 또는 stake 대비 충분히 큰 금액만
+  if (!hasCents && value <= 99 && (!stake || value < stake * 1.35)) return false;
+  return hasCents || wellAboveStake;
+}
+
+function readToWinFromDom(scope, stake) {
   if (!scope) return null;
   const values = [];
 
@@ -359,8 +378,9 @@ function readToWinFromDom(scope) {
         if (!isVisible(node) || node === el) continue;
         const nt = (node.textContent || '').trim();
         if (/to\s*win|avg\.?\s*price|amount/i.test(nt) && nt.length < 24) continue;
+        if (/¢/.test(nt)) continue;
         const v = parseMoneyValue(nt);
-        if (v && v >= 1) values.push(v);
+        if (v && isValidToWinCandidate(v, stake, nt)) values.push(v);
       }
       container = container.parentElement;
     }
@@ -379,7 +399,7 @@ function parseOutcomeCentsPrice(txt) {
   return p;
 }
 
-function readToWinAmountFromScope(scope) {
+function readToWinAmountFromScope(scope, stake) {
   if (!scope) return null;
 
   const raw = scope.innerText || '';
@@ -391,17 +411,21 @@ function readToWinAmountFromScope(scope) {
 
     for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
       const v = parseFloat(m[1].replace(/,/g, ''));
-      if (v > 0) values.push(v);
+      const ctx = section.slice(Math.max(0, m.index - 6), m.index + m[0].length + 6);
+      if (isValidToWinCandidate(v, stake, ctx)) values.push(v);
     }
 
-    // Polymarket은 $ 기호 없이 60.58 만 표시하는 경우가 많음
     for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
       const v = parseFloat(m[1].replace(/,/g, ''));
-      if (v >= 1) values.push(v);
+      const lineStart = section.lastIndexOf('\n', m.index) + 1;
+      const lineEnd = section.indexOf('\n', m.index);
+      const line = section.slice(lineStart, lineEnd === -1 ? section.length : lineEnd);
+      if (/¢/.test(line)) continue;
+      if (isValidToWinCandidate(v, stake, line)) values.push(v);
     }
   }
 
-  const domVal = readToWinFromDom(scope);
+  const domVal = readToWinFromDom(scope, stake);
   if (domVal) values.push(domVal);
 
   for (const el of scope.querySelectorAll('*')) {
@@ -409,17 +433,14 @@ function readToWinAmountFromScope(scope) {
     if (!/^to\s*win/i.test(own.replace(/[^\w\s]/gi, '').trim()) && !/^to\s*win$/i.test(own)) continue;
     let node = el.nextElementSibling;
     for (let d = 0; d < 10 && node; d++) {
-      const v = parseMoneyValue((node.textContent || '').trim());
-      if (v && v >= 1) values.push(v);
-      node = node.nextElementSibling;
-    }
-    const parent = el.parentElement;
-    if (parent) {
-      const pm = (parent.textContent || '').replace(/\s+/g, ' ').match(/to\s*win[^$\d]{0,40}(?:\$\s*)?([\d,]+(?:\.\d+)?)/i);
-      if (pm) {
-        const v = parseFloat(pm[1].replace(/,/g, ''));
-        if (v > 0) values.push(v);
+      const nt = (node.textContent || '').trim();
+      if (/¢|avg\.?\s*price/i.test(nt)) {
+        node = node.nextElementSibling;
+        continue;
       }
+      const v = parseMoneyValue(nt);
+      if (v && isValidToWinCandidate(v, stake, nt)) values.push(v);
+      node = node.nextElementSibling;
     }
   }
 
@@ -428,20 +449,26 @@ function readToWinAmountFromScope(scope) {
 
 function readToWinAmount(panel) {
   const tradePanel = panel || findTradePanel();
-  let value = readToWinAmountFromScope(tradePanel);
   const stake = readStake(tradePanel);
+  let value = readToWinAmountFromScope(tradePanel, stake);
 
-  // 작은 위젯이 Amount($10)를 To win으로 잡거나, stake와 같은 값이면 페이지 전체 재탐색
   const suspicious = !value || (stake && stake >= 1 && value <= stake * 1.05);
   if (suspicious && document.body && document.body !== tradePanel) {
-    const bodyVal = readToWinAmountFromScope(document.body);
+    const bodyVal = readToWinAmountFromScope(document.body, stake);
     if (bodyVal && (!value || bodyVal > value + 0.01)) value = bodyVal;
   }
 
   if (!value && document.body) {
-    value = readToWinAmountFromScope(document.body);
+    value = readToWinAmountFromScope(document.body, stake);
   }
   return value;
+}
+
+function pickTrustedToWin(toWin, stake) {
+  if (!toWin) return null;
+  if (!isValidToWinCandidate(toWin, stake, '')) return null;
+  if (stake && toWin <= stake * 1.05) return null;
+  return toWin;
 }
 
 function namesMatch(a, b) {
@@ -626,10 +653,13 @@ function readPolymarketSlip() {
   let teamLabel = readTeamLabel(panel);
 
   // stake와 거의 같은 To win(오인식)이면 가격 폴백 전에 무시
-  const trustedToWin = toWin && (!stake || toWin > stake * 1.05) ? toWin : null;
+  const trustedToWin = pickTrustedToWin(toWin, stake);
   const { odds, payout, profit, fromToWin } = calcOddsFromStake(stake, trustedToWin, null);
   if (odds && fromToWin) {
-    const priceCents = Math.round(1000 / odds) / 10;
+    const listedCents = readPanelListedPrice(panel);
+    const priceCents = listedCents != null
+      ? Math.round(listedCents * 1000) / 10
+      : Math.round(1000 / odds) / 10;
     const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
     const totalPayout = payout;
     return {
@@ -889,4 +919,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v2.3');
+console.log('[Polymarket봇] content script v2.4');
