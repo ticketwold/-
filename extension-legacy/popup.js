@@ -2864,7 +2864,8 @@ function polyPlaceBetInject(amountUsd) {
         let score = 0;
         if (/submit|place-order|trade-submit|order-submit|trade-button/i.test(testId)) score += 90;
         if (/\$\s*[\d,]+(?:\.\d+)?/.test(t)) score += 70;
-        if (/^buy\s+.+/i.test(t) && t.length > 6) score += 55;
+        if (/^buy\s+.+/i.test(t) && t.length > 6) score += 85;
+        if (/buy\s+[A-Za-z0-9가-힣]/i.test(t) && t.length > 8) score += 90;
         if (/buy/i.test(t)) score += 20;
         if (panel && panel.contains(btn)) score += 25;
         score += Math.round(btn.getBoundingClientRect().top / 8);
