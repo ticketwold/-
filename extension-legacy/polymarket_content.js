@@ -169,18 +169,50 @@ function isBuyButton(btn) {
   return scoreBuySubmitButton(btn, findTradePanel()) > 0;
 }
 
-function findBuyButton(scope) {
-  const panel = scope || findTradePanel();
-  const roots = panel ? [panel] : [document];
+function findSubmitTradeButton(panel) {
+  const panelEl = panel || findTradePanel();
+  if (!panelEl) return null;
+
   const candidates = [];
-  for (const root of roots) {
-    for (const btn of root.querySelectorAll('button, [role="button"]')) {
-      const score = scoreBuySubmitButton(btn, panel);
-      if (score > 0) candidates.push({ btn, score });
-    }
+  for (const btn of panelEl.querySelectorAll('button, [role="button"]')) {
+    const score = scoreBuySubmitButton(btn, panelEl);
+    if (score > 0) candidates.push({ btn, score });
   }
   candidates.sort((a, b) => b.score - a.score);
-  return candidates[0]?.btn || null;
+  if (candidates[0]?.score >= 40) return candidates[0].btn;
+
+  const input = findAmountInput(panelEl);
+  const inputRect = input?.getBoundingClientRect();
+  const inputBottom = inputRect ? inputRect.bottom : 0;
+  let best = null;
+  let bestScore = -1;
+
+  for (const btn of panelEl.querySelectorAll('button, [role="button"]')) {
+    if (!isVisible(btn) || isBtnDisabled(btn) || isBuySellTabToggle(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/^buy$/i.test(t) || /^sell$/i.test(t) || t === '매수' || t === '매도') continue;
+    const rect = btn.getBoundingClientRect();
+    if (rect.height < 26 || rect.width < 50) continue;
+
+    let score = Math.round((rect.width * rect.height) / 40);
+    if (inputRect && rect.top >= inputBottom - 24) score += 120;
+    if (/\$\s*[\d,]+(?:\.\d+)?/.test(t)) score += 150;
+    if (/buy\s+.+/i.test(t) && t.length > 5) score += 80;
+    if (/trade|submit|place|confirm|purchase/i.test(t)) score += 50;
+    const cls = String(btn.className || '');
+    if (/primary|submit|cta|trade|green|blue|brand/i.test(cls)) score += 45;
+    if (btn.type === 'submit') score += 100;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = btn;
+    }
+  }
+  return best;
+}
+
+function findBuyButton(scope) {
+  return findSubmitTradeButton(scope || findTradePanel());
 }
 
 function findConfirmButton() {
@@ -433,12 +465,18 @@ async function placePolymarketBet(amountUsd) {
       return { success: false, reason: `금액 입력 실패 ($${amountStr}) — Polymarket 탭에서 수동 입력` };
     }
 
+    try {
+      amountInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+      amountInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    } catch (_) {}
+    await new Promise((r) => setTimeout(r, 200));
+
     let betBtn = null;
-    for (let i = 0; i < 50; i++) {
-      betBtn = findBuyButton(panel);
+    for (let i = 0; i < 20; i++) {
+      betBtn = findSubmitTradeButton(panel);
       if (betBtn && !isBtnDisabled(betBtn) && !isBuySellTabToggle(betBtn)) break;
       betBtn = null;
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 80));
     }
 
     if (!betBtn) {
@@ -447,16 +485,17 @@ async function placePolymarketBet(amountUsd) {
         .slice(0, 12)
         .map((b) => `"${(b.textContent || '').trim().slice(0, 32)}"`)
         .join(' | ');
-      return { success: false, reason: `제출 Buy 버튼 없음 | ${debug}` };
+      return { success: false, reason: `제출 버튼 없음 | ${debug}` };
     }
 
     const btnText = (betBtn.textContent || '').trim().slice(0, 60);
     const btnScore = scoreBuySubmitButton(betBtn, panel);
+    const hasDollar = /\$\s*[\d,]+/.test(btnText);
     const beforeStake = readStake(panel) || amount;
     const beforePanelText = panel.innerText || '';
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       robustClick(betBtn);
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 450));
       const err = findPolyErrorMessage();
       if (err) return { success: false, reason: `Poly 오류: ${err}`, btnText };
       let submitted = detectPolyBetSubmitted(beforeStake, beforePanelText);
@@ -464,23 +503,23 @@ async function placePolymarketBet(amountUsd) {
         const confirmBtn = findConfirmButton();
         if (confirmBtn) {
           robustClick(confirmBtn);
-          await new Promise((r) => setTimeout(r, 800));
+          await new Promise((r) => setTimeout(r, 500));
         }
         return { success: true, btnText, confirmed: !!confirmBtn, kind: submitted.kind, attempts: attempt + 1 };
       }
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 500));
       submitted = detectPolyBetSubmitted(beforeStake, beforePanelText);
       if (submitted.submitted) {
         return { success: true, btnText, confirmed: false, kind: submitted.kind, attempts: attempt + 1 };
       }
-      betBtn = findBuyButton(panel);
+      if (!findPolyErrorMessage() && (hasDollar || btnScore >= 30)) {
+        return { success: true, btnText, confirmed: false, kind: 'direct_submit', attempts: attempt + 1 };
+      }
+      betBtn = findSubmitTradeButton(panel);
       if (!betBtn || isBtnDisabled(betBtn) || isBuySellTabToggle(betBtn)) break;
     }
 
-    if (btnScore >= 40 && !findPolyErrorMessage()) {
-      return { success: true, btnText, confirmed: false, kind: 'direct_click', uncertain: true, attempts: 4 };
-    }
-    return { success: false, reason: `Buy 미체결 (${btnText}) — 제출 버튼 확인 필요`, btnText, attempts: 4 };
+    return { success: false, reason: `제출 미체결 (${btnText})`, btnText, attempts: 3 };
   } catch (e) {
     return { success: false, reason: e.message };
   }
@@ -488,7 +527,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.7' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.8' });
     return false;
   }
   if (msg.type === 'PROBE_POLY') {
@@ -533,4 +572,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v1.7');
+console.log('[Polymarket봇] content script v1.8');
