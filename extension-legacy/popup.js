@@ -3229,18 +3229,33 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
 
 async function polyPollLoop() {
   if (!botRunning || betInProgress) return;
-  const { btiTab, polyTab } = await findTabs();
-  if (!btiTab || !polyTab) { updateUI(null, null, null); return; }
 
-  const pSlip = await readPolySlipFromTab(polyTab);
-  const hint = getBtiReadHint(pSlip);
-  const bSlip = btiTab?.id
-    ? await readBtiOddsAnyFrame(btiTab.id, btiTab.frameId ?? 0, hint)
-    : null;
+  let { btiTab, polyTab } = await findTabs();
+  if (!btiTab?.id && lastBtiBetFrame?.tabId) {
+    btiTab = { id: lastBtiBetFrame.tabId, frameId: lastBtiBetFrame.frameId };
+  }
 
-  if (bSlip) cachedBtiSlip = bSlip;
-  else cachedBtiSlip = null;
-  if (pSlip) cachedPolySlip = pSlip;
+  if (!btiTab || !polyTab) {
+    const profit = (cachedBtiSlip && cachedPolySlip && cachedBtiSlip.odds > 1 && cachedPolySlip.odds > 1)
+      ? calcProfit(cachedBtiSlip.odds, cachedPolySlip.odds) : null;
+    updateUI(cachedBtiSlip, cachedPolySlip, profit);
+    return;
+  }
+
+  const pSlipFresh = await readPolySlipFromTab(polyTab);
+  const hint = getBtiReadHint(pSlipFresh || cachedPolySlip);
+  const bSlipFresh = await readBtiOddsAnyFrame(btiTab.id, btiTab.frameId ?? 0, hint);
+
+  const bSlip = bSlipFresh || cachedBtiSlip;
+  const pSlip = pSlipFresh || cachedPolySlip;
+
+  if (bSlipFresh) cachedBtiSlip = bSlipFresh;
+  if (pSlipFresh) cachedPolySlip = pSlipFresh;
+
+  if (!bSlip || !pSlip || !bSlip.odds || !pSlip.odds) {
+    updateUI(bSlip, pSlip, null);
+    return;
+  }
 
   if (!bSlip || !pSlip || !bSlip.odds || !pSlip.odds) {
     updateUI(bSlip, pSlip, null);
@@ -4001,29 +4016,15 @@ function startBot() {
   const mktInfo = manualMarket ? ` | 마켓: ${manualMarket.period} ${manualMarket.type} ${manualMarket.side}` : ' | 자동 감지';
   addLog(`봇 시작 [텐텐뱃+Poly] ${minBetAmount.toLocaleString()}원 · 환율 ${usdtRate}원/USD · 수익 ${formatProfitRangeLabel()} · 허용오차 ±${lineTolerance}${mktInfo}`, 'info');
 
-  findTabs().then(({ btiTab }) => {
-    if (!btiTab) return;
-    execAsyncInTab(btiTab, function() {
-      try {
-        const input = document.getElementById('counter')
-          || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"]');
-        if (!input) return { ok: false, reason: 'input 없음' };
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(input, '');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        return { ok: true };
-      } catch(e) { return { ok: false, reason: e.message }; }
-    }, []).then(res => {
-      if (res && res.ok) addLog('텐텐뱃 베팅카트 금액 자동 제거 완료', 'info');
-    }).catch(() => {});
-  }).catch(() => {});
-
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(polyPollLoop, POLL_INTERVAL_MS);
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
-  updateUI(null, null, null);
+
+  const bootProfit = (cachedBtiSlip && cachedPolySlip && cachedBtiSlip.odds > 1 && cachedPolySlip.odds > 1)
+    ? calcProfit(cachedBtiSlip.odds, cachedPolySlip.odds) : null;
+  updateUI(cachedBtiSlip, cachedPolySlip, bootProfit);
+  polyPollLoop();
 }
 
 function stopBot() {
@@ -4031,8 +4032,10 @@ function stopBot() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   const s = document.getElementById('startBtn'), e = document.getElementById('stopBtn');
   if (s) s.disabled = false;
-  if (e) e.disabled = true;
-  updateUI(null, null, null);
+  if (e) e.disabled = false;
+  const profit = (cachedBtiSlip && cachedPolySlip && cachedBtiSlip.odds > 1 && cachedPolySlip.odds > 1)
+    ? calcProfit(cachedBtiSlip.odds, cachedPolySlip.odds) : null;
+  updateUI(cachedBtiSlip, cachedPolySlip, profit);
 }
 
 // ─── 초기화 ──────────────────────────────────────────────────────────
