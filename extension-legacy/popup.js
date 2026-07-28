@@ -48,16 +48,29 @@ function getUsdRate() {
 
 function formatOdds(slip) {
   if (!slip) return '-';
-  if (slip.needsStake) return '금액입력';
-  if (!slip.odds || slip.odds <= 1) return '-';
+  if (!slip.odds || slip.odds <= 1) {
+    if (slip.needsStake) return '금액입력';
+    return '-';
+  }
   if (slip.displayLabel) return slip.displayLabel;
   if (slip.priceCents != null) return `${slip.priceCents}¢ (${slip.odds.toFixed(3)})`;
   return slip.odds.toFixed(3);
 }
 
-function formatMeta(slip) {
+function formatBtiMeta(slip) {
   if (!slip) return '-';
-  const parts = [slip.selectionText || slip.teamLabel || ''];
+  const team = slip.teamLabel || slip.selectionText || '';
+  if (team && !/^W[12]$/i.test(team)) return team;
+  if (slip.homeTeam || slip.awayTeam) {
+    if (slip.side === 'away' || slip.side === 'a') return slip.awayTeam || team || '-';
+    return slip.homeTeam || team || '-';
+  }
+  return team || '-';
+}
+
+function formatPolyMeta(slip) {
+  if (!slip) return '-';
+  const parts = [slip.teamLabel || slip.selectionText || ''];
   if (slip.hint) parts.push(slip.hint);
   return parts.filter(Boolean).join(' · ').slice(0, 100) || '-';
 }
@@ -65,13 +78,18 @@ function formatMeta(slip) {
 function updateSlipUI(bti, poly) {
   $('btiOdds').textContent = formatOdds(bti);
   $('polyOdds').textContent = formatOdds(poly);
-  $('btiMeta').textContent = formatMeta(bti);
-  $('polyMeta').textContent = formatMeta(poly);
+  $('btiMeta').textContent = formatBtiMeta(bti);
+  $('polyMeta').textContent = formatPolyMeta(poly);
 
-  const profit = (bti?.odds > 1 && poly?.odds > 1) ? calcProfit(bti.odds, poly.odds) : null;
+  const btiO = bti?.odds > 1 ? bti.odds : null;
+  const polyO = poly?.odds > 1 ? poly.odds : null;
+  const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
   profitEl.textContent = profit !== null ? `${profit.toFixed(2)}%` : '-';
-  profitEl.className = 'profit' + (profit !== null && profit >= getMinProfit() ? ' positive' : '');
+  let profitCls = 'profit';
+  if (profit !== null && profit >= getMinProfit()) profitCls += ' positive';
+  else if (profit !== null && profit < 0) profitCls += ' negative';
+  profitEl.className = profitCls;
 
   const hint = $('profitHint');
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
@@ -452,8 +470,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, 500);
 refreshSlips();
-log(`v5.0.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
-
-if (!IS_PANEL) {
-  chrome.runtime.sendMessage({ type: 'OPEN_PANEL' });
-}
+log(`v5.0.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

@@ -981,6 +981,38 @@ function parseEventTeams(eventText) {
   return { home: eventText, away: '' };
 }
 
+function resolveBtiTeamLabel(slip) {
+  if (!slip) return '';
+  const sel = String(slip.selectionText || '').trim();
+  const { home, away } = parseEventTeams(slip.eventText || '');
+
+  if (/^W1$/i.test(sel)) return home || 'W1';
+  if (/^W2$/i.test(sel)) return away || 'W2';
+
+  if (sel && !/^W[12]$/i.test(sel)) {
+    const cleaned = sel.replace(/\s*[+-]\d+\.?\d*\s*$/, '').trim();
+    if (cleaned.length >= 2) return cleaned;
+  }
+
+  if (slip.side === 'away' || slip.side === 'a' || slip.side === 'Away') return away || home || sel;
+  if (slip.side === 'home' || slip.side === 'h' || slip.side === 'Home') return home || away || sel;
+
+  if (home && away) {
+    if (teamNamesMatch(sel, away)) return away;
+    if (teamNamesMatch(sel, home)) return home;
+  }
+  return sel || home || away || '';
+}
+
+function enrichBtiSlip(slip) {
+  if (!slip) return slip;
+  const { home, away } = parseEventTeams(slip.eventText || '');
+  slip.homeTeam = slip.homeTeam || home;
+  slip.awayTeam = slip.awayTeam || away;
+  slip.teamLabel = resolveBtiTeamLabel(slip);
+  return slip;
+}
+
 function detectMarketType(text) {
   const t = (text || '').toLowerCase();
   if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
@@ -1227,7 +1259,7 @@ function readBtiBoardOdds(hint = {}) {
     else if (teamNamesMatch(pick.selectionText, home)) resolvedSide = 'home';
   }
 
-  return {
+  return enrichBtiSlip({
     odds: pick.odds,
     eventId: pick.eventId || (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
     marketKind: pick.marketKind || marketKind,
@@ -1238,18 +1270,24 @@ function readBtiBoardOdds(hint = {}) {
     mktText: pick.marketText || '',
     selectionText: pick.selectionText || pick.label || '',
     eventText: evText,
+    homeTeam: home,
+    awayTeam: away,
     source: 'board',
     fromSlip: false,
     boardElement: !!pick.element
-  };
+  });
 }
 
 function readBtiOdds(hint) {
   const slip = readBtiSlip(hint);
-  if (slip?.odds > 1.01) return { ...slip, fromSlip: slip.fromSlip !== false, source: slip.source || 'slip' };
+  if (slip?.odds > 1.01) {
+    return enrichBtiSlip({ ...slip, fromSlip: slip.fromSlip !== false, source: slip.source || 'slip' });
+  }
   const board = readBtiBoardOdds(hint || {});
-  if (board?.odds > 1.01) return board;
-  return readSlipLooseFromPanel(hint);
+  if (board?.odds > 1.01) return enrichBtiSlip(board);
+  const loose = readSlipLooseFromPanel(hint);
+  if (loose?.odds > 1.01) return enrichBtiSlip(loose);
+  return loose ? enrichBtiSlip(loose) : null;
 }
 
 function ensureSlipFromBoard(hint = {}) {

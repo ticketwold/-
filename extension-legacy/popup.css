@@ -90,6 +90,9 @@ body.panel-mode .slip-box .odds { font-size: 24px; }
 .profit-box .profit { font-size: 26px; font-weight: bold; color: #888; }
 body.panel-mode .profit-box .profit { font-size: 32px; }
 .profit-box .profit.positive { color: #4ade80; }
+.profit-box .profit.negative { color: #f87171; }
+.slip-box .meta.team-name { color: #e8e8f0; font-size: 12px; font-weight: bold; }
+body.panel-mode .slip-box .meta.team-name { font-size: 13px; }
 .calc-box {
   background: #1a1a2e; border-radius: 6px; padding: 10px; font-size: 13px; margin-bottom: 8px;
 }

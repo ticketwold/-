@@ -8,7 +8,9 @@ function calcArb(odds1, odds2) {
 }
 
 function calcProfit(btiOdds, polyOdds) {
-  return calcArb(btiOdds, polyOdds);
+  if (!btiOdds || !polyOdds || btiOdds <= 1 || polyOdds <= 1) return null;
+  const margin = (1 / btiOdds) + (1 / polyOdds);
+  return ((1 / margin) - 1) * 100;
 }
 
 function polyPriceToDecimal(price) {
