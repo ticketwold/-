@@ -1510,8 +1510,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ── MutationObserver: BTI 배당/슬립 변화 즉시 감지 ──
 (function startBtiObserver() {
   let lastOddsKey = '';
-  let debounceTimer = null;
-  let pollTimer = null;
+  let pending = false;
+
+  function oddsKey(slip) {
+    if (!slip?.odds || slip.odds <= 1) return '';
+    return `${slip.odds}_${slip.marketKey || ''}_${slip.selectionText || ''}_${slip.teamLabel || ''}`;
+  }
 
   function checkAndNotify() {
     const slip = readBtiOdds();
@@ -1524,7 +1528,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       return;
     }
-    const key = `${slip.odds.toFixed(4)}_${slip.marketKey}_${slip.selectionText}`;
+    const key = oddsKey(slip);
     if (key === lastOddsKey) return;
     lastOddsKey = key;
     try {
@@ -1532,28 +1536,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     } catch (e) {}
   }
 
+  function notifyNow() {
+    checkAndNotify();
+    requestAnimationFrame(() => {
+      checkAndNotify();
+      requestAnimationFrame(checkAndNotify);
+    });
+  }
+
   function scheduleCheck() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(checkAndNotify, 25);
+    if (pending) return;
+    pending = true;
+    queueMicrotask(() => {
+      pending = false;
+      checkAndNotify();
+    });
   }
 
   if (document.body) {
     document.addEventListener('click', (e) => {
       const btn = e.target?.closest?.('button[class*="master_fe_Selections_selection"]');
-      if (btn) {
-        lastBoardClickAt = Date.now();
-        lastBoardClickBtn = btn;
-      }
+      if (!btn) return;
+      lastBoardClickAt = Date.now();
+      lastBoardClickBtn = btn;
+      notifyNow();
     }, true);
 
     const obs = new MutationObserver(scheduleCheck);
     obs.observe(document.body, {
       subtree: true, childList: true, characterData: true,
-      attributes: true, attributeFilter: ['class', 'data-testid', 'aria-label']
+      attributes: true,
+      attributeFilter: ['class', 'data-testid', 'aria-label', 'aria-pressed', 'data-state', 'data-selected']
     });
-    document.addEventListener('input', scheduleCheck, true);
-    pollTimer = setInterval(checkAndNotify, 250);
-    scheduleCheck();
+    document.addEventListener('input', notifyNow, true);
+    setInterval(checkAndNotify, 16);
+    notifyNow();
   }
 })();
 

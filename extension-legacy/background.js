@@ -422,6 +422,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+
+  if (msg.type === 'ODDS_CHANGED') {
+    broadcast(msg);
+    return false;
+  }
 });
 
 async function openPanelWindow() {

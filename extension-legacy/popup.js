@@ -2,7 +2,8 @@
 
 'use strict';
 
-const POLL_MS = 400;
+const POLL_MS = 16;
+const FALLBACK_REFRESH_MS = 3000;
 const IS_PANEL = document.body.classList.contains('panel-mode');
 let botRunning = false;
 let betInProgress = false;
@@ -378,6 +379,33 @@ async function pollLoop() {
   if (profit !== null && profit >= getMinProfit()) await tryBet();
 }
 
+function applySlipUpdate(source, slip) {
+  if (source === 'bti') {
+    if (slip?.odds > 1) cachedBti = slip;
+    else if (slip) {
+      if (cachedBti?.odds > 1) cachedBti = { ...cachedBti, ...slip, odds: cachedBti.odds };
+      else cachedBti = slip;
+    } else cachedBti = null;
+  }
+  if (source === 'polymarket') {
+    if (slip?.odds > 1) cachedPoly = slip;
+    else if (slip) {
+      if (cachedPoly?.odds > 1) cachedPoly = { ...cachedPoly, ...slip, odds: cachedPoly.odds };
+      else cachedPoly = slip;
+    } else cachedPoly = null;
+  }
+  updateSlipUI(cachedBti, cachedPoly);
+}
+
+function onOddsChanged(msg) {
+  if (msg.source === 'bti') applySlipUpdate('bti', msg.slip);
+  if (msg.source === 'polymarket') applySlipUpdate('polymarket', msg.slip);
+
+  if (!botRunning || betInProgress) return;
+  const profit = calcProfit(cachedBti?.odds, cachedPoly?.odds);
+  if (profit !== null && profit >= getMinProfit()) tryBet();
+}
+
 function startBot() {
   if (botRunning) return;
   botRunning = true;
@@ -478,22 +506,9 @@ $('diagBtn')?.addEventListener('click', async () => {
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SEARCH_RESULT') renderSearchResults(msg);
-  if (msg.type === 'ODDS_CHANGED') {
-    if (msg.source === 'bti' && msg.slip) {
-      if (msg.slip.odds > 1) cachedBti = msg.slip;
-      else if (cachedBti?.odds > 1) cachedBti = { ...cachedBti, ...msg.slip, odds: cachedBti.odds };
-      else cachedBti = msg.slip;
-    }
-    if (msg.source === 'polymarket' && msg.slip) {
-      if (msg.slip.odds > 1) cachedPoly = msg.slip;
-      else if (cachedPoly?.odds > 1) cachedPoly = { ...cachedPoly, ...msg.slip, odds: cachedPoly.odds };
-      else cachedPoly = msg.slip;
-    }
-    updateSlipUI(cachedBti, cachedPoly);
-    if (botRunning && !betInProgress) pollLoop();
-  }
+  if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
 });
 
-setInterval(() => { if (!botRunning) refreshSlips(); }, 500);
+setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.0.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.0.4 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

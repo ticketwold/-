@@ -162,7 +162,7 @@ function readPageOutcomeCents() {
   }
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].score >= 50 ? candidates[0].cents : candidates[0].cents;
+  return candidates[0].cents;
 }
 
 function readOutcomeButtonCents(teamHint) {
@@ -358,25 +358,54 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 
 (function observe() {
   let last = '';
-  let timer = null;
+  let pending = false;
+
+  function slipKey(slip) {
+    if (!slip) return '';
+    return `${slip.odds || 'x'}_${slip.stake || ''}_${slip.payout || ''}_${slip.teamLabel || ''}_${slip.priceCents || ''}`;
+  }
+
   function tick() {
     const slip = readPolymarketSlip();
     if (!slip) return;
-    const key = `${slip.odds || 'x'}_${slip.stake}_${slip.payout}_${slip.teamLabel}_${slip.priceCents}`;
+    const key = slipKey(slip);
     if (key === last) return;
     last = key;
     try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'polymarket', slip }); } catch (_) {}
   }
-  function schedule() {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(tick, 50);
-  }
-  if (document.body) {
-    new MutationObserver(schedule).observe(document.body, {
-      subtree: true, childList: true, characterData: true, attributes: true
+
+  function notifyNow() {
+    tick();
+    requestAnimationFrame(() => {
+      tick();
+      requestAnimationFrame(tick);
     });
-    document.addEventListener('input', schedule, true);
-    schedule();
+  }
+
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    queueMicrotask(() => {
+      pending = false;
+      tick();
+    });
+  }
+
+  if (document.body) {
+    document.addEventListener('click', (e) => {
+      const btn = e.target?.closest?.('button, [role="button"], [role="radio"]');
+      if (!btn || isBuySellTab(btn)) return;
+      notifyNow();
+    }, true);
+
+    new MutationObserver(schedule).observe(document.body, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-state', 'aria-pressed', 'aria-selected', 'aria-label', 'value']
+    });
+    document.addEventListener('input', notifyNow, true);
+    setInterval(tick, 16);
+    notifyNow();
   }
 })();
 
