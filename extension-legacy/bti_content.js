@@ -858,10 +858,23 @@ async function waitSlipStable(targetOdds, maxWaitMs = 5000) {
 }
 
 // ── BTI 베팅 실행 ──
-async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
+async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint = {}) {
   try {
     if (document.querySelector('[class*="UpdateNotification"]')) {
       return { success: false, reason: '배당 업데이트 중 — 잠시 후 재시도' };
+    }
+
+    let realCards = getRealSlipCards();
+    if (!realCards.length) {
+      const ensured = await ensureSlipFromBoard(hint);
+      if (!ensured.ok) return { success: false, reason: ensured.reason || '슬립 카드 없음' };
+      realCards = getRealSlipCards();
+      if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
+    }
+
+    const stable = await waitSlipStable(targetOdds, 3000);
+    if (!stable.ready && targetOdds) {
+      return { success: false, reason: stable.reason || '슬립 배당 미확정' };
     }
 
     // ── 기준점 검증 (위치 변경 버그 방어) ──
@@ -887,9 +900,6 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
       }
     }
 
-    const realCards = getRealSlipCards();
-    if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
-
     const input = findBtiBetInput();
     if (!input) return { success: false, reason: '금액 입력 필드 없음' };
 
@@ -897,10 +907,14 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
     nativeSetter.call(input, String(amount));
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
 
-    await new Promise((r) => setTimeout(r, 800));
-
-    const betBtn = findBtiBetButton();
+    let betBtn = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      betBtn = findBtiBetButton();
+      if (betBtn && !betBtn.disabled) break;
+    }
     if (!betBtn) return { success: false, reason: '베팅 버튼 없음 (금액 미입력 또는 최소금액 미달?)' };
 
     const rect = betBtn.getBoundingClientRect();
@@ -1392,9 +1406,13 @@ function readBtiOdds(hint) {
   return loose ? enrichBtiSlip(loose) : null;
 }
 
-function ensureSlipFromBoard(hint = {}) {
-  const existing = readBtiSlip();
-  if (existing?.odds > 1.01) return { ok: true, slip: existing, alreadyHad: true };
+async function ensureSlipFromBoard(hint = {}) {
+  const cards = getRealSlipCards();
+  const existing = readBtiSlip(hint);
+  if (cards.length > 0 && existing?.odds > 1.01) {
+    const stable = await waitSlipStable(existing.odds, 2500);
+    return { ok: true, slip: existing, alreadyHad: true, stable: stable.ready };
+  }
 
   const board = readBtiBoardOdds(hint);
   if (!board) return { ok: false, reason: '배당판 선택 없음' };
@@ -1414,11 +1432,31 @@ function ensureSlipFromBoard(hint = {}) {
   try {
     pick.element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     pick.element.click();
+    lastBoardClickAt = Date.now();
+    lastBoardClickBtn = pick.element;
   } catch (e) {
     return { ok: false, reason: e.message };
   }
 
-  return { ok: true, clicked: true, targetOdds: board.odds, selectionText: board.selectionText };
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (getRealSlipCards().length > 0) {
+      const slip = readBtiSlip(hint);
+      if (slip?.odds > 1.01) {
+        const stable = await waitSlipStable(board.odds || slip.odds, 2000);
+        return {
+          ok: true,
+          clicked: true,
+          slip,
+          targetOdds: board.odds,
+          selectionText: board.selectionText,
+          stable: stable.ready
+        };
+      }
+    }
+  }
+
+  return { ok: false, reason: '슬립 생성 타임아웃 — 배당판 다시 클릭' };
 }
 
 function normalizeQuery(q) {
@@ -1451,11 +1489,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'ENSURE_BTI_SLIP') {
-    sendResponse(ensureSlipFromBoard(msg.hint || {}));
-    return false;
+    ensureSlipFromBoard(msg.hint || {}).then(sendResponse);
+    return true;
   }
   if (msg.type === 'PLACE_BET') {
-    placeBtiBet(msg.amount, msg.targetLine, msg.lineTolerance, msg.targetOdds)
+    placeBtiBet(msg.amount, msg.targetLine, msg.lineTolerance, msg.targetOdds, msg.hint || {})
       .then((result) => sendResponse(result));
     return true;
   }

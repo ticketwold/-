@@ -324,6 +324,20 @@ function setInputValue(input, value) {
   return true;
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function pageHasOrderSuccess() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /order submitted|purchase complete|shares purchased|bought|trade submitted|매수 완료|주문 완료|confirmed/i.test(text);
+}
+
+function pageHasOrderError() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /insufficient (balance|funds)|not enough|failed to (buy|place)|transaction failed|rejected|거부|잔액 부족/i.test(text);
+}
+
 async function placePolymarketBet(amountUsd) {
   const panel = findTradePanel();
   if (!panel) return { success: false, reason: '주문 패널 없음' };
@@ -332,13 +346,43 @@ async function placePolymarketBet(amountUsd) {
 
   const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
   setInputValue(input, amount.toFixed(2));
-  await new Promise((r) => setTimeout(r, 400));
 
-  const btn = findBuyButton(panel);
-  if (!btn) return { success: false, reason: 'Buy 버튼 없음' };
+  let btn = null;
+  for (let i = 0; i < 25; i++) {
+    await sleep(80);
+    btn = findBuyButton(panel);
+    if (btn && !btn.disabled) {
+      const t = (btn.textContent || '').toLowerCase();
+      if (/buy/.test(t) && !/enter amount|minimum/i.test(t)) break;
+    }
+    btn = null;
+  }
+  if (!btn) return { success: false, reason: 'Buy 버튼 없음 (금액/최소주문 확인)' };
+
+  const stake = readStake(panel);
+  if (!stake || stake < amount * 0.9) {
+    return { success: false, reason: `금액 반영 실패 (입력 $${stake || 0})` };
+  }
+
   robustClick(btn);
-  await new Promise((r) => setTimeout(r, 500));
-  return { success: true, btnText: (btn.textContent || '').trim().slice(0, 40) };
+
+  for (let i = 0; i < 40; i++) {
+    await sleep(150);
+    if (pageHasOrderSuccess()) {
+      return { success: true, confirmed: true, btnText: (btn.textContent || '').trim().slice(0, 40) };
+    }
+    if (pageHasOrderError()) {
+      return { success: false, reason: '주문 거부/잔액 부족' };
+    }
+    const confirmBtn = Array.from(document.querySelectorAll('button, [role="button"]')).find((b) => {
+      if (!visible(b) || b.disabled) return false;
+      const t = (b.textContent || '').trim();
+      return /^(confirm|submit|place order|확인)$/i.test(t);
+    });
+    if (confirmBtn) robustClick(confirmBtn);
+  }
+
+  return { success: false, reason: '주문 확인 타임아웃 (지갑 승인 필요?)' };
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
