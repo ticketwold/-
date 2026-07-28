@@ -280,6 +280,59 @@ function readStake(scope) {
   return null;
 }
 
+function isNoiseCentsButton(txt) {
+  const t = String(txt || '').replace(/\s+/g, ' ').trim();
+  if (!t) return true;
+  if (/^\+\s*\$/.test(t)) return true;
+  if (/^\$\d+(\.\d+)?$/.test(t)) return true;
+  if (/\+\s*\$?\d+.*@\s*\d+\s*¢/i.test(t)) return true;
+  if (/^buy\s*\$/i.test(t)) return true;
+  return false;
+}
+
+function parseOutcomeCentsPrice(txt) {
+  if (isNoiseCentsButton(txt)) return null;
+  const p = parseCentsPrice(txt);
+  if (!p) return null;
+  // 1~2¢는 퀵버튼 오인식 — 팀명 없으면 제외
+  const team = extractTeamFromCentsLabel(txt);
+  if (p <= 0.02 && (!team || team.length < 2)) return null;
+  return p;
+}
+
+function readToWinAmount(panel) {
+  panel = panel || findTradePanel();
+  if (!panel) return null;
+
+  for (const el of panel.querySelectorAll('*')) {
+    const own = el.children.length <= 1 ? (el.textContent || '').trim() : '';
+    if (!/^to\s*win$/i.test(own)) continue;
+    let node = el.nextElementSibling;
+    for (let d = 0; d < 8 && node; d++) {
+      const m = (node.textContent || '').match(/\$\s*([\d,]+(?:\.\d+)?)/);
+      if (m) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        if (v > 0) return v;
+      }
+      node = node.nextElementSibling;
+    }
+    const parent = el.parentElement;
+    if (parent) {
+      const pm = (parent.textContent || '').replace(/\s+/g, ' ').match(/to\s*win[^$]{0,20}\$\s*([\d,]+(?:\.\d+)?)/i);
+      if (pm) {
+        const v = parseFloat(pm[1].replace(/,/g, ''));
+        if (v > 0) return v;
+      }
+    }
+  }
+
+  const t = (panel.innerText || '').replace(/\s+/g, ' ');
+  const matches = [...t.matchAll(/to\s*win[^$]{0,60}\$\s*([\d,]+(?:\.\d+)?)/gi)]
+    .map((m) => parseFloat(m[1].replace(/,/g, '')))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  return matches.length ? Math.max(...matches) : null;
+}
+
 function namesMatch(a, b) {
   const na = String(a || '').replace(/\s+/g, '').toLowerCase();
   const nb = String(b || '').replace(/\s+/g, '').toLowerCase();
@@ -309,7 +362,7 @@ function findActiveOutcomePrice(panel, teamLabel) {
     for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"]')) {
       if (!isVisible(btn) || isBuySellTabToggle(btn)) continue;
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      const p = parseCentsPrice(txt);
+      const p = parseOutcomeCentsPrice(txt);
       if (!p) continue;
 
       const team = extractTeamFromCentsLabel(txt);
@@ -329,11 +382,7 @@ function findActiveOutcomePrice(panel, teamLabel) {
 
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
-  const top = candidates[0].score;
-  const topGroup = candidates.filter((c) => c.score >= top - 15);
-  // Buy 탭: 표시 가격(낮은 ¢) 우선 — Avg price보다 실제 버튼 가격 사용
-  topGroup.sort((a, b) => a.price - b.price);
-  return topGroup[0].price;
+  return candidates[0].price;
 }
 
 function findSelectedOutcomePrice(scope) {
@@ -344,7 +393,7 @@ function findSelectedOutcomePrice(scope) {
       || btn.getAttribute('data-state') === 'on'
       || btn.getAttribute('data-state') === 'checked';
     if (!pressed) continue;
-    const p = parseCentsPrice(btn.textContent);
+    const p = parseOutcomeCentsPrice(btn.textContent);
     if (p) return p;
   }
   return null;
@@ -353,14 +402,7 @@ function findSelectedOutcomePrice(scope) {
 function readToWinAndPrice(scope, opts = {}) {
   const panel = scope || findTradePanel();
   const t = (panel?.innerText || document.body?.innerText || '').replace(/\s+/g, ' ');
-  let toWin = null;
-  const twMatches = [...t.matchAll(/to\s*win[^$]{0,40}\$\s*([\d,]+(?:\.\d+)?)/gi)];
-  if (twMatches.length) {
-    const values = twMatches
-      .map((m) => parseFloat(m[1].replace(/,/g, '')))
-      .filter((v) => Number.isFinite(v) && v > 0);
-    if (values.length) toWin = Math.max(...values);
-  }
+  const toWin = readToWinAmount(panel);
 
   const teamLabel = readTeamLabel(panel);
   let price = findActiveOutcomePrice(panel, teamLabel) || findSelectedOutcomePrice(panel);
@@ -369,7 +411,7 @@ function readToWinAndPrice(scope, opts = {}) {
     for (const btn of panel.querySelectorAll('button, [role="button"]')) {
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
       if (!txt.includes('¢') || txt.includes('--')) continue;
-      const p = parseCentsPrice(txt);
+      const p = parseOutcomeCentsPrice(txt);
       if (!p) continue;
       const team = extractTeamFromCentsLabel(txt);
       if (teamLabel && team && namesMatch(team, teamLabel)) {
@@ -379,16 +421,10 @@ function readToWinAndPrice(scope, opts = {}) {
     }
   }
 
-  // Avg price는 최후 폴백 (실제 Buy 버튼 ¢와 다를 수 있음)
+  // Avg price는 최후 폴백
   if (!price && !opts.skipAvg) {
     const avg = t.match(/avg(?:\.|erage)?\s*price[^0-9]*(\d+(?:\.\d+)?)\s*¢/i);
     if (avg) price = parseFloat(avg[1]) / 100;
-  }
-  if (!price && panel && !opts.skipAvg) {
-    const centsInPanel = (panel.innerText || '').match(/(\d{1,2}(?:\.\d+)?)\s*¢/g);
-    if (centsInPanel && centsInPanel.length) {
-      price = parseCentsPrice(centsInPanel[centsInPanel.length - 1]);
-    }
   }
   return { toWin, price };
 }
@@ -416,17 +452,21 @@ function readTeamLabel(panel) {
 }
 
 function calcOddsFromStake(stake, toWin, price) {
-  // 금액 + To win 있으면 ¢/Avg 무시 — 실제 수령액 기준 배당 (예: $10 → $191.83 = 19.183배)
   if (stake && toWin && toWin > 0) {
-    const payout = toWin;
-    const dec = payout / stake;
+    let payout, profit, dec;
+    if (toWin >= stake) {
+      // To win >= 베팅액 → 총 수령액 ($10 → $11.06 = 1.106배, $10 → $191.83 = 19.183배)
+      payout = toWin;
+      profit = toWin - stake;
+      dec = payout / stake;
+    } else {
+      // To win < 베팅액 → 순이익 ($10 → $1.06 이익 = 1.106배)
+      profit = toWin;
+      payout = stake + toWin;
+      dec = payout / stake;
+    }
     if (dec > 1.001) {
-      return {
-        odds: dec,
-        payout,
-        profit: payout - stake,
-        fromToWin: true
-      };
+      return { odds: dec, payout, profit, fromToWin: true };
     }
   }
 
@@ -444,17 +484,49 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const scope = panel || document.body;
   const stake = readStake(scope);
+  const toWin = readToWinAmount(panel);
   let teamLabel = readTeamLabel(panel);
 
+  const { odds, payout, profit, fromToWin } = calcOddsFromStake(stake, toWin, null);
+  if (odds && fromToWin) {
+    const priceCents = Math.round(1000 / odds) / 10;
+    const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
+    const totalPayout = payout;
+    return {
+      odds,
+      price: priceCents / 100,
+      priceCents,
+      outcome: teamLabel,
+      teamLabel,
+      eventTitle: eventTitle.slice(0, 120),
+      side: 'yes',
+      marketKind: 'ml',
+      period: 'ft',
+      marketKey: `poly_ml_${(teamLabel || 'out').slice(0, 20)}`,
+      source: 'polymarket',
+      selectionText: teamLabel
+        ? `${teamLabel} @ ${priceCents}¢`
+        : `${priceCents}¢`,
+      stake: stake || null,
+      toWin: profit,
+      payout: totalPayout,
+      displayLabel: `${priceCents}¢ (${odds.toFixed(3)})`,
+      hint: stake && totalPayout
+        ? `베팅 $${stake} → 수령 $${totalPayout.toFixed(2)}`
+        : (stake ? '' : '금액 입력 필요'),
+      fromToWin: true
+    };
+  }
+
   let price = findActiveOutcomePrice(panel, teamLabel);
-  const { toWin, price: panelPrice } = readToWinAndPrice(scope, { skipAvg: true });
+  const { price: panelPrice } = readToWinAndPrice(scope, { skipAvg: true });
   if (!price) price = panelPrice;
 
   if (!price && panel) {
     for (const btn of panel.querySelectorAll('button, [role="button"]')) {
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
       if (!txt.includes('¢') || txt.includes('--')) continue;
-      const p = parseCentsPrice(txt);
+      const p = parseOutcomeCentsPrice(txt);
       if (!p) continue;
       const team = extractTeamFromCentsLabel(txt);
       if (team && teamLabel && namesMatch(team, teamLabel)) {
@@ -465,13 +537,13 @@ function readPolymarketSlip() {
     }
   }
 
-  const { odds, payout, profit, fromToWin } = calcOddsFromStake(stake, toWin, price);
-  const finalOdds = odds;
+  const calc = calcOddsFromStake(stake, toWin, price);
+  const finalOdds = calc.odds;
   if (!finalOdds || finalOdds <= 1.001) return null;
 
-  const totalPayout = payout || (stake && profit != null ? stake + profit : null);
-  // To win 기준이면 implied ¢ 표시 (19.183배 → 약 5.2¢)
-  const priceCents = fromToWin
+  const totalPayout = calc.payout || (stake && calc.profit != null ? stake + calc.profit : null);
+  const fromToWin2 = calc.fromToWin;
+  const priceCents = fromToWin2
     ? Math.round(1000 / finalOdds) / 10
     : (price != null ? Math.round(price * 1000) / 10 : (finalOdds ? Math.round(1000 / finalOdds) / 10 : null));
   const impliedPrice = priceCents != null ? priceCents / 100 : price;
@@ -494,7 +566,7 @@ function readPolymarketSlip() {
       ? `${teamLabel}${priceCents != null ? ' @ ' + priceCents + '¢' : ''}`
       : (priceCents != null ? `${priceCents}¢` : ''),
     stake: stake || null,
-    toWin: profit,
+    toWin: calc.profit,
     payout: totalPayout,
     displayLabel: priceCents != null
       ? `${priceCents}¢ (${finalOdds.toFixed(3)})`
