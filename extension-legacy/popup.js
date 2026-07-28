@@ -388,7 +388,7 @@ async function tryBet() {
       return;
     }
     if (polyRes.pendingWallet) {
-      log('⏳ Polymarket: 지갑에서 서명하세요', 'info');
+      log('⏳ Polymarket: Buy 클릭됨 — 지갑 서명하면서 텐텐뱃 진행', 'info');
     } else {
       log('✅ Polymarket 완료', 'ok');
     }
@@ -560,4 +560,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.0.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.0.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

@@ -431,23 +431,47 @@ async function fillTradeAmount(panel, amount) {
   return { ok: false, reason: `금액 반영 실패 (목표 $${rounded}, 현재 $${stake || 0})`, stake };
 }
 
-function walletPromptVisible() {
-  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-  return /sign (this )?transaction|confirm in (your )?wallet|wallet request|metamask|approve transaction|signature request|서명/i.test(text);
+function hasInPageDialog() {
+  return !!document.querySelector('[role="dialog"], [role="alertdialog"], [class*="modal" i], [class*="Modal"], [class*="dialog" i], [class*="Dialog"]');
 }
 
 function findModalActionButton() {
   const patterns = [
-    /^(confirm|submit|place order|approve|sign|continue|확인|승인)$/i,
-    /confirm (purchase|buy|order)/i,
-    /place order/i
+    /^(confirm|submit|place order|approve|sign|continue|yes|확인|승인|주문)$/i,
+    /confirm (purchase|buy|order|trade)/i,
+    /place order/i,
+    /^buy\s+/i
   ];
-  for (const btn of document.querySelectorAll('button, [role="button"]')) {
-    if (!visible(btn) || btn.disabled) continue;
-    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (patterns.some((p) => p.test(t))) return btn;
+  const scopes = [];
+  for (const dlg of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) scopes.push(dlg);
+  if (!scopes.length) scopes.push(document.body);
+
+  for (const scope of scopes) {
+    for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+      if (!visible(btn) || btn.disabled) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 80) continue;
+      if (t === 'Buy' && !hasInPageDialog()) continue;
+      if (patterns.some((p) => p.test(t))) return btn;
+    }
   }
   return null;
+}
+
+function walletPromptVisible() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  if (/sign (this )?transaction|confirm in (your )?wallet|wallet request|metamask|approve transaction|signature request|서명|지갑/i.test(text)) {
+    return true;
+  }
+  if (hasInPageDialog()) {
+    return /sign|wallet|approve|confirm|서명|지갑|승인/i.test(text);
+  }
+  return false;
+}
+
+function pageHasOrderSuccess() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /order submitted|purchase complete|shares purchased|bought|trade submitted|order placed|매수 완료|주문 완료|confirmed|successfully purchased/i.test(text);
 }
 
 function setInputValue(input, value) {
@@ -458,14 +482,38 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function pageHasOrderSuccess() {
-  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-  return /order submitted|purchase complete|shares purchased|bought|trade submitted|매수 완료|주문 완료|confirmed/i.test(text);
-}
-
 function pageHasOrderError() {
   const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-  return /insufficient (balance|funds)|not enough|failed to (buy|place)|transaction failed|rejected|거부|잔액 부족/i.test(text);
+  return /insufficient (balance|funds)|not enough|failed to (buy|place)|transaction failed|rejected|unable to place|거부|잔액 부족|주문 실패/i.test(text);
+}
+
+async function waitAfterBuyClick(panel, btn) {
+  for (let i = 0; i < 20; i++) {
+    await sleep(200);
+    if (pageHasOrderSuccess()) {
+      return { success: true, confirmed: true, btnText: (btn?.textContent || '').trim().slice(0, 50) };
+    }
+    if (pageHasOrderError()) {
+      return { success: false, reason: '주문 거부/잔액 부족' };
+    }
+    if (walletPromptVisible()) {
+      return { success: true, pendingWallet: true, reason: '지갑/확인 창 — 서명하세요' };
+    }
+    const modalBtn = findModalActionButton();
+    if (modalBtn) robustClick(modalBtn);
+    const retryBtn = findPlaceOrderButton(panel);
+    if (retryBtn && i < 2 && !hasInPageDialog()) robustClick(retryBtn);
+  }
+
+  // MetaMask 등 외부 지갑 팝업은 DOM에 안 보임 → Buy 클릭 후 오류 없으면 성공 처리
+  if (!pageHasOrderError()) {
+    return {
+      success: true,
+      pendingWallet: true,
+      reason: 'Buy 클릭 완료 — 지갑 팝업에서 서명하세요'
+    };
+  }
+  return { success: false, reason: '주문 거부됨' };
 }
 
 async function placePolymarketBet(amountUsd) {
@@ -492,46 +540,12 @@ async function placePolymarketBet(amountUsd) {
     return { success: false, reason: 'Place Order/Buy 버튼 없음 — Buy 탭·outcome·금액 확인' };
   }
 
-  let clicked = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    robustClick(btn);
-    clicked = true;
-    await sleep(250);
+  robustClick(btn);
+  await sleep(200);
+  let modalBtn = findModalActionButton();
+  if (modalBtn) robustClick(modalBtn);
 
-    const modalBtn = findModalActionButton();
-    if (modalBtn) robustClick(modalBtn);
-
-    if (pageHasOrderSuccess() || walletPromptVisible()) break;
-    btn = findPlaceOrderButton(panel);
-    if (!btn) break;
-  }
-
-  if (!clicked) return { success: false, reason: 'Buy 클릭 실패' };
-
-  for (let i = 0; i < 50; i++) {
-    await sleep(200);
-    if (pageHasOrderSuccess()) {
-      return { success: true, confirmed: true, btnText: (btn.textContent || '').trim().slice(0, 50) };
-    }
-    if (walletPromptVisible()) {
-      return { success: true, pendingWallet: true, reason: '지갑 승인 대기 — 팝업에서 서명하세요' };
-    }
-    if (pageHasOrderError()) {
-      return { success: false, reason: '주문 거부/잔액 부족' };
-    }
-    const modalBtn = findModalActionButton();
-    if (modalBtn) robustClick(modalBtn);
-  }
-
-  if (walletPromptVisible()) {
-    return { success: true, pendingWallet: true, reason: '지갑 승인 대기' };
-  }
-
-  return {
-    success: false,
-    clicked: true,
-    reason: '주문 미확인 — Buy는 클릭됨, 지갑/Confirm 수동 확인'
-  };
+  return await waitAfterBuyClick(panel, btn);
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
