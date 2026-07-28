@@ -154,7 +154,8 @@ function scoreBuySubmitButton(btn, panel) {
   if (/submit|place-order|trade-submit|order-submit|trade-button/i.test(testId)) score += 90;
   if (/\$\s*[\d,]+(?:\.\d+)?/.test(t) || /\$\s*[\d,]+(?:\.\d+)?/.test(aria)) score += 70;
   if (/\d+(?:\.\d+)?\s*¢/.test(t)) score += 45;
-  if (/^buy\s+.+/i.test(t) && t.length > 6) score += 55;
+  if (/^buy\s+.+/i.test(t) && t.length > 6) score += 85;
+  if (/buy\s+[A-Za-z0-9가-힣]/i.test(t) && t.length > 8) score += 90;
   if (/매수\s*.+/.test(t) && t.length > 3) score += 55;
   if (/place\s*order|submit|confirm/i.test(t)) score += 35;
   if (/buy|매수/i.test(t)) score += 20;

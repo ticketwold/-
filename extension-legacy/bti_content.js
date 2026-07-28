@@ -138,13 +138,22 @@ function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
   return best;
 }
 
+function isSlipCardSuspended(card) {
+  const cardText = (card.innerText || card.textContent || '').replace(/\s+/g, ' ');
+  if (/정지된|정지됨|마감|closed|suspended|locked|unavailable/i.test(cardText)) return true;
+  for (const sp of card.querySelectorAll('span, div, label')) {
+    const t = (sp.textContent || '').trim();
+    if (/^정지된$|^정지$|^마감$|^Suspended$|^Closed$/i.test(t)) return true;
+  }
+  return false;
+}
+
 function readBtiSlip() {
-  // ── 1. 슬립 카드 탐색 ──
   const realCards = getRealSlipCards();
   if (!realCards.length) return null;
   const card = realCards[0];
+  if (isSlipCardSuspended(card)) return null;
 
-  // ── 2. 슬립에서 선택명/마켓명/이벤트명 추출 ──
   const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
   // [0]: 선택명 ("삼성 라이온스" 또는 "언더 16")
   // [1]: 마켓명 ("[7:5] 라이브 승패 라이브 베팅")
@@ -347,6 +356,15 @@ function readBtiSlip() {
 
   if (!odds) odds = 0;
 
+  const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  if (boardOdds && odds > 1 && Math.abs(boardOdds - odds) / Math.max(odds, boardOdds) > 0.2) {
+    odds = boardOdds;
+  } else if (boardOdds && odds <= 1.01) {
+    odds = boardOdds;
+  }
+  if (!boardOdds && isSlipCardSuspended(card)) return null;
+  if (!odds || odds <= 1.01) return null;
+
   // ── 4. 마켓 타입/period/side/line 판별 ──
   function detectPeriod(text) {
     const t = text.toLowerCase();
@@ -496,11 +514,14 @@ function probeBtiBetFrame() {
   const input = findBtiBetInput();
   const betBtn = findBtiBetButton();
   const hasSlip = cards.length > 0 || (slip?.odds > 1);
+  const r = input?.getBoundingClientRect?.();
+  const hasInput = !!input && r && r.width > 0 && r.height > 0;
   return {
     hasSlip,
-    hasInput: !!input,
+    hasInput,
     hasBtn: !!betBtn,
     slipOdds: slip?.odds > 1 ? slip.odds : 0,
+    slipCount: cards.length,
     href: location.href
   };
 }
@@ -924,13 +945,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function checkAndNotify() {
     const slip = readBtiSlip();
-    if (!slip || !slip.odds || slip.odds <= 1) return;
+    if (!slip || !slip.odds || slip.odds <= 1) {
+      if (lastOddsKey !== '') {
+        lastOddsKey = '';
+        try {
+          chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, suspended: true });
+        } catch (e) {}
+      }
+      return;
+    }
     const key = `${slip.odds.toFixed(4)}_${slip.marketKey}_${slip.selectionText}`;
     if (key === lastOddsKey) return;
     lastOddsKey = key;
     try {
       chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip });
-    } catch(e) {}
+    } catch (e) {}
   }
 
   function scheduleCheck() {
