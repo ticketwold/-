@@ -141,6 +141,30 @@ function parseCentsFromText(txt) {
   return c;
 }
 
+function readPageOutcomeCents() {
+  const candidates = [];
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+
+    let score = 0;
+    if (btn.getAttribute('aria-pressed') === 'true') score += 90;
+    if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 90;
+    if (btn.getAttribute('aria-selected') === 'true') score += 80;
+    const cls = String(btn.className || '');
+    if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) score += 60;
+    if (/^buy\s+/i.test(t)) score += 15;
+    if (t.length < 80) score += 10;
+
+    candidates.push({ cents, score });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].score >= 50 ? candidates[0].cents : candidates[0].cents;
+}
+
 function readOutcomeButtonCents(teamHint) {
   const candidates = [];
   const roots = [findTradePanel(), document.body].filter(Boolean);
@@ -165,7 +189,11 @@ function readOutcomeButtonCents(teamHint) {
     }
   }
 
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    const pageCents = readPageOutcomeCents();
+    if (pageCents) return pageCents;
+    return null;
+  }
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0].cents;
 }
@@ -215,10 +243,11 @@ function readPolymarketSlip() {
       return {
         source: 'polymarket',
         odds: null,
-        needsStake: true,
+        needsStake: !listedCents,
         teamLabel: team,
-        hint: 'Polymarket 탭에서 금액($) 입력 필요',
-        marketKind: 'ml'
+        hint: listedCents ? '¢ 배당 추정치 (금액 입력 시 To win 반영)' : 'Polymarket 탭에서 금액($) 입력 필요',
+        marketKind: 'ml',
+        priceCents: listedCents || null
       };
     }
     return null;
@@ -332,8 +361,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   let timer = null;
   function tick() {
     const slip = readPolymarketSlip();
-    if (!slip?.odds) return;
-    const key = `${slip.odds}_${slip.stake}_${slip.payout}`;
+    if (!slip) return;
+    const key = `${slip.odds || 'x'}_${slip.stake}_${slip.payout}_${slip.teamLabel}_${slip.priceCents}`;
     if (key === last) return;
     last = key;
     try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'polymarket', slip }); } catch (_) {}

@@ -85,11 +85,13 @@ function updateSlipUI(bti, poly) {
   const polyO = poly?.odds > 1 ? poly.odds : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
-  profitEl.textContent = profit !== null ? `${profit.toFixed(2)}%` : '-';
-  let profitCls = 'profit';
-  if (profit !== null && profit >= getMinProfit()) profitCls += ' positive';
-  else if (profit !== null && profit < 0) profitCls += ' negative';
-  profitEl.className = profitCls;
+  if (profitEl) {
+    profitEl.textContent = profit !== null ? `${profit.toFixed(2)}%` : '-';
+    let profitCls = 'profit';
+    if (profit !== null && profit >= getMinProfit()) profitCls += ' positive';
+    else if (profit !== null && profit < 0) profitCls += ' negative';
+    profitEl.className = profitCls;
+  }
 
   const hint = $('profitHint');
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
@@ -309,9 +311,22 @@ async function refreshSlips() {
   const bti = await readBtiSlip(found.btiTab, found.btiSlip);
 
   if (poly?.odds > 1) cachedPoly = poly;
-  else if (poly) cachedPoly = poly;
+  else if (poly) {
+    if (cachedPoly?.odds > 1) {
+      cachedPoly = { ...cachedPoly, ...poly, odds: cachedPoly.odds };
+    } else {
+      cachedPoly = poly;
+    }
+  }
+
   if (bti?.odds > 1) cachedBti = bti;
-  else if (bti) cachedBti = bti;
+  else if (bti) {
+    if (cachedBti?.odds > 1) {
+      cachedBti = { ...cachedBti, ...bti, odds: cachedBti.odds };
+    } else {
+      cachedBti = bti;
+    }
+  }
 
   updateSlipUI(cachedBti, cachedPoly);
   return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
@@ -445,6 +460,9 @@ $('searchStop')?.addEventListener('click', stopSearch);
 $('openPanelBtn')?.addEventListener('click', openPanel);
 $('openPanelFromSearch')?.addEventListener('click', openPanel);
 $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로고침', 'info'); });
+['slipMinProfit', 'minProfit', 'btiBet', 'usdRate'].forEach((id) => {
+  $(id)?.addEventListener('input', () => updateSlipUI(cachedBti, cachedPoly));
+});
 
 $('diagBtn')?.addEventListener('click', async () => {
   log('진단...', 'info');
@@ -461,8 +479,16 @@ $('diagBtn')?.addEventListener('click', async () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SEARCH_RESULT') renderSearchResults(msg);
   if (msg.type === 'ODDS_CHANGED') {
-    if (msg.source === 'bti' && msg.slip) cachedBti = msg.slip;
-    if (msg.source === 'polymarket' && msg.slip) cachedPoly = msg.slip;
+    if (msg.source === 'bti' && msg.slip) {
+      if (msg.slip.odds > 1) cachedBti = msg.slip;
+      else if (cachedBti?.odds > 1) cachedBti = { ...cachedBti, ...msg.slip, odds: cachedBti.odds };
+      else cachedBti = msg.slip;
+    }
+    if (msg.source === 'polymarket' && msg.slip) {
+      if (msg.slip.odds > 1) cachedPoly = msg.slip;
+      else if (cachedPoly?.odds > 1) cachedPoly = { ...cachedPoly, ...msg.slip, odds: cachedPoly.odds };
+      else cachedPoly = msg.slip;
+    }
     updateSlipUI(cachedBti, cachedPoly);
     if (botRunning && !betInProgress) pollLoop();
   }
@@ -470,4 +496,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, 500);
 refreshSlips();
-log(`v5.0.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.0.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

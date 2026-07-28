@@ -203,6 +203,8 @@ function parseSlipFromCard(card) {
     if (wOdds) {
       const period = 'ft';
       const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+      const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
+      const teams = parseEventTeams(resolvedEventText);
       return {
         odds: wOdds,
         eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
@@ -213,7 +215,9 @@ function parseSlipFromCard(card) {
         marketKey: `${period}_ml_${side}`,
         mktText,
         selectionText,
-        eventText,
+        eventText: resolvedEventText,
+        homeTeam: teams.home,
+        awayTeam: teams.away,
         fromSlip: true,
         source: 'slip'
       };
@@ -923,6 +927,31 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds) {
 
 // ── 배당판 스캔 (API 실패 시 DOM 폴백) ──
 
+function getTeamLabelFromBoardContext(btn, side, home, away) {
+  const mlLine = btn?.closest?.('[class*="MoneyLineSelection_line"]');
+  if (mlLine) {
+    const teamEl = mlLine.querySelector(
+      '[class*="competitorName"], [class*="teamName"], [class*="participant"], [class*="selectionName"]'
+    );
+    if (teamEl?.textContent?.trim()) return teamEl.textContent.trim();
+    const lineText = (mlLine.textContent || '')
+      .replace(/\d+\.\d{2,4}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (lineText.length >= 2 && lineText.length < 60) return lineText;
+  }
+
+  const pointsEl = btn?.querySelector?.('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+  const pointsText = pointsEl?.textContent?.trim() || '';
+  if (pointsText && !/^\d+\.\d+$/.test(pointsText) && !/^[+-]?\d+\.?\d*$/.test(pointsText)) {
+    return pointsText.replace(/\s*[+-]\d+\.?\d*\s*$/, '').trim();
+  }
+
+  if (side === 'away' || side === 'a') return away || '';
+  if (side === 'home' || side === 'h') return home || '';
+  return '';
+}
+
 function parseSelectionButton(btn) {
   if (!btn) return null;
   const rawText = (btn.textContent || '').trim();
@@ -944,27 +973,33 @@ function parseSelectionButton(btn) {
 
   let label = pointsText || rawText.replace(String(odds), '').trim();
   label = label.replace(/[+-]?\d+\.?\d*$/, '').trim();
+  if (!label || /^\d+\.\d+$/.test(label)) {
+    const ctxLabel = getTeamLabelFromBoardContext(btn);
+    if (ctxLabel) label = ctxLabel;
+  }
 
   return { odds, line, pointsText, label, rawText, element: btn };
 }
 
 function findEventNameNearButton(btn) {
   let el = btn.parentElement;
-  for (let depth = 0; depth < 15 && el; depth++) {
+  for (let depth = 0; depth < 18 && el; depth++) {
     const selectors = [
       '[class*="eventName"]', '[class*="EventName"]',
-      '[class*="competitor"]', '[class*="participants"]', '[class*="matchName"]'
+      '[class*="betInformation__eventName"]',
+      '[class*="competitor"]', '[class*="participants"]', '[class*="matchName"]',
+      '[class*="eventTitle"]', '[class*="EventTitle"]'
     ];
     for (const sel of selectors) {
       const found = el.querySelector(sel);
       if (found) {
         const t = found.textContent.trim();
-        if (t.includes('vs') || t.includes('VS') || t.includes(' @ ')) return t;
+        if (/vs|VS|v\.|@|대/.test(t)) return t.replace(/\s+대\s+/, ' vs ');
       }
     }
     const text = (el.textContent || '').trim();
-    const vm = text.match(/([^\n]{2,50})\s+(?:vs|VS|v\.|@)\s+([^\n]{2,50})/);
-    if (vm && text.length < 200) return `${vm[1].trim()} vs ${vm[2].trim()}`;
+    const vm = text.match(/([^\n]{2,50})\s+(?:vs|VS|v\.|@|대)\s+([^\n]{2,50})/);
+    if (vm && text.length < 240) return `${vm[1].trim()} vs ${vm[2].trim()}`;
     el = el.parentElement;
   }
   return '';
@@ -972,7 +1007,7 @@ function findEventNameNearButton(btn) {
 
 function parseEventTeams(eventText) {
   if (!eventText) return { home: '', away: '' };
-  for (const sep of [' vs ', ' VS ', ' v ', ' @ ']) {
+  for (const sep of [' vs ', ' VS ', ' v ', ' @ ', ' 대 ']) {
     if (eventText.includes(sep)) {
       const [home, away] = eventText.split(sep, 2);
       return { home: home.trim(), away: away.trim() };
@@ -985,6 +1020,13 @@ function resolveBtiTeamLabel(slip) {
   if (!slip) return '';
   const sel = String(slip.selectionText || '').trim();
   const { home, away } = parseEventTeams(slip.eventText || '');
+
+  if (slip.side === 'away' || slip.side === 'a' || slip.side === 'Away') {
+    if (away) return away;
+  }
+  if (slip.side === 'home' || slip.side === 'h' || slip.side === 'Home') {
+    if (home) return home;
+  }
 
   if (/^W1$/i.test(sel)) return home || 'W1';
   if (/^W2$/i.test(sel)) return away || 'W2';
@@ -1050,10 +1092,14 @@ function scrapeBoardSelections() {
 
     const marketKind = detectMarketType(marketText || parsed.rawText);
     const side = detectBoardSide(parsed.label || parsed.rawText, marketKind);
+    let selectionText = parsed.label || parsed.rawText;
+    if (!selectionText || /^\d+\.\d+$/.test(String(selectionText).trim())) {
+      selectionText = getTeamLabelFromBoardContext(btn, side, home, away) || selectionText;
+    }
 
     const entry = {
       eventText, homeTeam: home, awayTeam: away,
-      selectionText: parsed.label || parsed.rawText,
+      selectionText,
       marketText, marketKind, side, line: parsed.line, odds: parsed.odds,
       pointsText: parsed.pointsText,
       eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
@@ -1156,11 +1202,18 @@ function collectVisibleMlButtons() {
       if (!parsed) return null;
       const marketText = (line.closest('[class*="market"], [class*="Market"]')
         ?.querySelector('[class*="marketName"], [class*="MarketName"]')?.textContent || '').trim();
+      const side = i === 0 ? 'home' : 'away';
+      const evText = findEventNameNearButton(btn);
+      const teams = parseEventTeams(evText);
+      let selectionText = parsed.label || parsed.rawText;
+      if (!selectionText || /^\d+\.\d+$/.test(String(selectionText).trim())) {
+        selectionText = getTeamLabelFromBoardContext(btn, side, teams.home, teams.away) || selectionText;
+      }
       return {
-        selectionText: parsed.label || parsed.rawText,
+        selectionText,
         marketText,
         marketKind: 'ml',
-        side: i === 0 ? 'home' : 'away',
+        side,
         line: parsed.line,
         odds: parsed.odds,
         element: btn
@@ -1177,11 +1230,18 @@ function collectVisibleMlButtons() {
     if (/[+-]\d/.test(pointsText)) return null;
     const raw = (parsed.rawText || '').toLowerCase();
     if (raw.includes('오버') || raw.includes('언더') || raw.includes('over') || raw.includes('under')) return null;
+    const side = i === 0 ? 'home' : 'away';
+    const evText = findEventNameNearButton(btn);
+    const teams = parseEventTeams(evText);
+    let selectionText = parsed.label || parsed.rawText;
+    if (!selectionText || /^\d+\.\d+$/.test(String(selectionText).trim())) {
+      selectionText = getTeamLabelFromBoardContext(btn, side, teams.home, teams.away) || selectionText;
+    }
     return {
-      selectionText: parsed.label || parsed.rawText,
+      selectionText,
       marketText: '',
       marketKind: 'ml',
-      side: i === 0 ? 'home' : 'away',
+      side,
       line: parsed.line,
       odds: parsed.odds,
       element: btn
@@ -1190,9 +1250,37 @@ function collectVisibleMlButtons() {
   return mlBtns.length >= 2 ? mlBtns : [];
 }
 
+let lastBoardClickAt = 0;
+let lastBoardClickBtn = null;
+
+function isBoardButtonSelected(btn) {
+  if (!btn) return false;
+  const cls = String(btn.className || '');
+  return /selected|active|pressed|highlight/i.test(cls)
+    || btn.getAttribute('aria-pressed') === 'true'
+    || btn.getAttribute('data-selected') === 'true'
+    || btn.getAttribute('data-state') === 'on';
+}
+
 function pickBoardSelection(pool, hint = {}) {
   const { side, excludeTeam, preferTeam, polyTeam } = hint;
   if (!pool.length) return null;
+
+  if (lastBoardClickBtn) {
+    const fromClick = pool.find((s) => s.element === lastBoardClickBtn);
+    if (fromClick) return fromClick;
+  }
+
+  const clicked = pool.find((s) => {
+    const btn = s.element;
+    if (!btn) return false;
+    const cls = String(btn.className || '');
+    return /selected|active|pressed|highlight/i.test(cls)
+      || btn.getAttribute('aria-pressed') === 'true'
+      || btn.getAttribute('data-selected') === 'true'
+      || btn.getAttribute('data-state') === 'on';
+  });
+  if (clicked) return clicked;
 
   const oppose = excludeTeam || polyTeam;
   if (oppose) {
@@ -1259,6 +1347,11 @@ function readBtiBoardOdds(hint = {}) {
     else if (teamNamesMatch(pick.selectionText, home)) resolvedSide = 'home';
   }
 
+  let selectionText = pick.selectionText || pick.label || '';
+  if (!selectionText || /^\d+\.\d+$/.test(String(selectionText).trim()) || /^W[12]$/i.test(selectionText)) {
+    selectionText = getTeamLabelFromBoardContext(pick.element, resolvedSide, home, away) || selectionText;
+  }
+
   return enrichBtiSlip({
     odds: pick.odds,
     eventId: pick.eventId || (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
@@ -1268,7 +1361,7 @@ function readBtiBoardOdds(hint = {}) {
     line: pick.line ?? null,
     marketKey: `${period}_${pick.marketKind || marketKind}_${resolvedSide}`,
     mktText: pick.marketText || '',
-    selectionText: pick.selectionText || pick.label || '',
+    selectionText,
     eventText: evText,
     homeTeam: home,
     awayTeam: away,
@@ -1279,11 +1372,20 @@ function readBtiBoardOdds(hint = {}) {
 }
 
 function readBtiOdds(hint) {
+  const board = readBtiBoardOdds(hint || {});
+  const recentBoardClick = lastBoardClickAt && (Date.now() - lastBoardClickAt < 20000);
+  const boardSelected = board?.odds > 1.01 && (
+    recentBoardClick || isBoardButtonSelected(lastBoardClickBtn)
+  );
+
+  if (board?.odds > 1.01 && boardSelected) {
+    return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
+  }
+
   const slip = readBtiSlip(hint);
   if (slip?.odds > 1.01) {
     return enrichBtiSlip({ ...slip, fromSlip: slip.fromSlip !== false, source: slip.source || 'slip' });
   }
-  const board = readBtiBoardOdds(hint || {});
   if (board?.odds > 1.01) return enrichBtiSlip(board);
   const loose = readSlipLooseFromPanel(hint);
   if (loose?.odds > 1.01) return enrichBtiSlip(loose);
@@ -1436,6 +1538,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (document.body) {
+    document.addEventListener('click', (e) => {
+      const btn = e.target?.closest?.('button[class*="master_fe_Selections_selection"]');
+      if (btn) {
+        lastBoardClickAt = Date.now();
+        lastBoardClickBtn = btn;
+      }
+    }, true);
+
     const obs = new MutationObserver(scheduleCheck);
     obs.observe(document.body, {
       subtree: true, childList: true, characterData: true,
