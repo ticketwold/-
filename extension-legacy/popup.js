@@ -102,7 +102,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
         if (sender?.tab?.id != null && sender.frameId != null && sender.frameId > 0) {
           lastBtiBetFrame = { tabId: sender.tab.id, frameId: sender.frameId };
         }
-      } else {
+      } else if (!botRunning) {
         cachedBtiSlip = null;
       }
     }
