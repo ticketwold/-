@@ -1,0 +1,65 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 380px;
+  font-family: 'Malgun Gothic', sans-serif;
+  background: #12121f;
+  color: #e8e8f0;
+  font-size: 13px;
+}
+header { padding: 12px 14px; background: #1a1a2e; border-bottom: 1px solid #2a2a4a; }
+header h1 { font-size: 15px; color: #ff4d6d; }
+header .sub { font-size: 11px; color: #888; margin-top: 2px; }
+.tabs { display: flex; background: #1a1a2e; }
+.tab {
+  flex: 1; padding: 9px 0; border: none; background: none;
+  color: #888; font-size: 12px; font-weight: bold; cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.tab.active { color: #ff4d6d; border-bottom-color: #ff4d6d; }
+.panel { display: none; padding: 10px 14px; }
+.panel.active { display: block; }
+.row { margin-bottom: 8px; }
+.row label { display: block; font-size: 11px; color: #888; margin-bottom: 3px; }
+.row input {
+  width: 100%; padding: 6px 8px; border-radius: 5px;
+  border: 1px solid #333; background: #1e1e32; color: #fff;
+}
+.btn-row { display: flex; gap: 6px; margin: 8px 0; }
+.btn {
+  flex: 1; padding: 8px; border: none; border-radius: 6px;
+  font-weight: bold; cursor: pointer; background: #333; color: #ccc;
+}
+.btn.primary { background: #ff4d6d; color: #fff; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.small { flex: 0 0 auto; padding: 8px 12px; font-size: 11px; }
+.hint { font-size: 11px; color: #888; margin: 4px 0; }
+.slip-grid { display: flex; gap: 8px; margin-bottom: 8px; }
+.slip-grid label { font-size: 11px; color: #888; }
+.slip-box {
+  background: #1e1e32; border-radius: 6px; padding: 8px; min-height: 52px; margin-top: 3px;
+}
+.slip-box .odds { font-size: 18px; font-weight: bold; color: #ff4d6d; }
+.slip-box .meta { font-size: 10px; color: #6eb5ff; margin-top: 2px; word-break: break-all; }
+.profit-box {
+  background: #1e1e32; border-radius: 6px; padding: 10px; text-align: center; margin-bottom: 8px;
+}
+.profit-box .label { font-size: 11px; color: #888; }
+.profit-box .profit { font-size: 22px; font-weight: bold; color: #888; }
+.profit-box .profit.positive { color: #4ade80; }
+.calc-box {
+  background: #1a1a2e; border-radius: 6px; padding: 8px; font-size: 12px; margin-bottom: 6px;
+}
+.calc-box div { display: flex; justify-content: space-between; margin: 2px 0; }
+.results { max-height: 200px; overflow-y: auto; margin-top: 8px; }
+.opp {
+  background: #1e1e32; border-radius: 5px; padding: 8px; margin-bottom: 5px;
+  font-size: 11px; cursor: pointer; border-left: 3px solid #4ade80;
+}
+.opp:hover { background: #252540; }
+.log {
+  max-height: 120px; overflow-y: auto; padding: 6px 10px;
+  font-size: 10px; color: #aaa; border-top: 1px solid #2a2a4a;
+}
+.log .ok { color: #4ade80; }
+.log .err { color: #f87171; }
+.log .info { color: #93c5fd; }

@@ -2,256 +2,87 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { width: 400px; font-family: 'Malgun Gothic', sans-serif; background: #1a1a2e; color: #eee; font-size: 13px; }
-  .header { background: #16213e; padding: 10px 16px; border-bottom: 1px solid #0f3460; display:flex; justify-content:space-between; align-items:center; }
-  .header h1 { font-size: 15px; color: #e94560; }
-  .header .sub { font-size: 11px; color: #888; margin-top: 2px; }
-  .tabs { display:flex; background:#0f3460; border-bottom:2px solid #1e4080; }
-  .tab { flex:1; padding:8px 0; text-align:center; font-size:12px; font-weight:bold; cursor:pointer; color:#888; border:none; background:none; }
-  .tab.active { color:#e94560; border-bottom:2px solid #e94560; margin-bottom:-2px; }
-  .tab-content { display:none; }
-  .tab-content.active { display:block; }
-  .section { padding: 8px 14px; border-bottom: 1px solid #0f3460; }
-  .section label { display: block; font-size: 11px; color: #888; margin-bottom: 3px; }
-  .section-title { font-size: 11px; color: #60a5fa; font-weight: bold; margin-bottom: 6px; }
-  .slip-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; min-height: 32px; }
-  .slip-box .odds-val { font-size: 17px; font-weight: bold; color: #e94560; }
-  .slip-box .market-label { font-size: 10px; color: #60a5fa; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
-  .profit-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; text-align: center; }
-  .profit-box .pct { font-size: 20px; font-weight: bold; color: #888; }
-  .profit-positive { color: #4ade80 !important; }
-  .profit-neutral { color: #888 !important; }
-  .btn { padding: 7px 0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; width: 100%; }
-  .btn-start { background: #e94560; color: #fff; }
-  .btn-start:hover { background: #c73652; }
-  .btn-stop { background: #374151; color: #fff; }
-  .btn-search { background: #7c3aed; color: #fff; }
-  .btn-search-stop { background: #374151; color: #fff; }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .opp-list { max-height: 320px; overflow-y: auto; }
-  .opp-item { background: #0f3460; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; border: 1px solid transparent; }
-  .opp-item:hover { border-color: #e94560; }
-  .opp-item.selected { border-color: #4ade80; }
-  .opp-profit { font-size: 16px; font-weight: bold; color: #4ade80; float: right; }
-  .opp-profit.zero { color: #fbbf24; }
-  .opp-teams { font-size: 12px; color: #eee; margin-bottom: 2px; }
-  .opp-detail { font-size: 10px; color: #888; }
-  .opp-badge { display:inline-block; background:#1e4080; border-radius:3px; padding:1px 5px; font-size:10px; color:#60a5fa; margin-right:4px; }
-  .search-stats { font-size: 10px; color: #666; padding: 4px 14px; border-bottom: 1px solid #0f3460; }
-  .mkt-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-  .mkt-grid select { background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 4px 5px; border-radius: 4px; font-size: 11px; width: 100%; }
-  .mkt-mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .mkt-mode-row label { font-size: 11px; color: #aaa; cursor: pointer; display: flex; align-items: center; gap: 4px; }
-  .mkt-mode-row input[type=checkbox] { accent-color: #e94560; }
-  .tolerance-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  .tolerance-row span { font-size: 11px; color: #888; }
-  .tolerance-row input { width: 60px; background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 3px 6px; border-radius: 4px; font-size: 11px; }
-  .profit-range-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-  .profit-range-box input { width: 100%; background: #0f3460; border: 1px solid #1e4080; color: #eee; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-  .bet-amount-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-  .bet-amount-box { background: #0f3460; border-radius: 6px; padding: 6px 10px; }
-  .bet-amount-box label { font-size: 10px; color: #888; margin-bottom: 3px; display: block; }
-  .bet-amount-box input { width: 100%; background: transparent; border: none; border-bottom: 1px solid #1e4080; color: #eee; padding: 3px 0; font-size: 14px; font-weight: bold; outline: none; }
-  .bet-amount-box input:focus { border-bottom-color: #e94560; }
-  .bet-amount-box .unit { font-size: 10px; color: #888; margin-top: 2px; }
-  .bet-calc-box { background: #0a1a2e; border: 1px solid #1e4080; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
-  .bet-calc-box .calc-title { font-size: 10px; color: #888; margin-bottom: 4px; }
-  .bet-calc-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
-  .bet-calc-row .site-name { font-size: 11px; color: #aaa; }
-  .bet-calc-row .amount { font-size: 13px; font-weight: bold; color: #4ade80; }
-  .bet-calc-row .amount.anchor { color: #e94560; }
-  .status-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
-  .status-running .dot { background: #4ade80; animation: pulse 1s infinite; }
-  .status-betting .dot { background: #fbbf24; animation: pulse 0.5s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-  .log-box { height: 120px; overflow-y: auto; background: #0a0a1a; padding: 6px 8px; font-size: 11px; font-family: monospace; }
-  .log-box .log { color: #aaa; }
-  .log-box .success { color: #4ade80; }
-  .log-box .error { color: #f87171; }
-  .log-box .info { color: #60a5fa; }
-  .log-box .warn { color: #fbbf24; }
-  .log-header { display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:#0f3460; border-top:1px solid #0f3460; }
-</style>
+<link rel="stylesheet" href="popup.css">
 </head>
 <body>
-<div class="header">
-  <div>
-    <h1>⚡ 양방 베팅 봇</h1>
-    <div class="sub">텐텐뱃 (x10x10s) + Polymarket · v4.3.11</div>
-  </div>
-  <button id="openWindowBtn" title="독립 창으로 열기" style="background:#e94560; border:none; color:#fff; font-size:14px; width:28px; height:28px; border-radius:6px; cursor:pointer; flex-shrink:0;">⧉</button>
-</div>
+<header>
+  <h1>⚡ 양방 베팅 봇</h1>
+  <div class="sub">텐텐뱃 + Polymarket · v5.0.0</div>
+</header>
 
-<div class="tabs">
-  <button class="tab active" data-tab="search">🔍 라이브</button>
+<nav class="tabs">
+  <button class="tab active" data-tab="search">🔍 라이브 서치</button>
   <button class="tab" data-tab="slip">📋 슬립 비교</button>
-</div>
+</nav>
 
 <!-- 라이브 서치 -->
-<div class="tab-content active" id="tab-search">
-  <div class="section">
-    <div class="section-title">수익 구간 설정</div>
-    <div class="profit-range-row">
-      <div class="profit-range-box">
-        <label>최소 수익률 (%)</label>
-        <input type="number" id="minProfit" value="1" min="0" max="50" step="0.1">
-      </div>
-      <div class="profit-range-box">
-        <label>최대 수익률 (%)</label>
-        <input type="number" id="maxProfit" value="0" min="0" max="50" step="0.1" placeholder="0=무제한">
-      </div>
-    </div>
-    <div style="font-size:10px; color:#666; margin-bottom:8px;">이 구간 안에서만 서치 표시 · 봇 자동 베팅 (최대 0 = 무제한)</div>
-    <div style="display:flex; gap:8px;">
-      <button class="btn btn-search" id="startSearchBtn">🔍 서치 시작</button>
-      <button class="btn btn-search-stop" id="stopSearchBtn" disabled>■ 정지</button>
-    </div>
+<section id="tab-search" class="panel active">
+  <div class="row">
+    <label>최소 수익률 (%)</label>
+    <input type="number" id="minProfit" value="1" min="0" step="0.1">
   </div>
-  <div class="search-stats" id="searchStats">서치 대기 중...</div>
-  <div class="section" style="padding:8px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-      <span class="section-title" style="margin:0;">양방 기회</span>
-      <span id="oppCount" style="font-size:10px; color:#888;">0개</span>
-    </div>
-    <div class="opp-list" id="oppList">
-      <div style="text-align:center; color:#555; padding:20px; font-size:12px;">서치 시작 후 결과가 표시됩니다</div>
-    </div>
+  <div class="btn-row">
+    <button id="searchStart" class="btn primary">서치 시작</button>
+    <button id="searchStop" class="btn" disabled>정지</button>
   </div>
-</div>
+  <div id="searchStats" class="hint">x10x10s + Polymarket 탭을 열고 서치를 시작하세요</div>
+  <div id="searchResults" class="results"></div>
+</section>
 
 <!-- 슬립 비교 -->
-<div class="tab-content" id="tab-slip">
-  <div class="section">
-    <div style="display:flex; gap:8px; margin-bottom:8px;">
-      <div style="flex:1">
-        <label>텐텐뱃</label>
-        <div class="slip-box" id="pSlipBox">
-          <div class="odds-val" id="pOdds">-</div>
-          <div class="market-label" id="pMarket">-</div>
-        </div>
-      </div>
-      <div style="flex:1">
-        <label>Polymarket</label>
-        <div class="slip-box" id="bSlipBox">
-          <div class="odds-val" id="bOdds">-</div>
-          <div class="market-label" id="bMarket">-</div>
-        </div>
+<section id="tab-slip" class="panel">
+  <div class="slip-grid">
+    <div>
+      <label>텐텐뱃</label>
+      <div class="slip-box">
+        <div class="odds" id="btiOdds">-</div>
+        <div class="meta" id="btiMeta">-</div>
       </div>
     </div>
-    <label>예상 수익률</label>
-    <div class="profit-box">
-      <div class="pct" id="profit">-</div>
-      <div style="font-size:11px;color:#aaa;margin-top:2px;" id="profitSub">양쪽 슬립에 담으세요 (Poly는 금액 입력)</div>
-    </div>
-    <div class="profit-range-row" style="margin-top:8px;">
-      <div class="profit-range-box">
-        <label>최소 수익률 (%)</label>
-        <input type="number" id="minProfitSlip" value="1" min="0" max="50" step="0.1">
+    <div>
+      <label>Polymarket</label>
+      <div class="slip-box">
+        <div class="odds" id="polyOdds">-</div>
+        <div class="meta" id="polyMeta">-</div>
       </div>
-      <div class="profit-range-box">
-        <label>최대 수익률 (%)</label>
-        <input type="number" id="maxProfitSlip" value="0" min="0" max="50" step="0.1" placeholder="0=무제한">
-      </div>
-    </div>
-    <div style="font-size:10px; color:#666; margin-top:4px;">구간 안일 때만 봇이 자동 베팅합니다</div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">마켓 설정</div>
-    <div class="mkt-mode-row">
-      <label><input type="checkbox" id="autoDetect" checked> 자동 감지</label>
-      <span style="font-size:10px;color:#666;">체크 해제 시 아래 설정 사용</span>
-    </div>
-    <div class="mkt-grid" id="mktManual">
-      <div>
-        <label>기간</label>
-        <select id="mktPeriod">
-          <option value="ft">풀타임</option>
-          <option value="1h">전반전</option>
-          <option value="2h">후반전</option>
-          <option value="set">세트</option>
-        </select>
-      </div>
-      <div>
-        <label>마켓</label>
-        <select id="mktType">
-          <option value="ml">승패 (ML)</option>
-          <option value="ah">핸디캡 (HC)</option>
-          <option value="ou">오버/언더 (OU)</option>
-        </select>
-      </div>
-      <div>
-        <label>방향/팀</label>
-        <select id="mktSide">
-          <option value="home">홈</option>
-          <option value="away">어웨이</option>
-        </select>
-      </div>
-    </div>
-    <div class="tolerance-row">
-      <span>기준점 허용 오차</span>
-      <input type="number" id="lineTolerance" value="0.06" min="0" max="0.5" step="0.01">
-      <span style="color:#666;">이내 동일 처리</span>
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-title">베팅 금액 설정</div>
-    <div class="bet-amount-row">
-      <div class="bet-amount-box">
-        <label id="betAmountLabel">텐텐뱃 베팅금</label>
-        <input type="number" id="minBet" value="10000" min="1" step="1000">
-        <div class="unit" id="betAmountUnit">원 (KRW)</div>
-      </div>
-      <div class="bet-amount-box">
-        <label id="usdtRateLabel">USD 환율 (원)</label>
-        <input type="number" id="usdtRate" value="1400" min="100" step="10">
-        <div class="unit" id="usdtRateUnit">원/USD</div>
-      </div>
-    </div>
-    <div style="font-size:10px; color:#888; margin-bottom:8px;">텐텐뱃 금액 기준 → Polymarket $ 자동 계산 (등배당)</div>
-    <div class="bet-calc-box">
-      <div class="calc-title">💰 베팅 금액 계산 (배당 기반)</div>
-      <div class="bet-calc-row">
-        <span class="site-name" id="calcAnchorName">텐텐뱃</span>
-        <span class="amount anchor" id="calcAnchorAmount">-</span>
-      </div>
-      <div class="bet-calc-row">
-        <span class="site-name" id="calcOppName">Polymarket</span>
-        <span class="amount" id="calcOppAmount">-</span>
-      </div>
-      <div style="font-size:10px; color:#555; margin-top:4px;" id="calcNote">슬립에 배당을 담으면 자동 계산됩니다</div>
-    </div>
-    <div style="display:flex; gap:8px;">
-      <button class="btn btn-start" id="startBtn">▶ 봇 시작</button>
-      <button class="btn btn-stop" id="stopBtn" disabled>■ 정지</button>
-    </div>
+  <div class="profit-box">
+    <div class="label">예상 수익률</div>
+    <div class="profit" id="profit">-</div>
+    <div class="hint" id="profitHint">양쪽 슬립에 담고 (Poly는 금액 입력)</div>
   </div>
 
-  <div class="section">
-    <div class="status-row" id="status">
-      <div class="dot"></div>
-      <span>대기 중</span>
-    </div>
+  <div class="row">
+    <label>최소 수익률 (%)</label>
+    <input type="number" id="slipMinProfit" value="1" min="0" step="0.1">
   </div>
-</div>
+  <div class="row">
+    <label>텐텐뱃 베팅금 (원)</label>
+    <input type="number" id="btiBet" value="10000" min="1000" step="1000">
+  </div>
+  <div class="row">
+    <label>USD 환율 (원)</label>
+    <input type="number" id="usdRate" value="1400" min="1000" step="10">
+  </div>
 
-<div class="log-header">
-  <span style="font-size:11px; color:#888;">로그</span>
-  <div style="display:flex; gap:4px;">
-    <button id="diagApiBtn" style="background:#1e4080; border:1px solid #a78bfa; color:#a78bfa; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">API 진단</button>
-    <button id="diagBtiBtn" style="background:#1e4080; border:1px solid #60a5fa; color:#60a5fa; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">10벳 진단</button>
-    <button id="diagTeamBtn" style="background:#1e4080; border:1px solid #fb7185; color:#fb7185; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">팀명진단</button>
-    <button id="clearLogBtn" style="background:none; border:1px solid #374151; color:#888; font-size:10px; padding:2px 6px; border-radius:3px; cursor:pointer;">지우기</button>
+  <div class="calc-box">
+    <div><span>텐텐뱃</span> <strong id="calcBti">-</strong></div>
+    <div><span>Polymarket</span> <strong id="calcPoly">-</strong></div>
   </div>
-</div>
-<div class="log-box" id="log"></div>
+
+  <div class="btn-row">
+    <button id="botStart" class="btn primary">봇 시작</button>
+    <button id="botStop" class="btn" disabled>봇 정지</button>
+    <button id="diagBtn" class="btn small">진단</button>
+  </div>
+</section>
+
+<div id="log" class="log"></div>
 
 <script src="sites_config.js"></script>
-<script src="arb_calculator.js"></script>
+<script src="odds.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

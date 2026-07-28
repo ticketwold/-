@@ -1409,7 +1409,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃] content script v2.30');
+console.log('[텐텐뱃 v5] content script loaded');
 try {
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
