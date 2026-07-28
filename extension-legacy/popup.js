@@ -98,7 +98,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     }
     if (msg.source === 'bti' && msg.slip) {
       cachedBtiSlip = msg.slip;
-      if (sender?.tab?.id != null && sender.frameId != null) {
+      if (sender?.tab?.id != null && sender.frameId != null && sender.frameId > 0) {
         lastBtiBetFrame = { tabId: sender.tab.id, frameId: sender.frameId };
       }
     }
@@ -435,13 +435,16 @@ function scoreBtiBetProbe(probe, frame, slip) {
 }
 
 async function findBtiBetFrame(tabId, preferFrameId) {
+  if (preferFrameId === 0) preferFrameId = undefined;
   const frames = await getAllFrames(tabId);
   const ordered = [...frames].sort((a, b) => {
     if (preferFrameId != null) {
       if (a.frameId === preferFrameId) return -1;
       if (b.frameId === preferFrameId) return 1;
     }
-    return (a.frameId === 0 ? 1 : 0) - (b.frameId === 0 ? 1 : 0);
+    const aPri = (a.frameId > 0 ? 20 : 0) + (isBtiFrameUrl(a.url) ? 10 : 0);
+    const bPri = (b.frameId > 0 ? 20 : 0) + (isBtiFrameUrl(b.url) ? 10 : 0);
+    return bPri - aPri;
   });
 
   const candidates = [];
@@ -452,24 +455,22 @@ async function findBtiBetFrame(tabId, preferFrameId) {
     if (!probe) {
       probe = await execInTab({ id: tabId, frameId: frame.frameId }, probeBtiBetFrameInject);
     }
+    const hasInput = !!probe?.hasInput;
+    const hasSlip = !!probe?.hasSlip || (slip?.odds > 1) || (probe?.slipOdds > 1);
+    if (!hasInput || !hasSlip) continue;
+    if (frame.frameId === 0 && !isBtiFrameUrl(frame.url)) continue;
     const score = scoreBtiBetProbe(probe, frame, slip);
-    if (score > 0) candidates.push({ frame, probe, slip, score });
+    candidates.push({ frame, probe, slip, score });
   }
 
+  if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
 
-  const best = candidates.find((c) => c.slip?.odds > 1 && (c.probe?.hasInput || c.frame.frameId > 0))
-    || candidates.find((c) => c.probe?.slipOdds > 1 && c.probe?.hasInput)
-    || candidates.find((c) => c.slip?.odds > 1)
-    || candidates.find((c) => c.probe?.slipOdds > 1)
-    || candidates.find((c) => c.probe?.hasSlip && c.probe?.hasInput && c.frame.frameId > 0)
-    || candidates.find((c) => c.probe?.hasSlip && c.probe?.hasInput);
-
-  if (!best) return null;
-  const valid = best.slip?.odds > 1
-    || (best.probe?.slipOdds > 1 && best.probe?.hasInput)
-    || (best.probe?.hasSlip && best.probe?.hasInput);
-  if (!valid) return null;
+  const nonZero = candidates.find((c) => c.frame.frameId > 0);
+  const best = nonZero || candidates[0];
+  if (!best.probe?.hasInput || !(best.probe?.hasSlip || best.slip?.odds > 1 || best.probe?.slipOdds > 1)) {
+    return null;
+  }
 
   return {
     id: tabId,
@@ -478,6 +479,29 @@ async function findBtiBetFrame(tabId, preferFrameId) {
     probe: best.probe,
     slip: best.slip
   };
+}
+
+async function resolveBtiBetFrameForBet(tabId, targetOdds) {
+  const prefer = (lastBtiBetFrame?.tabId === tabId && lastBtiBetFrame.frameId > 0)
+    ? lastBtiBetFrame.frameId
+    : undefined;
+  let found = await findBtiBetFrame(tabId, prefer);
+  if (found?.probe?.hasSlip && found.probe?.hasInput) return found;
+
+  found = await findBtiBetFrame(tabId);
+  if (found?.probe?.hasSlip && found.probe?.hasInput) return found;
+
+  const frames = await getAllFrames(tabId);
+  for (const frame of frames.filter((f) => f.frameId > 0)) {
+    await ensureBtiContentInFrame(tabId, frame.frameId);
+    const probe = await probeBtiBetFrameMessage(tabId, frame.frameId)
+      || await execInTab({ id: tabId, frameId: frame.frameId }, probeBtiBetFrameInject);
+    if (!probe?.hasSlip || !probe?.hasInput) continue;
+    const slip = await readBtiSlipFromFrame(tabId, frame.frameId);
+    if (targetOdds && slip?.odds > 1 && Math.abs(slip.odds - targetOdds) > 0.15) continue;
+    return { id: tabId, frameId: frame.frameId, url: frame.url || '', probe, slip };
+  }
+  return null;
 }
 
 async function readPolySlipFromTab(polyTab) {
@@ -1696,47 +1720,62 @@ function btiSlipOddsFromTextInject(txt) {
 
 // BTI iframe 프로브 — 베팅카트(#counter)가 있는 프레임 찾기
 function probeBtiBetFrameInject() {
-  function hasSlipCard() {
+  function getRealSlipCards() {
     const selectors = [
       '[class*="betslip_fe_BetSecondary_bet"]',
       '[class*="BetSecondary_bet"]',
-      '[class*="betInformation__title"]'
+      '[class*="betslip"][class*="bet"]'
     ];
+    const seen = new Set();
+    const cards = [];
     for (const sel of selectors) {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (seen.has(el)) continue;
         const cn = String(el.className || '');
-        if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('PlaceBet')) continue;
-        if (sel.includes('title') || /@\s*\d+\.\d+/.test(el.textContent || '')) return true;
-        if (!cn.includes('wrapper')) return true;
+        if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('bageGroup') ||
+            cn.includes('badge') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
+        const hasTitle = el.querySelector('[class*="betInformation__title"]');
+        const txt = el.textContent || '';
+        const hasOdds = /@\s*\d+\.\d+/.test(txt) || el.querySelector('[class*="UpdateNotification"]');
+        if (!hasTitle && !hasOdds) continue;
+        seen.add(el);
+        cards.push(el);
       }
     }
-    return false;
+    return cards;
   }
-  const hasSlip = hasSlipCard();
+  function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  const cards = getRealSlipCards();
+  const hasSlip = cards.length > 0;
   const input = document.getElementById('counter')
     || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[class*="counter"], input[class*="Counter"]');
+  const hasInput = isVisible(input);
   const betBtn = Array.from(document.querySelectorAll('button')).find((b) =>
-    !b.disabled && (
+    !b.disabled && isVisible(b) && (
       (b.textContent || '').includes('배당 수락') ||
       ((b.className || '').includes('sportsbook-Button') && /베팅|수락/i.test(b.textContent || '')) ||
       (b.textContent || '').trim() === '베팅하기'
     ) && !/^\+\s*[\d,]+\s*₩/.test((b.textContent || '').trim()) && (b.textContent || '').trim() !== '최대'
   );
-  return { hasSlip, hasInput: !!input, hasBtn: !!betBtn, href: location.href };
+  let slipOdds = 0;
+  if (cards[0]) {
+    const txt = cards[0].textContent || '';
+    const m = txt.match(/@\s*(\d+(?:\.\d+)?)/);
+    if (m) slipOdds = parseFloat(m[1]) || 0;
+  }
+  return { hasSlip, hasInput, hasBtn: !!betBtn, slipOdds, slipCount: cards.length, href: location.href };
 }
 
 async function resolveBtiBetTab(btiTab) {
   if (!btiTab?.id) return btiTab;
-
-  const preferFrame = (lastBtiBetFrame?.tabId === btiTab.id)
+  const preferFrame = (lastBtiBetFrame?.tabId === btiTab.id && lastBtiBetFrame.frameId > 0)
     ? lastBtiBetFrame.frameId
-    : btiTab.frameId;
-
-  const found = await findBtiBetFrame(btiTab.id, preferFrame);
-  if (found) return found;
-
-  return null;
+    : (btiTab.frameId > 0 ? btiTab.frameId : undefined);
+  return findBtiBetFrame(btiTab.id, preferFrame);
 }
 
 function btiSlipStabilizeInject(targetOdds) {
@@ -2958,64 +2997,30 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
     const polyOdds = pSlip.odds;
     const { btiBet, polyUsd } = calcPolyBetAmounts(btiOdds, polyOdds);
 
-    addLog(`[v4.2.1] 베팅 시작: 텐텐뱃 ${btiBet.toLocaleString()}원 (${btiOdds}) / Polymarket $${polyUsd.toFixed(2)} (${polyOdds.toFixed(3)})`, 'info');
+    addLog(`[v4.2.2] 베팅 시작: 텐텐뱃 ${btiBet.toLocaleString()}원 (${btiOdds}) / Polymarket $${polyUsd.toFixed(2)} (${polyOdds.toFixed(3)})`, 'info');
 
     await activateTabForBet(btiTab, 120);
-    let resolvedBtiTab = btiTab;
-    if (lastBtiBetFrame?.tabId === btiTab?.id && lastBtiBetFrame.frameId != null) {
-      resolvedBtiTab = { ...btiTab, frameId: lastBtiBetFrame.frameId };
-    } else {
-      resolvedBtiTab = await resolveBtiBetTab(btiTab) || btiTab;
-    }
+    const resolvedBtiTab = await resolveBtiBetFrameForBet(btiTab.id, btiOdds);
     if (!resolvedBtiTab?.id) {
-      addLog('❌ 텐텐뱃 베팅 화면 없음 — x10x10s 스포츠 탭에서 슬립에 배당을 담아주세요', 'error');
+      addLog('❌ 텐텐뱃 베팅 iframe 없음 — 슬립+금액입력 있는 BTI 프레임 미발견', 'error');
       lastBetFailAt = Date.now();
       betInProgress = false;
       stopBot();
-      addLog('봇 자동 정지 (텐텐뱃 프레임 미발견)', 'warn');
+      addLog('봇 자동 정지 (BTI iframe 미발견)', 'warn');
       return;
     }
-    if (resolvedBtiTab?.id) {
-      lastBtiBetFrame = { tabId: resolvedBtiTab.id, frameId: resolvedBtiTab.frameId };
-    }
-    let probe = resolvedBtiTab.probe
+    lastBtiBetFrame = { tabId: resolvedBtiTab.id, frameId: resolvedBtiTab.frameId };
+    const probe = resolvedBtiTab.probe
       || await probeBtiBetFrameMessage(resolvedBtiTab.id, resolvedBtiTab.frameId)
       || await execInTab(resolvedBtiTab, probeBtiBetFrameInject);
-    if ((!probe?.hasInput || !probe?.hasSlip) && (bSlip?.odds > 1 || cachedBtiSlip?.odds > 1)) {
-      const rescanned = await findBtiBetFrame(resolvedBtiTab.id, lastBtiBetFrame?.frameId);
-      if (rescanned && rescanned.frameId !== resolvedBtiTab.frameId) {
-        resolvedBtiTab = rescanned;
-        lastBtiBetFrame = { tabId: rescanned.id, frameId: rescanned.frameId };
-        probe = rescanned.probe
-          || await probeBtiBetFrameMessage(rescanned.id, rescanned.frameId)
-          || await execInTab(rescanned, probeBtiBetFrameInject);
-      }
-    }
-    addLog(`텐텐뱃 프레임: #${resolvedBtiTab.frameId} slip=${probe?.hasSlip} input=${probe?.hasInput} btn=${probe?.hasBtn}`, 'info');
-    const hasBtiSlipData = probe?.hasSlip || bSlip?.odds > 1 || cachedBtiSlip?.odds > 1 || resolvedBtiTab.slip?.odds > 1;
-    if (!hasBtiSlipData) {
-      addLog('❌ 텐텐뱃 베팅카트 없음 — 슬립에 배당을 담아주세요', 'error');
+    addLog(`텐텐뱃 프레임: #${resolvedBtiTab.frameId} slip=${probe?.hasSlip} input=${probe?.hasInput} btn=${probe?.hasBtn} cnt=${probe?.slipCount ?? '?'}`, 'info');
+
+    if (!probe?.hasSlip || !probe?.hasInput) {
+      addLog('❌ 텐텐뱃 베팅카트/금액입력 없음 — 슬립을 열고 배당을 담아주세요', 'error');
       lastBetFailAt = Date.now();
       betInProgress = false;
       stopBot();
       addLog('봇 자동 정지 (베팅카트 없음)', 'warn');
-      return;
-    }
-    if (!probe?.hasInput) {
-      const retryFrame = await findBtiBetFrame(resolvedBtiTab.id, lastBtiBetFrame?.frameId);
-      if (retryFrame?.probe?.hasInput) {
-        resolvedBtiTab = retryFrame;
-        lastBtiBetFrame = { tabId: retryFrame.id, frameId: retryFrame.frameId };
-        probe = retryFrame.probe;
-        addLog(`텐텐뱃 프레임 재탐색: #${retryFrame.frameId} input=true`, 'info');
-      }
-    }
-    if (!probe?.hasInput) {
-      addLog('❌ 텐텐뱃 금액입력 없음 — 베팅카트가 열려 있는지 확인', 'error');
-      lastBetFailAt = Date.now();
-      betInProgress = false;
-      stopBot();
-      addLog('봇 자동 정지 (금액입력 없음)', 'warn');
       return;
     }
 
