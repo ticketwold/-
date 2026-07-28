@@ -566,6 +566,31 @@ async function readBtiSlipFromFrame(tabId, frameId) {
   return slipInject || slipMsg;
 }
 
+async function findBtiSlipFrame(tabId) {
+  const frames = await getAllFrames(tabId);
+  const ordered = [...frames].sort((a, b) => (b.frameId > 0 ? 1 : 0) - (a.frameId > 0 ? 1 : 0));
+  let best = null;
+  for (const frame of ordered) {
+    if (frame.frameId === 0) continue;
+    await ensureBtiContentInFrame(tabId, frame.frameId);
+    const slip = await readBtiSlipFromFrame(tabId, frame.frameId);
+    if (!isBtiSlipUsable(slip)) continue;
+    if (!best || slip.odds > best.slip.odds) {
+      best = { id: tabId, frameId: frame.frameId, url: frame.url || '', slip };
+    }
+  }
+  return best;
+}
+
+async function readBtiSlipAnyFrame(tabId, preferFrameId) {
+  if (preferFrameId > 0) {
+    const slip = await readBtiSlipFromFrame(tabId, preferFrameId);
+    if (isBtiSlipUsable(slip)) return slip;
+  }
+  const found = await findBtiSlipFrame(tabId);
+  return found?.slip || null;
+}
+
 function isBtiSlipUsable(slip) {
   if (!slip || slip.suspended) return false;
   if (!slip.odds || slip.odds <= 1.01 || slip.odds >= 100) return false;
@@ -574,11 +599,18 @@ function isBtiSlipUsable(slip) {
 
 async function readFreshBtiSlip(btiTab) {
   if (!btiTab?.id) return null;
-  const frameId = btiTab.frameId ?? 0;
-  const slip = await readBtiSlipFromFrame(btiTab.id, frameId);
+  const slip = await readBtiSlipAnyFrame(btiTab.id, btiTab.frameId);
   if (!isBtiSlipUsable(slip)) return null;
-  const probe = await probeBtiBetFrameMessage(btiTab.id, frameId);
-  if (probe && !probe.hasSlip) return null;
+  return slip;
+}
+
+async function readFreshBtiSlipStrict(btiTab) {
+  const slip = await readFreshBtiSlip(btiTab);
+  if (!slip) return null;
+  const frameId = btiTab.frameId ?? 0;
+  const probe = await probeBtiBetFrameMessage(btiTab.id, frameId)
+    || await execInTab({ id: btiTab.id, frameId }, probeBtiBetFrameInject);
+  if (probe && !probe.hasSlip && !probe.hasInput) return null;
   return slip;
 }
 // pbc00.com / x10x10s.com URL에서 gamecode로 BTI/피나클 구분 (레거시 호환)
@@ -604,15 +636,16 @@ async function findTabs() {
 
   for (const wTab of allWrapperTabs) {
     const preferFrame = (lastBtiBetFrame?.tabId === wTab.id) ? lastBtiBetFrame.frameId : undefined;
-    const betFrame = await findBtiBetFrame(wTab.id, preferFrame);
-      if (betFrame) {
-        btiTab = betFrame;
-        if (betFrame.frameId > 0) {
-          lastBtiBetFrame = { tabId: wTab.id, frameId: betFrame.frameId };
-        }
-        if (betFrame.slip) cachedBtiSlip = betFrame.slip;
-        break;
+    let betFrame = await findBtiSlipFrame(wTab.id);
+    if (!betFrame) betFrame = await findBtiBetFrame(wTab.id, preferFrame);
+    if (betFrame) {
+      btiTab = betFrame;
+      if (betFrame.frameId > 0) {
+        lastBtiBetFrame = { tabId: wTab.id, frameId: betFrame.frameId };
       }
+      if (betFrame.slip) cachedBtiSlip = betFrame.slip;
+      break;
+    }
   }
 
   if (!btiTab && allWrapperTabs.length) {
@@ -3051,7 +3084,7 @@ async function executePolyBets(btiTab, polyTab, bSlip, pSlip, profit) {
   const t0 = Date.now();
   try {
     const [freshBti, freshPoly, resolvedBtiTab] = await Promise.all([
-      readFreshBtiSlip(btiTab),
+      readFreshBtiSlipStrict(btiTab),
       readPolySlipFromTab(polyTab),
       resolveBtiBetFrameForBet(btiTab.id, bSlip.odds)
     ]);
@@ -3130,7 +3163,7 @@ async function polyPollLoop() {
   if (!btiTab || !polyTab) { updateUI(null, null, null); return; }
 
   const [bSlip, pSlip] = await Promise.all([
-    readFreshBtiSlip(btiTab),
+    btiTab?.id ? readBtiSlipAnyFrame(btiTab.id, btiTab.frameId ?? 0) : null,
     readPolySlipFromTab(polyTab)
   ]);
 
@@ -4328,8 +4361,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let leftSlip = cachedBtiSlip;
     let rightSlip = cachedPolySlip;
-    if (!leftSlip && btiTab) {
-      leftSlip = await readBtiSlipFromFrame(btiTab.id, btiTab.frameId ?? 0);
+    if (btiTab?.id) {
+      const fresh = await readBtiSlipAnyFrame(btiTab.id, btiTab.frameId ?? 0);
+      if (fresh) {
+        leftSlip = fresh;
+        cachedBtiSlip = fresh;
+        if (btiTab.frameId > 0) lastBtiBetFrame = { tabId: btiTab.id, frameId: btiTab.frameId };
+      }
     }
     if (!rightSlip && polyTab) {
       rightSlip = await readPolySlipFromTab(polyTab);

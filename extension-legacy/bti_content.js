@@ -176,6 +176,27 @@ function readBtiSlip() {
     return 'ml';
   })();
 
+  // W1/W2 슬립 — 배당판에서 즉시 읽기
+  if (/^W[12]$/i.test(selectionText.trim())) {
+    const wOdds = readOddsFromBoardForSelection(selectionText, allText, 'ml');
+    if (wOdds) {
+      const period = 'ft';
+      const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+      return {
+        odds: wOdds,
+        eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
+        marketKind: 'ml',
+        period,
+        side,
+        line: null,
+        marketKey: `${period}_ml_${side}`,
+        mktText,
+        selectionText,
+        eventText
+      };
+    }
+  }
+
   // ── 3. 배당 읽기: 슬립 카드(변동 반영) → 배당판 폴백 ──
   const slipCardOdds = readOddsFromSlipCard(card);
   let odds = slipCardOdds || readOddsFromBoardForSelection(selectionText, allText, slipMktType);
@@ -363,6 +384,7 @@ function readBtiSlip() {
     odds = boardOdds;
   }
   if (!boardOdds && isSlipCardSuspended(card)) return null;
+  if ((!odds || odds <= 1.01) && slipCardOdds > 1.01) odds = slipCardOdds;
   if (!odds || odds <= 1.01) return null;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
@@ -472,7 +494,10 @@ function getRealSlipCards() {
           cn.includes('badge') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
       const hasTitle = el.querySelector('[class*="betInformation__title"]');
       const txt = el.textContent || '';
-      const hasOdds = /@\s*\d+\.\d+/.test(txt) || el.querySelector('[class*="UpdateNotification"]');
+      const hasOdds = /@\s*\d+\.\d+/.test(txt)
+        || el.querySelector('[class*="UpdateNotification"]')
+        || el.querySelector('[class*="odds"], [class*="Odds"]')
+        || /\b\d+\.\d{2,3}\b/.test(txt);
       if (!hasTitle && !hasOdds) continue;
       seen.add(el);
       cards.push(el);
