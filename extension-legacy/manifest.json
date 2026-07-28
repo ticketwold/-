@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "4.3.9",
+  "version": "4.3.10",
   "description": "텐텐뱃 (x10x10s) + Polymarket 양방 서치 및 슬립 비교 베팅",
   "permissions": [
     "storage",

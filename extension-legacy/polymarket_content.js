@@ -305,7 +305,68 @@ function isNoiseCentsButton(txt) {
   if (/^\$\d+(\.\d+)?$/.test(t)) return true;
   if (/\+\s*\$?\d+.*@\s*\d+\s*¢/i.test(t)) return true;
   if (/^buy\s*\$/i.test(t)) return true;
+  if (/^sell\s+@/i.test(t)) return true;
   return false;
+}
+
+function isBuyModeActive(panel) {
+  const root = panel || findTradePanel() || document;
+  let buyTab = null;
+  let sellTab = null;
+  for (const btn of root.querySelectorAll('button, [role="tab"], [role="button"]')) {
+    if (!isVisible(btn) || !isBuySellTabToggle(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t === 'Buy' || t === '매수') buyTab = btn;
+    if (t === 'Sell' || t === '매도') sellTab = btn;
+  }
+  if (!buyTab && !sellTab) return true;
+  if (buyTab) {
+    const pressed = buyTab.getAttribute('aria-selected') === 'true'
+      || buyTab.getAttribute('data-state') === 'active'
+      || buyTab.getAttribute('aria-pressed') === 'true';
+    const cls = String(buyTab.className || '');
+    if (pressed || /active|selected|checked/i.test(cls)) return true;
+  }
+  if (sellTab) {
+    const pressed = sellTab.getAttribute('aria-selected') === 'true'
+      || sellTab.getAttribute('data-state') === 'active'
+      || sellTab.getAttribute('aria-pressed') === 'true';
+    const cls = String(sellTab.className || '');
+    if (pressed || /active|selected|checked/i.test(cls)) return false;
+  }
+  return true;
+}
+
+function parseMoneyValue(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const v = parseFloat(m[1].replace(/,/g, ''));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function readToWinFromDom(scope) {
+  if (!scope) return null;
+  const values = [];
+
+  for (const el of scope.querySelectorAll('*')) {
+    const own = (el.textContent || '').trim();
+    if (!/^to\s*win/i.test(own.replace(/[^\w\s]/gi, '').trim()) && !/^to\s*win/i.test(own)) continue;
+
+    let container = el.parentElement;
+    for (let up = 0; up < 4 && container; up++) {
+      for (const node of container.querySelectorAll('*')) {
+        if (!isVisible(node) || node === el) continue;
+        const nt = (node.textContent || '').trim();
+        if (/to\s*win|avg\.?\s*price|amount/i.test(nt) && nt.length < 24) continue;
+        const v = parseMoneyValue(nt);
+        if (v && v >= 1) values.push(v);
+      }
+      container = container.parentElement;
+    }
+  }
+
+  return values.length ? Math.max(...values) : null;
 }
 
 function parseOutcomeCentsPrice(txt) {
@@ -322,44 +383,47 @@ function readToWinAmountFromScope(scope) {
   if (!scope) return null;
 
   const raw = scope.innerText || '';
-  const lower = raw.toLowerCase();
-  const idx = lower.indexOf('to win');
-  if (idx >= 0) {
-    const after = raw.slice(idx);
-    const m = after.match(/\$\s*([\d,]+(?:\.\d+)?)/);
-    if (m) {
+  const values = [];
+
+  for (const match of raw.matchAll(/to\s*win/gi)) {
+    const after = raw.slice(match.index);
+    const section = after.slice(0, 500);
+
+    for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
       const v = parseFloat(m[1].replace(/,/g, ''));
-      if (v > 0) return v;
+      if (v > 0) values.push(v);
+    }
+
+    // Polymarket은 $ 기호 없이 60.58 만 표시하는 경우가 많음
+    for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
+      const v = parseFloat(m[1].replace(/,/g, ''));
+      if (v >= 1) values.push(v);
     }
   }
 
+  const domVal = readToWinFromDom(scope);
+  if (domVal) values.push(domVal);
+
   for (const el of scope.querySelectorAll('*')) {
     const own = el.children.length <= 1 ? (el.textContent || '').trim() : '';
-    if (!/^to\s*win$/i.test(own)) continue;
+    if (!/^to\s*win/i.test(own.replace(/[^\w\s]/gi, '').trim()) && !/^to\s*win$/i.test(own)) continue;
     let node = el.nextElementSibling;
-    for (let d = 0; d < 8 && node; d++) {
-      const m = (node.textContent || '').match(/\$\s*([\d,]+(?:\.\d+)?)/);
-      if (m) {
-        const v = parseFloat(m[1].replace(/,/g, ''));
-        if (v > 0) return v;
-      }
+    for (let d = 0; d < 10 && node; d++) {
+      const v = parseMoneyValue((node.textContent || '').trim());
+      if (v && v >= 1) values.push(v);
       node = node.nextElementSibling;
     }
     const parent = el.parentElement;
     if (parent) {
-      const pm = (parent.textContent || '').replace(/\s+/g, ' ').match(/to\s*win[^$]{0,20}\$\s*([\d,]+(?:\.\d+)?)/i);
+      const pm = (parent.textContent || '').replace(/\s+/g, ' ').match(/to\s*win[^$\d]{0,40}(?:\$\s*)?([\d,]+(?:\.\d+)?)/i);
       if (pm) {
         const v = parseFloat(pm[1].replace(/,/g, ''));
-        if (v > 0) return v;
+        if (v > 0) values.push(v);
       }
     }
   }
 
-  const t = raw.replace(/\s+/g, ' ');
-  const matches = [...t.matchAll(/to\s*win[^$]{0,60}\$\s*([\d,]+(?:\.\d+)?)/gi)]
-    .map((m) => parseFloat(m[1].replace(/,/g, '')))
-    .filter((v) => Number.isFinite(v) && v > 0);
-  return matches.length ? Math.max(...matches) : null;
+  return values.length ? Math.max(...values) : null;
 }
 
 function readToWinAmount(panel) {
@@ -407,6 +471,7 @@ function readPanelListedPrice(panel) {
 function findActiveOutcomePrice(panel, teamLabel) {
   const panelEl = panel || findTradePanel();
   if (!panelEl) return null;
+  const buyMode = isBuyModeActive(panelEl);
   const roots = [panelEl];
 
   const candidates = [];
@@ -414,6 +479,7 @@ function findActiveOutcomePrice(panel, teamLabel) {
     for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"]')) {
       if (!isVisible(btn) || isBuySellTabToggle(btn)) continue;
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (buyMode && /^sell\s+/i.test(txt)) continue;
       const p = parseOutcomeCentsPrice(txt);
       if (!p) continue;
 
@@ -427,6 +493,8 @@ function findActiveOutcomePrice(panel, teamLabel) {
       if (teamLabel && team && namesMatch(team, teamLabel)) score += 120;
       if (panel && panel.contains(btn)) score += 40;
       if (team && team.length >= 2) score += 10;
+      if (/^buy\s+/i.test(txt)) score += 30;
+      if (/^sell\s+/i.test(txt)) score -= 200;
 
       candidates.push({ price: p, score, team, txt });
     }
@@ -482,13 +550,22 @@ function readToWinAndPrice(scope, opts = {}) {
 }
 
 function readTeamLabel(panel) {
-  const panelText = panel?.innerText || '';
-  const buyM = panelText.match(/(?:Buy|매수)\s+([A-Za-z0-9][^\n$¢]{0,40})/i);
+  const panelEl = panel || findTradePanel();
+  const panelText = panelEl?.innerText || '';
+
+  const buyBtn = findSubmitTradeButton(panelEl);
+  if (buyBtn) {
+    const btnM = (buyBtn.textContent || '').match(/buy\s+([A-Za-z0-9][^\n$¢@]{0,40})/i);
+    if (btnM) return btnM[1].trim().slice(0, 80);
+  }
+
+  const buyM = panelText.match(/(?:Buy|매수)\s+([A-Za-z0-9][^\n$¢@]{0,40})/i);
   if (buyM) return buyM[1].trim().slice(0, 80);
 
   const lines = panelText.split('\n').map((s) => s.trim()).filter(Boolean);
   for (const line of lines) {
-    if (/^(amount|to win|buy|deposit|cash|portfolio|price)/i.test(line)) continue;
+    if (/^(amount|to win|buy|sell|deposit|cash|portfolio|price|avg)/i.test(line)) continue;
+    if (/^sell\b/i.test(line)) continue;
     if (/^\$/.test(line) || /^\+/.test(line)) continue;
     if (/^\d+\s*¢/.test(line) || /¢/.test(line)) continue;
     if (/^@/.test(line)) continue;
@@ -589,6 +666,7 @@ function readPolymarketSlip() {
     for (const btn of panel.querySelectorAll('button, [role="button"]')) {
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
       if (!txt.includes('¢') || txt.includes('--')) continue;
+      if (/^sell\s+/i.test(txt)) continue;
       const p = parseOutcomeCentsPrice(txt);
       if (!p) continue;
       const team = extractTeamFromCentsLabel(txt);
@@ -600,7 +678,7 @@ function readPolymarketSlip() {
     }
   }
 
-  // 금액 입력됐는데 To win 미확인 → 1~2¢ 퀵버튼 대신 패널 Price/Avg 사용
+  // 금액 입력됐는데 To win 미확인 → Avg Price 폴백 (Sell 쪽 17¢ 오인식 방지)
   if (stake && stake >= 1 && !trustedToWin) {
     if (!price || price <= 0.02) {
       const listed = readPanelListedPrice(panel);
@@ -609,7 +687,17 @@ function readPolymarketSlip() {
     if (price && price <= 0.02) price = null;
   }
 
-  const calc = calcOddsFromStake(stake, trustedToWin, price);
+  // stake 있으면 Avg Price보다 To win 기반 배당 우선
+  let calc = calcOddsFromStake(stake, trustedToWin, price);
+  if (stake && trustedToWin && !calc.fromToWin) {
+    calc = calcOddsFromStake(stake, trustedToWin, null);
+  }
+  if (stake && trustedToWin && calc.fromToWin && price) {
+    const priceOdds = priceToDecimal(price);
+    if (priceOdds && Math.abs(calc.odds - priceOdds) / calc.odds > 0.03) {
+      calc = calcOddsFromStake(stake, trustedToWin, null);
+    }
+  }
   const finalOdds = calc.odds;
   if (!finalOdds || finalOdds <= 1.001) return null;
 
@@ -801,4 +889,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v2.2');
+console.log('[Polymarket봇] content script v2.3');
