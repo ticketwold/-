@@ -380,22 +380,26 @@ async function tryBet() {
   log(`⚡ 베팅: 텐텐뱃 ${btiBet.toLocaleString()}원 / Poly $${polyUsd.toFixed(2)} → ${profit.toFixed(2)}%`, 'ok');
 
   try {
-    log('① 텐텐뱃 슬립 준비...', 'info');
+    log('① Polymarket 베팅...', 'info');
+    const polyRes = await placePolyBet(polyTab, polyUsd);
+    if (!polyRes?.success) {
+      log(`❌ Polymarket: ${polyRes?.reason || '실패'}`, 'err');
+      stopBot();
+      return;
+    }
+    if (polyRes.pendingWallet) {
+      log('⏳ Polymarket: 지갑에서 서명하세요', 'info');
+    } else {
+      log('✅ Polymarket 완료', 'ok');
+    }
+
+    log('② 텐텐뱃 슬립 준비...', 'info');
     const prep = await ensureBtiSlip(btiTab, hint);
     if (!prep?.ok) {
       log(`❌ 텐텐뱃 슬립 준비 실패: ${prep?.reason || '알 수 없음'}`, 'err');
       stopBot();
       return;
     }
-
-    log('② Polymarket 베팅...', 'info');
-    const polyRes = await placePolyBet(polyTab, polyUsd);
-    if (!polyRes?.success) {
-      log(`❌ Polymarket: ${polyRes?.reason || '실패'} — 텐텐뱃 베팅 취소`, 'err');
-      stopBot();
-      return;
-    }
-    log('✅ Polymarket 완료', 'ok');
 
     log('③ 텐텐뱃 베팅...', 'info');
     const btiRes = await placeBtiBet(btiTab, btiBet, bti.odds, hint);
@@ -556,4 +560,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.0.5 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.0.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

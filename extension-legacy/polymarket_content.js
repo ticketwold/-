@@ -41,11 +41,18 @@ function findTradePanel() {
 
 function findAmountInput(panel) {
   const root = panel || findTradePanel() || document;
-  for (const inp of root.querySelectorAll('input')) {
-    if (!visible(inp)) continue;
+  const inputs = Array.from(root.querySelectorAll('input, textarea')).filter(visible);
+  for (const inp of inputs) {
     const ph = (inp.placeholder || '').toLowerCase();
     const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('amount') || ph.includes('$') || aria.includes('amount')) return inp;
+    const name = (inp.getAttribute('name') || '').toLowerCase();
+    if (ph.includes('amount') || ph.includes('$') || aria.includes('amount') || name.includes('amount')) {
+      return inp;
+    }
+  }
+  for (const inp of inputs) {
+    const type = (inp.getAttribute('type') || '').toLowerCase();
+    if (type === 'number' || type === 'text' || type === '') return inp;
   }
   return root.querySelector('input');
 }
@@ -301,27 +308,150 @@ function robustClick(el) {
   return true;
 }
 
-function findBuyButton(panel) {
-  const root = panel || findTradePanel();
-  if (!root) return null;
-  for (const btn of root.querySelectorAll('button, [role="button"]')) {
-    if (!visible(btn) || btn.disabled || isBuySellTab(btn)) continue;
+function ensureBuyTabSelected(panel) {
+  const root = panel || findTradePanel() || document.body;
+  for (const btn of root.querySelectorAll('button, [role="button"], [role="tab"]')) {
+    if (!visible(btn)) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (/^buy\s+.+/i.test(t) && t.length > 6) return btn;
+    if (t !== 'Buy' && t !== '매수') continue;
+    const pressed = btn.getAttribute('aria-pressed') === 'true'
+      || btn.getAttribute('aria-selected') === 'true'
+      || btn.getAttribute('data-state') === 'active'
+      || /active|selected|bg-/i.test(String(btn.className || ''));
+    if (!pressed) robustClick(btn);
+    return true;
+  }
+  return false;
+}
+
+function findPlaceOrderButton(panel) {
+  const roots = [panel, findTradePanel(), document.body].filter(Boolean);
+  const seen = new Set();
+  const candidates = [];
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"]')) {
+      if (!btn || seen.has(btn) || !visible(btn) || btn.disabled) continue;
+      seen.add(btn);
+
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const aria = (btn.getAttribute('aria-label') || '').trim();
+      const combined = `${t} ${aria}`;
+      const lower = combined.toLowerCase();
+      const rect = btn.getBoundingClientRect();
+
+      let score = 0;
+      if (/place order|submit order|confirm purchase|confirm buy/i.test(lower)) score += 120;
+      if (/^buy\s+.+/i.test(t) && t.length > 7) score += 90;
+      if (/buy.*\$\d|^\$\d.*buy/i.test(t)) score += 85;
+      if (/buy.*(yes|no)\b/i.test(lower)) score += 80;
+      if (aria && /buy/i.test(aria) && !/tab/i.test(aria)) score += 70;
+
+      if (t === 'Buy' || t === '매수') {
+        const parentText = (btn.parentElement?.textContent || '').replace(/\s+/g, ' ');
+        if (/\bSell\b|\b매도\b/.test(parentText) && parentText.length < 30) score += 8;
+        else score += 45;
+      }
+
+      if (rect.width >= 90 && rect.height >= 32) score += 15;
+      if (panel && panel.contains(btn)) score += 20;
+      if (/\d+¢|cents|shares/i.test(t)) score += 10;
+
+      if (score >= 40) candidates.push({ btn, score, t: t.slice(0, 60) });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.btn || null;
+}
+
+function findBuyButton(panel) {
+  return findPlaceOrderButton(panel);
+}
+
+async function setInputValueRobust(input, value) {
+  if (!input) return false;
+  const str = String(value);
+  input.focus();
+  try { input.click(); } catch (_) {}
+
+  try {
+    input.select?.();
+    document.execCommand?.('selectAll', false, null);
+    document.execCommand?.('insertText', false, str);
+  } catch (_) {}
+
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (setter) setter.call(input, str);
+  else input.value = str;
+
+  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: str }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  await sleep(120);
+  return true;
+}
+
+function clickAmountPreset(target) {
+  const want = Math.round(target * 100) / 100;
+  for (const btn of document.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t === `$${want}` || t === `+$${want}` || t === `${want}`) {
+      robustClick(btn);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fillTradeAmount(panel, amount) {
+  const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
+  const existing = readStake(panel);
+  if (existing && Math.abs(existing - rounded) <= 0.05) return { ok: true, stake: existing, method: 'existing' };
+
+  const input = findAmountInput(panel);
+  if (!input) return { ok: false, reason: '금액 입력란 없음' };
+
+  await setInputValueRobust(input, rounded.toFixed(2));
+  let stake = readStake(panel);
+  if (stake && Math.abs(stake - rounded) <= 0.15) return { ok: true, stake, method: 'input' };
+
+  clickAmountPreset(rounded);
+  await sleep(150);
+  stake = readStake(panel);
+  if (stake && Math.abs(stake - rounded) <= 0.15) return { ok: true, stake, method: 'preset' };
+
+  await setInputValueRobust(input, String(Math.ceil(rounded)));
+  stake = readStake(panel);
+  if (stake && stake >= rounded * 0.85) return { ok: true, stake, method: 'input-retry' };
+
+  if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'keep-user' };
+  return { ok: false, reason: `금액 반영 실패 (목표 $${rounded}, 현재 $${stake || 0})`, stake };
+}
+
+function walletPromptVisible() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /sign (this )?transaction|confirm in (your )?wallet|wallet request|metamask|approve transaction|signature request|서명/i.test(text);
+}
+
+function findModalActionButton() {
+  const patterns = [
+    /^(confirm|submit|place order|approve|sign|continue|확인|승인)$/i,
+    /confirm (purchase|buy|order)/i,
+    /place order/i
+  ];
+  for (const btn of document.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn) || btn.disabled) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (patterns.some((p) => p.test(t))) return btn;
   }
   return null;
 }
 
 function setInputValue(input, value) {
-  if (!input) return false;
-  const str = String(value);
-  input.focus();
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-  if (setter) setter.call(input, str);
-  else input.value = str;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  return true;
+  return setInputValueRobust(input, value);
 }
 
 function sleep(ms) {
@@ -340,49 +470,68 @@ function pageHasOrderError() {
 
 async function placePolymarketBet(amountUsd) {
   const panel = findTradePanel();
-  if (!panel) return { success: false, reason: '주문 패널 없음' };
-  const input = findAmountInput(panel);
-  if (!input) return { success: false, reason: '금액 입력 없음' };
+  if (!panel) return { success: false, reason: '주문 패널 없음 — outcome 선택 후 Amount 확인' };
+
+  ensureBuyTabSelected(panel);
+  await sleep(150);
 
   const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
-  setInputValue(input, amount.toFixed(2));
+  const fill = await fillTradeAmount(panel, amount);
+  if (!fill.ok) {
+    return { success: false, reason: fill.reason || '금액 입력 실패' };
+  }
 
   let btn = null;
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 20; i++) {
     await sleep(80);
-    btn = findBuyButton(panel);
-    if (btn && !btn.disabled) {
-      const t = (btn.textContent || '').toLowerCase();
-      if (/buy/.test(t) && !/enter amount|minimum/i.test(t)) break;
-    }
+    btn = findPlaceOrderButton(panel);
+    if (btn && !btn.disabled) break;
     btn = null;
   }
-  if (!btn) return { success: false, reason: 'Buy 버튼 없음 (금액/최소주문 확인)' };
-
-  const stake = readStake(panel);
-  if (!stake || stake < amount * 0.9) {
-    return { success: false, reason: `금액 반영 실패 (입력 $${stake || 0})` };
+  if (!btn) {
+    return { success: false, reason: 'Place Order/Buy 버튼 없음 — Buy 탭·outcome·금액 확인' };
   }
 
-  robustClick(btn);
+  let clicked = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    robustClick(btn);
+    clicked = true;
+    await sleep(250);
 
-  for (let i = 0; i < 40; i++) {
-    await sleep(150);
+    const modalBtn = findModalActionButton();
+    if (modalBtn) robustClick(modalBtn);
+
+    if (pageHasOrderSuccess() || walletPromptVisible()) break;
+    btn = findPlaceOrderButton(panel);
+    if (!btn) break;
+  }
+
+  if (!clicked) return { success: false, reason: 'Buy 클릭 실패' };
+
+  for (let i = 0; i < 50; i++) {
+    await sleep(200);
     if (pageHasOrderSuccess()) {
-      return { success: true, confirmed: true, btnText: (btn.textContent || '').trim().slice(0, 40) };
+      return { success: true, confirmed: true, btnText: (btn.textContent || '').trim().slice(0, 50) };
+    }
+    if (walletPromptVisible()) {
+      return { success: true, pendingWallet: true, reason: '지갑 승인 대기 — 팝업에서 서명하세요' };
     }
     if (pageHasOrderError()) {
       return { success: false, reason: '주문 거부/잔액 부족' };
     }
-    const confirmBtn = Array.from(document.querySelectorAll('button, [role="button"]')).find((b) => {
-      if (!visible(b) || b.disabled) return false;
-      const t = (b.textContent || '').trim();
-      return /^(confirm|submit|place order|확인)$/i.test(t);
-    });
-    if (confirmBtn) robustClick(confirmBtn);
+    const modalBtn = findModalActionButton();
+    if (modalBtn) robustClick(modalBtn);
   }
 
-  return { success: false, reason: '주문 확인 타임아웃 (지갑 승인 필요?)' };
+  if (walletPromptVisible()) {
+    return { success: true, pendingWallet: true, reason: '지갑 승인 대기' };
+  }
+
+  return {
+    success: false,
+    clicked: true,
+    reason: '주문 미확인 — Buy는 클릭됨, 지갑/Confirm 수동 확인'
+  };
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
