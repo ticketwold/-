@@ -729,4 +729,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v2.0');
+console.log('[Polymarket봇] content script v2.1');
