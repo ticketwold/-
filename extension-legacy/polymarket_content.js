@@ -280,6 +280,62 @@ function readStake(scope) {
   return null;
 }
 
+function namesMatch(a, b) {
+  const na = String(a || '').replace(/\s+/g, '').toLowerCase();
+  const nb = String(b || '').replace(/\s+/g, '').toLowerCase();
+  if (!na || !nb || na.length < 2 || nb.length < 2) return false;
+  if (na === nb) return true;
+  const n = Math.min(na.length, nb.length, 5);
+  if (na.slice(0, n) === nb.slice(0, n)) return true;
+  return na.includes(nb) || nb.includes(na);
+}
+
+function extractTeamFromCentsLabel(txt) {
+  return String(txt || '')
+    .replace(/\s*\d+(?:\.\d+)?\s*¢.*$/i, '')
+    .replace(/^(buy|sell|매수|매도)\s+/i, '')
+    .trim();
+}
+
+function findActiveOutcomePrice(panel, teamLabel) {
+  const roots = [];
+  const seen = new Set();
+  for (const r of [panel, findTradePanel(), document.body]) {
+    if (r && !seen.has(r)) { roots.push(r); seen.add(r); }
+  }
+
+  const candidates = [];
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"]')) {
+      if (!isVisible(btn) || isBuySellTabToggle(btn)) continue;
+      const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const p = parseCentsPrice(txt);
+      if (!p) continue;
+
+      const team = extractTeamFromCentsLabel(txt);
+      let score = 0;
+      if (btn.getAttribute('aria-pressed') === 'true') score += 90;
+      if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 90;
+      if (btn.getAttribute('aria-selected') === 'true') score += 80;
+      const cls = String(btn.className || '');
+      if (/active|selected|checked|pressed/i.test(cls)) score += 50;
+      if (teamLabel && team && namesMatch(team, teamLabel)) score += 120;
+      if (panel && panel.contains(btn)) score += 40;
+      if (team && team.length >= 2) score += 10;
+
+      candidates.push({ price: p, score, team, txt });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates[0].score;
+  const topGroup = candidates.filter((c) => c.score >= top - 15);
+  // Buy 탭: 표시 가격(낮은 ¢) 우선 — Avg price보다 실제 버튼 가격 사용
+  topGroup.sort((a, b) => a.price - b.price);
+  return topGroup[0].price;
+}
+
 function findSelectedOutcomePrice(scope) {
   const root = scope || findTradePanel() || document;
   for (const btn of root.querySelectorAll('button, [role="button"]')) {
@@ -294,7 +350,7 @@ function findSelectedOutcomePrice(scope) {
   return null;
 }
 
-function readToWinAndPrice(scope) {
+function readToWinAndPrice(scope, opts = {}) {
   const panel = scope || findTradePanel();
   const t = (panel?.innerText || document.body?.innerText || '').replace(/\s+/g, ' ');
   let toWin = null;
@@ -306,10 +362,29 @@ function readToWinAndPrice(scope) {
     if (values.length) toWin = Math.max(...values);
   }
 
-  let price = findSelectedOutcomePrice(panel);
-  const avg = t.match(/avg(?:\.|erage)?\s*price[^0-9]*(\d+(?:\.\d+)?)\s*¢/i);
-  if (!price && avg) price = parseFloat(avg[1]) / 100;
+  const teamLabel = readTeamLabel(panel);
+  let price = findActiveOutcomePrice(panel, teamLabel) || findSelectedOutcomePrice(panel);
+
   if (!price && panel) {
+    for (const btn of panel.querySelectorAll('button, [role="button"]')) {
+      const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt.includes('¢') || txt.includes('--')) continue;
+      const p = parseCentsPrice(txt);
+      if (!p) continue;
+      const team = extractTeamFromCentsLabel(txt);
+      if (teamLabel && team && namesMatch(team, teamLabel)) {
+        price = p;
+        break;
+      }
+    }
+  }
+
+  // Avg price는 최후 폴백 (실제 Buy 버튼 ¢와 다를 수 있음)
+  if (!price && !opts.skipAvg) {
+    const avg = t.match(/avg(?:\.|erage)?\s*price[^0-9]*(\d+(?:\.\d+)?)\s*¢/i);
+    if (avg) price = parseFloat(avg[1]) / 100;
+  }
+  if (!price && panel && !opts.skipAvg) {
     const centsInPanel = (panel.innerText || '').match(/(\d{1,2}(?:\.\d+)?)\s*¢/g);
     if (centsInPanel && centsInPanel.length) {
       price = parseCentsPrice(centsInPanel[centsInPanel.length - 1]);
@@ -341,24 +416,46 @@ function readTeamLabel(panel) {
 }
 
 function calcOddsFromStake(stake, toWin, price) {
-  if (price && price > 0 && price < 1) {
-    const dec = priceToDecimal(price);
-    if (dec) {
-      const payout = stake ? stake * dec : null;
-      const profit = payout != null && stake ? payout - stake : null;
-      return { odds: dec, payout, profit };
+  let effective = null;
+  if (stake && toWin && toWin > 0) {
+    let dec, payout, profit;
+    if (toWin >= stake * 1.5) {
+      // To win = 총 수령액 (payout)
+      dec = toWin / stake;
+      payout = toWin;
+      profit = toWin - stake;
+    } else {
+      // To win = 순이익
+      dec = (stake + toWin) / stake;
+      payout = stake + toWin;
+      profit = toWin;
+    }
+    if (dec > 1.001) effective = { odds: dec, payout, profit };
+  }
+
+  const priceDec = (price && price > 0 && price < 1) ? priceToDecimal(price) : null;
+
+  if (effective && priceDec) {
+    const rel = Math.abs(effective.odds - priceDec) / Math.max(effective.odds, priceDec);
+    // Avg price(5¢→20x) vs 실제 버튼(4¢→25x) 차이 — 버튼 가격 우선
+    if (rel > 0.05) {
+      const payoutFromPrice = stake ? stake * priceDec : null;
+      return {
+        odds: priceDec,
+        payout: payoutFromPrice,
+        profit: payoutFromPrice != null && stake ? payoutFromPrice - stake : effective.profit,
+        usedPrice: true
+      };
     }
   }
 
-  if (stake && toWin) {
-    if (toWin < stake * 0.5) {
-      return { odds: null, payout: null, profit: null };
-    }
-    if (toWin >= stake * 0.85) {
-      return { odds: toWin / stake, payout: toWin, profit: toWin - stake };
-    }
-    return { odds: (stake + toWin) / stake, payout: stake + toWin, profit: toWin };
+  if (priceDec) {
+    const payout = stake ? stake * priceDec : null;
+    const profit = payout != null && stake ? payout - stake : null;
+    return { odds: priceDec, payout, profit, usedPrice: true };
   }
+
+  if (effective) return effective;
 
   return { odds: null, payout: null, profit: null };
 }
@@ -367,18 +464,20 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const scope = panel || document.body;
   const stake = readStake(scope);
-  const { toWin, price: panelPrice } = readToWinAndPrice(scope);
   let teamLabel = readTeamLabel(panel);
 
-  let price = panelPrice;
+  let price = findActiveOutcomePrice(panel, teamLabel);
+  const { toWin, price: panelPrice } = readToWinAndPrice(scope, { skipAvg: true });
+  if (!price) price = panelPrice;
+
   if (!price && panel) {
     for (const btn of panel.querySelectorAll('button, [role="button"]')) {
       const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
       if (!txt.includes('¢') || txt.includes('--')) continue;
       const p = parseCentsPrice(txt);
       if (!p) continue;
-      const team = txt.replace(/\s*\d+(?:\.\d+)?\s*¢.*$/, '').trim();
-      if (team && teamLabel && team.toLowerCase().includes(teamLabel.toLowerCase().slice(0, 5))) {
+      const team = extractTeamFromCentsLabel(txt);
+      if (team && teamLabel && namesMatch(team, teamLabel)) {
         price = p;
         break;
       }
@@ -387,12 +486,13 @@ function readPolymarketSlip() {
   }
 
   const { odds, payout, profit } = calcOddsFromStake(stake, toWin, price);
-  const priceCents = price != null ? Math.round(price * 1000) / 10 : null;
+  const priceCents = price != null ? Math.round(price * 1000) / 10 : (odds ? Math.round(1000 / odds) / 10 : null);
   const eventTitle = document.querySelector('h1')?.textContent?.trim() || '';
 
-  const priceOdds = price ? priceToDecimal(price) : null;
-  const finalOdds = priceOdds || odds;
+  const finalOdds = odds;
   if (!finalOdds || finalOdds <= 1.001) return null;
+
+  const totalPayout = payout || (stake && profit != null ? stake + profit : null);
 
   return {
     odds: finalOdds,
@@ -411,12 +511,12 @@ function readPolymarketSlip() {
       : (priceCents != null ? `${priceCents}¢` : ''),
     stake: stake || null,
     toWin: profit,
-    payout: payout || (stake && profit != null ? stake + profit : null),
+    payout: totalPayout,
     displayLabel: priceCents != null
       ? `${priceCents}¢ (${finalOdds.toFixed(3)})`
       : finalOdds.toFixed(3),
-    hint: stake && (payout || profit != null)
-      ? `베팅 $${stake} → 수령 $${(payout || stake + (profit || 0)).toFixed(2)}`
+    hint: stake && totalPayout
+      ? `베팅 $${stake} → 수령 $${totalPayout.toFixed(2)}`
       : (stake ? '' : '금액 입력 필요')
   };
 }
@@ -528,7 +628,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.8' });
+    sendResponse({ ok: true, href: location.href, site: 'polymarket', version: '1.9' });
     return false;
   }
   if (msg.type === 'PROBE_POLY') {
@@ -573,4 +673,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })();
 
-console.log('[Polymarket봇] content script v1.8');
+console.log('[Polymarket봇] content script v1.9');
