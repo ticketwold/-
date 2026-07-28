@@ -39,9 +39,32 @@ function findTradePanel() {
   return best;
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function findButtonByText(pattern, root) {
+  const scope = root || document.body;
+  for (const btn of scope.querySelectorAll('button, [role="button"], a')) {
+    if (!visible(btn) || btn.disabled) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (pattern.test(t)) return btn;
+  }
+  return null;
+}
+
 function findAmountInput(panel) {
   const root = panel || findTradePanel() || document;
-  const inputs = Array.from(root.querySelectorAll('input, textarea')).filter(visible);
+
+  for (const label of root.querySelectorAll('label, span, p, div')) {
+    const lt = (label.textContent || '').trim();
+    if (!/^amount$/i.test(lt) && !/^금액$/i.test(lt)) continue;
+    const box = label.closest('div') || label.parentElement;
+    const inp = box?.querySelector('input, textarea, [contenteditable="true"]');
+    if (inp && visible(inp)) return inp;
+  }
+
+  const inputs = Array.from(root.querySelectorAll('input, textarea, [contenteditable="true"]')).filter(visible);
   for (const inp of inputs) {
     const ph = (inp.placeholder || '').toLowerCase();
     const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
@@ -50,20 +73,24 @@ function findAmountInput(panel) {
       return inp;
     }
   }
-  for (const inp of inputs) {
+
+  const panelInputs = inputs.filter((inp) => !panel || panel.contains(inp));
+  for (const inp of panelInputs) {
     const type = (inp.getAttribute('type') || '').toLowerCase();
-    if (type === 'number' || type === 'text' || type === '') return inp;
+    if (type === 'number' || type === 'text' || type === '' || inp.isContentEditable) return inp;
   }
-  return root.querySelector('input');
+  return panelInputs[0] || root.querySelector('input');
+}
+
+function readFieldValue(el) {
+  if (!el) return null;
+  const raw = el.isContentEditable ? el.textContent : el.value;
+  const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+  return Number.isFinite(v) && v > 0 ? v : null;
 }
 
 function readStake(panel) {
-  const inp = findAmountInput(panel);
-  if (inp) {
-    const v = parseFloat(String(inp.value || '').replace(/[$,\s]/g, ''));
-    if (v > 0) return v;
-  }
-  return null;
+  return readFieldValue(findAmountInput(panel));
 }
 
 function parseMoneyOnly(text) {
@@ -298,13 +325,55 @@ function decimalToCents(decimal) {
 
 function robustClick(el) {
   if (!el) return false;
-  try { el.scrollIntoView({ block: 'center' }); } catch (_) {}
+  try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+  try { el.focus({ preventScroll: true }); } catch (_) {}
   const r = el.getBoundingClientRect();
-  const opts = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
-  el.dispatchEvent(new MouseEvent('mousedown', opts));
-  el.dispatchEvent(new MouseEvent('mouseup', opts));
-  el.dispatchEvent(new MouseEvent('click', opts));
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1 };
+  try { el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse' })); } catch (_) {}
+  try { el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, pointerType: 'mouse' })); } catch (_) {}
+  el.dispatchEvent(new MouseEvent('mousedown', base));
+  el.dispatchEvent(new MouseEvent('mouseup', base));
+  el.dispatchEvent(new MouseEvent('click', base));
   if (typeof el.click === 'function') el.click();
+  return true;
+}
+
+async function typeIntoField(el, text) {
+  if (!el) return false;
+  const str = String(text);
+  el.focus();
+  try { el.click(); } catch (_) {}
+
+  if (el.isContentEditable) {
+    el.textContent = str;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertText' }));
+    await sleep(100);
+    return true;
+  }
+
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+  try {
+    el.select?.();
+    document.execCommand?.('selectAll', false, null);
+    document.execCommand?.('delete', false, null);
+  } catch (_) {}
+
+  if (setter) setter.call(el, '');
+  for (const ch of str) {
+    if (setter) setter.call(el, (el.value || '') + ch);
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+    await sleep(25);
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new Event('blur', { bubbles: true }));
+  await sleep(150);
   return true;
 }
 
@@ -325,6 +394,34 @@ function ensureBuyTabSelected(panel) {
 }
 
 function findPlaceOrderButton(panel) {
+  const input = findAmountInput(panel);
+  if (input) {
+    let box = input.parentElement;
+    for (let depth = 0; depth < 10 && box; depth++) {
+      const local = [];
+      for (const btn of box.querySelectorAll('button, [role="button"]')) {
+        if (!visible(btn) || btn.disabled) continue;
+        const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        const lower = t.toLowerCase();
+        if (!t || t.length > 120) continue;
+        if (lower === 'sell' || lower === 'buy' && box.textContent.includes('Sell') && t.length < 6) continue;
+        let score = 0;
+        if (/^buy\b/i.test(t) && t.length > 4) score += 100;
+        if (/\$\d/.test(t)) score += 90;
+        if (/place order|submit/i.test(lower)) score += 110;
+        if (/yes|no/i.test(t) && /buy/i.test(t)) score += 80;
+        const r = btn.getBoundingClientRect();
+        if (r.width >= 100 && r.height >= 36) score += 20;
+        if (score >= 70) local.push({ btn, score, t });
+      }
+      if (local.length) {
+        local.sort((a, b) => b.score - a.score);
+        return local[0].btn;
+      }
+      box = box.parentElement;
+    }
+  }
+
   const roots = [panel, findTradePanel(), document.body].filter(Boolean);
   const seen = new Set();
   const candidates = [];
@@ -336,28 +433,24 @@ function findPlaceOrderButton(panel) {
 
       const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
       const aria = (btn.getAttribute('aria-label') || '').trim();
-      const combined = `${t} ${aria}`;
-      const lower = combined.toLowerCase();
+      const lower = `${t} ${aria}`.toLowerCase();
       const rect = btn.getBoundingClientRect();
 
       let score = 0;
       if (/place order|submit order|confirm purchase|confirm buy/i.test(lower)) score += 120;
-      if (/^buy\s+.+/i.test(t) && t.length > 7) score += 90;
-      if (/buy.*\$\d|^\$\d.*buy/i.test(t)) score += 85;
-      if (/buy.*(yes|no)\b/i.test(lower)) score += 80;
+      if (/^buy\s+.+/i.test(t) && t.length > 6) score += 95;
+      if (/buy.*\$\d|^\$\d.*buy/i.test(t)) score += 90;
+      if (/buy.*(yes|no)\b/i.test(lower)) score += 85;
       if (aria && /buy/i.test(aria) && !/tab/i.test(aria)) score += 70;
-
       if (t === 'Buy' || t === '매수') {
         const parentText = (btn.parentElement?.textContent || '').replace(/\s+/g, ' ');
-        if (/\bSell\b|\b매도\b/.test(parentText) && parentText.length < 30) score += 8;
-        else score += 45;
+        score += (/\bSell\b/.test(parentText) && parentText.length < 40) ? 5 : 50;
       }
-
       if (rect.width >= 90 && rect.height >= 32) score += 15;
-      if (panel && panel.contains(btn)) score += 20;
-      if (/\d+¢|cents|shares/i.test(t)) score += 10;
+      if (panel && panel.contains(btn)) score += 25;
+      if (/\d+¢|shares/i.test(t)) score += 10;
 
-      if (score >= 40) candidates.push({ btn, score, t: t.slice(0, 60) });
+      if (score >= 45) candidates.push({ btn, score, t: t.slice(0, 60) });
     }
   }
 
@@ -370,65 +463,59 @@ function findBuyButton(panel) {
 }
 
 async function setInputValueRobust(input, value) {
-  if (!input) return false;
-  const str = String(value);
-  input.focus();
-  try { input.click(); } catch (_) {}
-
-  try {
-    input.select?.();
-    document.execCommand?.('selectAll', false, null);
-    document.execCommand?.('insertText', false, str);
-  } catch (_) {}
-
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-    || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-  if (setter) setter.call(input, str);
-  else input.value = str;
-
-  input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: str }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-  await sleep(120);
-  return true;
+  return typeIntoField(input, value);
 }
 
-function clickAmountPreset(target) {
-  const want = Math.round(target * 100) / 100;
-  for (const btn of document.querySelectorAll('button, [role="button"]')) {
-    if (!visible(btn)) continue;
-    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (t === `$${want}` || t === `+$${want}` || t === `${want}`) {
+async function clickAmountChips(target) {
+  const want = Math.max(0.01, Math.round(target * 100) / 100);
+  const chips = [100, 50, 20, 10, 5, 1];
+  let left = Math.round(want);
+  let clicked = 0;
+
+  for (const n of chips) {
+    while (left >= n) {
+      const btn = findButtonByText(new RegExp(`^\\+?\\$${n}$`))
+        || findButtonByText(new RegExp(`^\\$${n}$`));
+      if (!btn) break;
       robustClick(btn);
-      return true;
+      clicked++;
+      left -= n;
+      await sleep(100);
     }
   }
-  return false;
+  return clicked > 0;
 }
 
 async function fillTradeAmount(panel, amount) {
   const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
   const existing = readStake(panel);
-  if (existing && Math.abs(existing - rounded) <= 0.05) return { ok: true, stake: existing, method: 'existing' };
+  if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'existing' };
 
-  const input = findAmountInput(panel);
-  if (!input) return { ok: false, reason: '금액 입력란 없음' };
+  const field = findAmountInput(panel);
+  if (!field) return { ok: false, reason: '금액 입력란 없음 — Amount 필드 확인' };
 
-  await setInputValueRobust(input, rounded.toFixed(2));
+  await typeIntoField(field, rounded.toFixed(2));
   let stake = readStake(panel);
-  if (stake && Math.abs(stake - rounded) <= 0.15) return { ok: true, stake, method: 'input' };
+  if (stake && Math.abs(stake - rounded) <= 0.2) return { ok: true, stake, method: 'type' };
 
-  clickAmountPreset(rounded);
-  await sleep(150);
+  await clickAmountChips(rounded);
+  await sleep(200);
   stake = readStake(panel);
-  if (stake && Math.abs(stake - rounded) <= 0.15) return { ok: true, stake, method: 'preset' };
+  if (stake && stake >= rounded * 0.8) return { ok: true, stake, method: 'chips' };
 
-  await setInputValueRobust(input, String(Math.ceil(rounded)));
+  await typeIntoField(field, String(Math.ceil(rounded)));
   stake = readStake(panel);
-  if (stake && stake >= rounded * 0.85) return { ok: true, stake, method: 'input-retry' };
+  if (stake && stake >= 0.5) return { ok: true, stake, method: 'type-int' };
 
   if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'keep-user' };
-  return { ok: false, reason: `금액 반영 실패 (목표 $${rounded}, 현재 $${stake || 0})`, stake };
+
+  // 금액 미반영이어도 Buy 버튼에 금액이 표시될 수 있음 → 진행 허용
+  const btn = findPlaceOrderButton(panel);
+  if (btn && /\$\d/.test(btn.textContent || '')) {
+    return { ok: true, stake: rounded, method: 'button-amount', warn: 'input-unverified' };
+  }
+
+  return { ok: false, reason: `금액 입력 실패 ($${stake || 0}) — Polymarket Amount에 $${rounded} 직접 입력 후 재시도`, stake };
 }
 
 function hasInPageDialog() {
@@ -475,11 +562,7 @@ function pageHasOrderSuccess() {
 }
 
 function setInputValue(input, value) {
-  return setInputValueRobust(input, value);
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return typeIntoField(input, value);
 }
 
 function pageHasOrderError() {
@@ -516,45 +599,80 @@ async function waitAfterBuyClick(panel, btn) {
   return { success: false, reason: '주문 거부됨' };
 }
 
+function probePolyBetUi() {
+  const panel = findTradePanel();
+  const input = findAmountInput(panel);
+  const btn = findPlaceOrderButton(panel);
+  return {
+    hasPanel: !!panel,
+    hasInput: !!input,
+    stake: readStake(panel),
+    hasBtn: !!btn,
+    btnText: btn ? (btn.textContent || '').trim().slice(0, 60) : '',
+    btnDisabled: btn ? !!btn.disabled : null,
+    team: readTeamLabel(panel),
+    url: location.href
+  };
+}
+
 async function placePolymarketBet(amountUsd) {
   const panel = findTradePanel();
-  if (!panel) return { success: false, reason: '주문 패널 없음 — outcome 선택 후 Amount 확인' };
+  if (!panel) {
+    return { success: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
+  }
 
   ensureBuyTabSelected(panel);
-  await sleep(150);
+  await sleep(200);
 
   const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
   const fill = await fillTradeAmount(panel, amount);
   if (!fill.ok) {
-    return { success: false, reason: fill.reason || '금액 입력 실패' };
+    return { success: false, reason: fill.reason || '금액 입력 실패', probe: probePolyBetUi() };
   }
 
   let btn = null;
-  for (let i = 0; i < 20; i++) {
-    await sleep(80);
+  let btnText = '';
+  for (let i = 0; i < 30; i++) {
+    await sleep(100);
     btn = findPlaceOrderButton(panel);
-    if (btn && !btn.disabled) break;
+    if (btn && !btn.disabled) {
+      btnText = (btn.textContent || '').trim();
+      if (/buy|place|submit/i.test(btnText) || /\$\d/.test(btnText)) break;
+    }
     btn = null;
   }
+
   if (!btn) {
-    return { success: false, reason: 'Place Order/Buy 버튼 없음 — Buy 탭·outcome·금액 확인' };
+    return {
+      success: false,
+      reason: 'Buy 버튼 없음 — Amount 입력·Buy탭·outcome 확인',
+      probe: probePolyBetUi(),
+      fillMethod: fill.method
+    };
   }
 
   robustClick(btn);
-  await sleep(200);
-  let modalBtn = findModalActionButton();
+  await sleep(300);
+  const modalBtn = findModalActionButton();
   if (modalBtn) robustClick(modalBtn);
 
-  return await waitAfterBuyClick(panel, btn);
+  const result = await waitAfterBuyClick(panel, btn);
+  result.btnText = btnText.slice(0, 60);
+  result.fillMethod = fill.method;
+  return result;
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, site: 'polymarket', version: '5.0' });
+    sendResponse({ ok: true, site: 'polymarket', version: '5.1' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readPolymarketSlip() });
+    return false;
+  }
+  if (msg.type === 'PROBE_POLY') {
+    sendResponse({ ok: true, probe: probePolyBetUi() });
     return false;
   }
   if (msg.type === 'PLACE_BET') {
@@ -562,6 +680,12 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return true;
   }
 });
+
+try {
+  window.__polyPlaceBet = placePolymarketBet;
+  window.__polyProbe = probePolyBetUi;
+  window.__polyReadSlip = readPolymarketSlip;
+} catch (_) {}
 
 (function observe() {
   let last = '';

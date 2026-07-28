@@ -348,9 +348,32 @@ async function ensureBtiSlip(btiTab, hint = {}) {
     || { ok: false, reason: '응답 없음' };
 }
 
+async function injectPolyBet(tabId, amountUsd) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (amount) => {
+        if (typeof window.__polyPlaceBet === 'function') return await window.__polyPlaceBet(amount);
+        if (typeof placePolymarketBet === 'function') return await placePolymarketBet(amount);
+        return { success: false, reason: 'Poly 스크립트 미로드 — 탭 새로고침' };
+      },
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || null;
+  } catch (e) {
+    return { success: false, reason: `주입 실패: ${e.message}` };
+  }
+}
+
 async function placePolyBet(polyTab, amountUsd) {
-  return await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd })
-    || { success: false, reason: '응답 없음' };
+  if (!polyTab?.id) return { success: false, reason: 'Polymarket 탭 없음' };
+
+  await ensurePolyScript(polyTab.id);
+  let res = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd });
+  if (res) return res;
+
+  res = await injectPolyBet(polyTab.id, amountUsd);
+  return res || { success: false, reason: 'Polymarket 응답 없음 — 탭 새로고침' };
 }
 
 function scheduleTryBet() {
@@ -383,7 +406,11 @@ async function tryBet() {
     log('① Polymarket 베팅...', 'info');
     const polyRes = await placePolyBet(polyTab, polyUsd);
     if (!polyRes?.success) {
-      log(`❌ Polymarket: ${polyRes?.reason || '실패'}`, 'err');
+      const probe = polyRes?.probe;
+      const extra = probe
+        ? ` [패널:${probe.hasPanel ? 'O' : 'X'} 입력:${probe.hasInput ? 'O' : 'X'} 버튼:${probe.hasBtn ? 'O' : 'X'}${probe.btnText ? ` "${probe.btnText}"` : ''}]`
+        : '';
+      log(`❌ Polymarket: ${polyRes?.reason || '실패'}${extra}`, 'err');
       stopBot();
       return;
     }
@@ -546,6 +573,15 @@ $('diagBtn')?.addEventListener('click', async () => {
   const found = await findTabs();
   log(`텐텐뱃: ${found.btiTab ? `탭 OK frame#${found.btiTab.frameId}` : '탭 없음'}`, found.btiTab ? 'ok' : 'err');
   log(`Polymarket: ${found.polyTab ? '탭 OK' : '탭 없음'}`, found.polyTab ? 'ok' : 'err');
+  if (found.polyTab) {
+    await ensurePolyScript(found.polyTab.id);
+    const probe = await sendPoly(found.polyTab.id, { type: 'PROBE_POLY' });
+    if (probe?.probe) {
+      const p = probe.probe;
+      log(`Poly UI: 패널${p.hasPanel ? 'O' : 'X'} Amount${p.hasInput ? 'O' : 'X'} Buy버튼${p.hasBtn ? 'O' : 'X'} $${p.stake || 0}`, p.hasPanel && p.hasBtn ? 'ok' : 'err');
+      if (p.btnText) log(`Poly Buy: "${p.btnText}"`, 'info');
+    }
+  }
   chrome.runtime.sendMessage({ type: 'DIAG_BTI' }, (r) => {
     if (r?.ok) log(`BTI iframe ${r.frames}개 / PING ${r.pings?.length || 0}개`, 'info');
     else log(`BTI: ${r?.error}`, 'err');
@@ -560,4 +596,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.0.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.1.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
