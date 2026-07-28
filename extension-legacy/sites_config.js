@@ -1,6 +1,6 @@
 // 사이트 설정 — x10x10s.com (텐텐뱃) + polymarket.com
 const SITE_CONFIG = {
-  WRAPPER_HOSTS: ['x10x10s.com'],
+  WRAPPER_HOSTS: ['x10x10s.com', 'pbc00.com'],
   POLYMARKET_HOSTS: ['polymarket.com'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
   GAMMA_API: 'https://gamma-api.polymarket.com',
@@ -18,7 +18,7 @@ function isPolymarketUrl(url) {
 }
 
 function getWrapperGamecode(url) {
-  const m = String(url || '').match(/[?&]gamecode=(\d+)/);
+  const m = String(url || '').match(/(?:[?&#]|^)gamecode=(\d+)/i);
   return m ? m[1] : null;
 }
 

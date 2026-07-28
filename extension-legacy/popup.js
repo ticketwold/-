@@ -4058,7 +4058,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderPrematchResult({ type: 'PREMATCH_SEARCH_RESULT', ...resp.result });
         const s = resp.result.stats || {};
         if (s.btiTabFound === false) {
-          addLog('⚠️ BTI 탭 미발견 - pbc00.com을 먼저 열어주세요', 'warn');
+          addLog('⚠️ BTI 탭 미발견 - x10x10s.com 10벳 스포츠 화면을 먼저 열어주세요', 'warn');
           startPrematchBtn.disabled = false;
           stopPrematchBtn.disabled = true;
         } else if (s.pinTabFound === false) {
@@ -4071,10 +4071,10 @@ document.addEventListener('DOMContentLoaded', () => {
             addLog('⚠️ BTI가 featured 폴백 — eventlist API 확인 필요', 'warn');
           }
           if ((s.btiTotal || 0) > 0 && (s.btiTotal || 0) < 100 && s.btiDataSource === 'eventlist') {
-            addLog('💡 BTI 프리매치가 적으면 pbc00 BTI 탭에서「조기/예정」화면인지 확인', 'info');
+            addLog('💡 BTI 프리매치가 적으면 x10x10s BTI 탭에서「조기/예정」화면인지 확인', 'info');
           }
           if ((s.btiTotal || 0) === 0) {
-            addLog(`⚠️ BTI 0건 — pbc00 로그인+BTI화면(gamecode=19) 열고 새로고침`, 'warn');
+            addLog(`⚠️ BTI 0건 — x10x10s 로그인+10벳 스포츠(BTI) 화면 열고 새로고침`, 'warn');
             if (s.btiApiOrigin) addLog(`BTI API origin: ${s.btiApiOrigin}`, 'info');
             if (s.btiFetchErrors?.length) addLog(`BTI 오류: ${s.btiFetchErrors[0]}`, 'error');
             addLog('→ 팝업 하단 [BTI 진단] 버튼으로 확인', 'info');
@@ -4295,7 +4295,7 @@ document.addEventListener('DOMContentLoaded', () => {
         addLog(`frame ${p.frameId}: btn=${p.buttonCount} top=${p.isTop} ${(p.href || p.url || '').substring(0, 50)}`, 'info');
       });
       if (!resp.apiTest?.ok && !resp.domEventCount) {
-        addLog('→ pbc00 로그인 후 BTI 배당 화면(gamecode=19)을 열고 새로고침하세요', 'warn');
+        addLog('→ x10x10s 로그인 후 10벳 스포츠(BTI) 배당 화면을 열고 새로고침하세요', 'warn');
       }
     });
   });
@@ -4454,7 +4454,7 @@ document.addEventListener('DOMContentLoaded', () => {
       addLog('스포츠목록 오류: ' + (sportsResp ? sportsResp.error : '응답없음'), 'error');
     }
 
-    // BTI API — pbc00 iframe 경유
+    // BTI API — x10x10s iframe 경유
     const btiResp = await new Promise(resolve =>
       chrome.runtime.sendMessage({
         type: 'FETCH_BTI_API',
@@ -4502,7 +4502,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           addLog('⚠️ 매칭 0개 — PIN_KO 한글 수집 실패 (피나클 로그인+한국어 UI)', 'warn');
         }
-        addLog('팁: pbc00 피나클(gamecode=1) 탭에서 프리매치 화면 열고 새로고침', 'warn');
+        addLog('팁: x10x10s 또는 pinnacle.com 탭에서 프리매치 화면 열고 새로고침', 'warn');
       }
     });
   });

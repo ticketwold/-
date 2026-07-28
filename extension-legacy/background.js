@@ -540,7 +540,7 @@ async function fetchBtiViaTab(tabId, path, tabUrl) {
     if (attempt > 0) await sleep(1000);
     const frameIds = await getAllFrameIdsForFetch(tabId, tabUrl);
     if (!frameIds.length) {
-      lastError = 'BTI iframe 없음 — pbc00 BTI 화면(gamecode=19) 새로고침';
+      lastError = 'BTI iframe 없음 — x10x10s 10벳 스포츠(BTI) 화면을 열고 새로고침';
       continue;
     }
 
@@ -603,17 +603,39 @@ async function scrapeBtiDomFromTab(tabId) {
   return events;
 }
 
+async function probeWrapperTabForBti(tab) {
+  const urlScore = scoreWrapperBtiTab(tab.url);
+  let bestScore = urlScore;
+
+  const candidates = await getBtiFrameCandidates(tab.id, tab.url);
+  if (candidates.length) {
+    bestScore = Math.max(bestScore, urlScore + candidates[0].score);
+  }
+
+  if (bestScore <= urlScore) {
+    const frames = await getAllTabFrames(tab.id);
+    const pingHits = await probeBtiFramesByPing(tab.id, frames);
+    if (pingHits.length) {
+      bestScore = Math.max(bestScore, urlScore + pingHits[0].score);
+    }
+  }
+
+  return bestScore > urlScore ? bestScore : (urlScore >= 10 ? urlScore : 0);
+}
+
 async function pickBtiTab() {
   const tabs = await chrome.tabs.query({});
-  let bestPbc = null;
+  let bestWrapper = null;
   let bestDirect = null;
+  const wrapperTabs = [];
 
   for (const tab of tabs) {
     if (!tab.url) continue;
     if (isSiteWrapperUrl(tab.url)) {
+      wrapperTabs.push(tab);
       const score = scoreWrapperBtiTab(tab.url);
-      if (score >= 10 && (!bestPbc || score > bestPbc.score)) {
-        bestPbc = { tab, score };
+      if (score >= 10 && (!bestWrapper || score > bestWrapper.score)) {
+        bestWrapper = { tab, score };
       }
       continue;
     }
@@ -625,8 +647,18 @@ async function pickBtiTab() {
     }
   }
 
-  // x10x10s / pbc00 BTI 화면(gamecode=19) 최우선
-  if (bestPbc) return { id: bestPbc.tab.id, url: bestPbc.tab.url };
+  // x10x10s BTI 화면(gamecode=19) 또는 BTI iframe이 로드된 래퍼 탭
+  if (bestWrapper) return { id: bestWrapper.tab.id, url: bestWrapper.tab.url };
+
+  let bestProbed = null;
+  for (const tab of wrapperTabs) {
+    const score = await probeWrapperTabForBti(tab);
+    if (score > 0 && (!bestProbed || score > bestProbed.score)) {
+      bestProbed = { tab, score };
+    }
+  }
+  if (bestProbed) return { id: bestProbed.tab.id, url: bestProbed.tab.url };
+
   if (bestDirect) return { id: bestDirect.tab.id, url: bestDirect.tab.url };
   return null;
 }
@@ -636,11 +668,16 @@ async function diagBtiSearch() {
   const btiTab = await pickBtiTab();
   if (!btiTab) {
     const tabs = await chrome.tabs.query({});
-    const pbcAny = tabs.filter((t) => isSiteWrapperUrl(t.url || '')).map((t) => t.url).slice(0, 3);
+    const wrapperOpen = tabs.filter((t) => isSiteWrapperUrl(t.url || ''));
+    const wrapperTabsOpen = wrapperOpen.map((t) => t.url).slice(0, 5);
+    let hint = 'x10x10s.com 10벳 스포츠(BTI) 배당 화면을 열어주세요';
+    if (wrapperOpen.length) {
+      hint += ` (x10x10s 탭 ${wrapperOpen.length}개 열림 — BTI 배당판이 보이는지 확인)`;
+    }
     return {
       ok: false,
-      error: 'BTI 탭 없음 — x10x10s.com?gamecode=19 (10벳 스포츠) 화면을 열어주세요',
-      wrapperTabsOpen: tabs.filter((t) => isSiteWrapperUrl(t.url || '')).map((t) => t.url).slice(0, 3)
+      error: 'BTI 탭 없음 — ' + hint,
+      wrapperTabsOpen
     };
   }
 
@@ -1244,7 +1281,7 @@ async function getBtiLiveMatchups(btiTabId) {
   let btiTabUrl = null;
   if (!btiTabId) {
     const btiTab = await findBtiTab();
-    if (!btiTab) { console.warn('[BTI] 열린 BTI 탭 없음 - pbc00.com을 열어주세요'); return []; }
+    if (!btiTab) { console.warn('[BTI] 열린 BTI 탭 없음 - x10x10s.com 10벳 스포츠 화면을 열어주세요'); return []; }
     btiTabId = btiTab.id;
     btiTabUrl = btiTab.url;
   } else {
@@ -2348,7 +2385,7 @@ function serializeBtiListItem(ev) {
 // 종목별 프리매치 경기 목록 (수동 매칭 UI용)
 async function getPrematchSportLists(pinSportId, hours = 48) {
   const btiTab = await findBtiTab();
-  if (!btiTab) return { ok: false, error: 'BTI 탭 없음 — pbc00.com을 열어주세요' };
+  if (!btiTab) return { ok: false, error: 'BTI 탭 없음 — x10x10s.com 10벳 스포츠 화면을 열어주세요' };
 
   const [pinRaw, btiAll] = await Promise.all([
     getPinPrematchForSport(pinSportId),
@@ -2382,7 +2419,7 @@ async function getPrematchSportLists(pinSportId, hours = 48) {
 async function runPrematchSearchOnce() {
   const btiTab = await findBtiTab();
   if (!btiTab) {
-    return { opportunities: [], stats: { error: 'BTI 탭 미발견 - pbc00.com을 열어주세요', btiTabFound: false } };
+    return { opportunities: [], stats: { error: 'BTI 탭 미발견 - x10x10s.com 10벳 스포츠 화면을 열어주세요', btiTabFound: false } };
   }
 
   const pinTab = await findPinnacleTab();
@@ -2574,13 +2611,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // BTI API fetch — pbc00 탭 iframe 경유 (쿠키 포함)
+  // BTI API fetch — x10x10s 탭 iframe 경유 (쿠키 포함)
   if (msg.type === 'FETCH_BTI_API') {
     (async () => {
       try {
         const btiTab = await findBtiTab();
         if (!btiTab) {
-          sendResponse({ ok: false, error: 'pbc00/BTI 탭 없음' });
+          sendResponse({ ok: false, error: 'BTI 탭 없음 — x10x10s.com 10벳 스포츠 화면을 열어주세요' });
           return;
         }
         let path = msg.path || '';
@@ -2714,7 +2751,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const btiTab = await findBtiTab();
-        if (!btiTab) return sendResponse({ error: 'BTI 탭 없음' });
+        if (!btiTab) return sendResponse({ error: 'BTI 탭 없음 — x10x10s.com 10벳 스포츠 화면을 열어주세요' });
 
         // 피나클 팀명 수집 (background 직접 API - 영문)
         let pinNames = [];
