@@ -600,24 +600,9 @@ function findModalActionButton() {
   return null;
 }
 
-function walletPromptVisible() {
-  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-  if (/sign (this )?transaction|confirm in (your )?wallet|wallet request|metamask|approve transaction|signature request|서명|지갑/i.test(text)) {
-    return true;
-  }
-  if (hasInPageDialog()) {
-    return /sign|wallet|approve|confirm|서명|지갑|승인/i.test(text);
-  }
-  return false;
-}
-
 function pageHasOrderSuccess() {
   const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
   return /order submitted|purchase complete|shares purchased|bought|trade submitted|order placed|매수 완료|주문 완료|confirmed|successfully purchased/i.test(text);
-}
-
-function setInputValue(input, value) {
-  return typeIntoField(input, value);
 }
 
 function pageHasOrderError() {
@@ -634,21 +619,19 @@ async function waitAfterBuyClick(panel, btn) {
     if (pageHasOrderError()) {
       return { success: false, reason: '주문 거부/잔액 부족' };
     }
-    if (walletPromptVisible()) {
-      return { success: true, pendingWallet: true, reason: '지갑/확인 창 — 서명하세요' };
-    }
     const modalBtn = findModalActionButton();
     if (modalBtn) robustClick(modalBtn);
     const retryBtn = findPlaceOrderButton(panel);
     if (retryBtn && i < 2 && !hasInPageDialog()) robustClick(retryBtn);
   }
 
-  // MetaMask 등 외부 지갑 팝업은 DOM에 안 보임 → Buy 클릭 후 오류 없으면 성공 처리
+  // Polymarket 캐시 잔액: Buy 클릭만으로 주문됨 (지갑 서명 불필요)
   if (!pageHasOrderError()) {
     return {
       success: true,
-      pendingWallet: true,
-      reason: 'Buy 클릭 완료 — 지갑 팝업에서 서명하세요'
+      confirmed: true,
+      pendingWallet: false,
+      reason: '베팅 클릭 완료'
     };
   }
   return { success: false, reason: '주문 거부됨' };
