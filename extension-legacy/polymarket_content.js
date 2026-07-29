@@ -17,22 +17,28 @@ function findTradePanel() {
   for (const el of document.querySelectorAll('div, section, aside, form')) {
     if (!visible(el)) continue;
     const t = el.innerText || '';
-    if (!el.querySelector('input')) continue;
-    if (t.length > 5000) continue;
+    if (!el.querySelector('input, [contenteditable="true"]')) continue;
+    if (t.length > 8000) continue;
 
     const hasToWin = /to\s*win/i.test(t);
     const hasAmount = /\bamount\b/i.test(t);
-    const hasBuy = /buy\s+[A-Za-z0-9]/i.test(t);
-    if (!hasToWin && !(hasAmount && hasBuy)) continue;
+    const hasBuy = /\bbuy\b/i.test(t);
+    const hasShares = /\bshares\b/i.test(t);
+    const hasLimit = /\blimit\b/i.test(t);
+    const hasMarket = /\bmarket\b/i.test(t);
+    if (!hasToWin && !hasAmount && !(hasBuy && hasShares)) continue;
+    if (hasAmount && !hasBuy && !hasToWin && !hasShares) continue;
 
     let score = 0;
-    if (hasAmount) score += 30;
-    if (hasBuy) score += 35;
+    if (hasAmount) score += 35;
+    if (hasBuy) score += 30;
     if (hasToWin) score += 25;
+    if (hasShares) score += 20;
+    if (hasLimit || hasMarket) score += 15;
     if (/(?:avg\.?\s*)?price\s*\d/i.test(t)) score += 20;
-    score += Math.min(t.length / 10, 100);
+    score += Math.min(t.length / 15, 80);
     if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
-    if (t.length < 50) score -= 40;
+    if (t.length < 40) score -= 50;
 
     if (score > bestScore) { bestScore = score; best = el; }
   }
@@ -393,7 +399,44 @@ function ensureBuyTabSelected(panel) {
   return false;
 }
 
+function isBuyTabButton(btn) {
+  const t = (btn?.textContent || '').replace(/\s+/g, ' ').trim();
+  if (t !== 'Buy' && t !== '매수' && t !== 'Sell' && t !== '매도') return false;
+  const parent = btn.parentElement;
+  const pt = (parent?.textContent || '').replace(/\s+/g, ' ');
+  return /\bBuy\b/.test(pt) && /\bSell\b/.test(pt) && pt.length < 50;
+}
+
+function findBuyTeamButton(panel) {
+  const scope = panel || findTradePanel() || document.body;
+  let best = null;
+  let bestScore = -1;
+
+  for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn) || btn.disabled) continue;
+    if (isBuyTabButton(btn)) continue;
+
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!/^buy\s+/i.test(t) || t.length < 8) continue;
+    if (/combo|terms|sell/i.test(t)) continue;
+
+    const r = btn.getBoundingClientRect();
+    let score = 100 + t.length;
+    if (r.width >= 180 && r.height >= 38) score += 60;
+    if (panel && panel.contains(btn)) score += 40;
+    if (/gaming|yes|no/i.test(t)) score += 10;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = btn;
+    }
+  }
+  return best;
+}
+
 function findPlaceOrderButton(panel) {
+  const teamBtn = findBuyTeamButton(panel);
+  if (teamBtn) return teamBtn;
   const input = findAmountInput(panel);
   if (input) {
     let box = input.parentElement;
@@ -466,56 +509,68 @@ async function setInputValueRobust(input, value) {
   return typeIntoField(input, value);
 }
 
-async function clickAmountChips(target) {
-  const want = Math.max(0.01, Math.round(target * 100) / 100);
-  const chips = [100, 50, 20, 10, 5, 1];
-  let left = Math.round(want);
+async function clickAmountChips(panel, target) {
+  const scope = panel || findTradePanel() || document.body;
+  const want = Math.max(1, Math.round(target));
+  const chips = [100, 10, 5, 1];
+  let left = want;
   let clicked = 0;
 
   for (const n of chips) {
     while (left >= n) {
-      const btn = findButtonByText(new RegExp(`^\\+?\\$${n}$`))
-        || findButtonByText(new RegExp(`^\\$${n}$`));
+      let btn = null;
+      for (const b of scope.querySelectorAll('button, [role="button"]')) {
+        if (!visible(b)) continue;
+        const t = (b.textContent || '').trim();
+        if (t === `+$${n}` || t === `$${n}`) { btn = b; break; }
+      }
       if (!btn) break;
+      btn.click();
       robustClick(btn);
       clicked++;
       left -= n;
-      await sleep(100);
+      await sleep(150);
     }
   }
-  return clicked > 0;
+  return clicked;
+}
+
+function readAmountFromPanel(panel) {
+  const stake = readStake(panel);
+  if (stake) return stake;
+  const t = (panel?.innerText || '').replace(/\s+/g, ' ');
+  const m = t.match(/Amount\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v > 0) return v;
+  }
+  return null;
 }
 
 async function fillTradeAmount(panel, amount) {
-  const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
-  const existing = readStake(panel);
+  const rounded = Math.max(1, Math.round(amount * 100) / 100);
+  const existing = readAmountFromPanel(panel);
   if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'existing' };
 
+  const chipClicks = await clickAmountChips(panel, rounded);
+  await sleep(250);
+  let stake = readAmountFromPanel(panel);
+  if (stake && stake >= 0.5) return { ok: true, stake, method: 'chips', chipClicks };
+
   const field = findAmountInput(panel);
-  if (!field) return { ok: false, reason: '금액 입력란 없음 — Amount 필드 확인' };
-
-  await typeIntoField(field, rounded.toFixed(2));
-  let stake = readStake(panel);
-  if (stake && Math.abs(stake - rounded) <= 0.2) return { ok: true, stake, method: 'type' };
-
-  await clickAmountChips(rounded);
-  await sleep(200);
-  stake = readStake(panel);
-  if (stake && stake >= rounded * 0.8) return { ok: true, stake, method: 'chips' };
-
-  await typeIntoField(field, String(Math.ceil(rounded)));
-  stake = readStake(panel);
-  if (stake && stake >= 0.5) return { ok: true, stake, method: 'type-int' };
-
-  if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'keep-user' };
-
-  // 금액 미반영이어도 Buy 버튼에 금액이 표시될 수 있음 → 진행 허용
-  const btn = findPlaceOrderButton(panel);
-  if (btn && /\$\d/.test(btn.textContent || '')) {
-    return { ok: true, stake: rounded, method: 'button-amount', warn: 'input-unverified' };
+  if (field) {
+    await typeIntoField(field, String(Math.ceil(rounded)));
+    await sleep(200);
+    stake = readAmountFromPanel(panel);
+    if (stake && stake >= 0.5) return { ok: true, stake, method: 'type', chipClicks };
   }
 
-  return { ok: false, reason: `금액 입력 실패 ($${stake || 0}) — Polymarket Amount에 $${rounded} 직접 입력 후 재시도`, stake };
+  const buyBtn = findBuyTeamButton(panel);
+  if (chipClicks > 0 || buyBtn) {
+    return { ok: true, stake: stake || rounded, method: chipClicks ? 'chips-only' : 'buy-ready', chipClicks };
+  }
+
+  return { ok: false, reason: `금액 입력 실패 — +$칩 또는 Amount에 $${rounded} 직접 입력`, stake: stake || 0 };
 }
 
 function hasInPageDialog() {
@@ -601,18 +656,26 @@ async function waitAfterBuyClick(panel, btn) {
 
 function probePolyBetUi() {
   const panel = findTradePanel();
-  const input = findAmountInput(panel);
-  const btn = findPlaceOrderButton(panel);
+  const btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
   return {
     hasPanel: !!panel,
-    hasInput: !!input,
-    stake: readStake(panel),
+    hasInput: !!findAmountInput(panel),
+    stake: readAmountFromPanel(panel),
     hasBtn: !!btn,
     btnText: btn ? (btn.textContent || '').trim().slice(0, 60) : '',
     btnDisabled: btn ? !!btn.disabled : null,
     team: readTeamLabel(panel),
     url: location.href
   };
+}
+
+function clickBuyButton(btn) {
+  if (!btn) return false;
+  try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+  try { btn.focus({ preventScroll: true }); } catch (_) {}
+  if (typeof btn.click === 'function') btn.click();
+  robustClick(btn);
+  return true;
 }
 
 async function placePolymarketBet(amountUsd) {
@@ -624,20 +687,17 @@ async function placePolymarketBet(amountUsd) {
   ensureBuyTabSelected(panel);
   await sleep(200);
 
-  const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+  const amount = Math.max(1, Math.round(amountUsd * 100) / 100);
   const fill = await fillTradeAmount(panel, amount);
-  if (!fill.ok) {
-    return { success: false, reason: fill.reason || '금액 입력 실패', probe: probePolyBetUi() };
-  }
 
   let btn = null;
   let btnText = '';
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 25; i++) {
     await sleep(100);
-    btn = findPlaceOrderButton(panel);
-    if (btn && !btn.disabled) {
+    btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
+    if (btn) {
       btnText = (btn.textContent || '').trim();
-      if (/buy|place|submit/i.test(btnText) || /\$\d/.test(btnText)) break;
+      if (!btn.disabled) break;
     }
     btn = null;
   }
@@ -645,20 +705,25 @@ async function placePolymarketBet(amountUsd) {
   if (!btn) {
     return {
       success: false,
-      reason: 'Buy 버튼 없음 — Amount 입력·Buy탭·outcome 확인',
+      reason: 'Buy 팀명 버튼 없음 (예: Buy LGD Gaming)',
       probe: probePolyBetUi(),
       fillMethod: fill.method
     };
   }
 
-  robustClick(btn);
-  await sleep(300);
+  if (!fill.ok && !fill.chipClicks) {
+    return { success: false, reason: fill.reason || '금액 입력 실패', probe: probePolyBetUi() };
+  }
+
+  clickBuyButton(btn);
+  await sleep(400);
   const modalBtn = findModalActionButton();
-  if (modalBtn) robustClick(modalBtn);
+  if (modalBtn) clickBuyButton(modalBtn);
 
   const result = await waitAfterBuyClick(panel, btn);
   result.btnText = btnText.slice(0, 60);
   result.fillMethod = fill.method;
+  result.chipClicks = fill.chipClicks || 0;
   return result;
 }
 
