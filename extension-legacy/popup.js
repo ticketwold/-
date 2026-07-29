@@ -348,32 +348,57 @@ async function ensureBtiSlip(btiTab, hint = {}) {
     || { ok: false, reason: '응답 없음' };
 }
 
-async function injectPolyBet(tabId, amountUsd) {
+async function injectPolyMain(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['polymarket_bet_main.js'],
+      world: 'MAIN'
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function probePolyMain(tabId) {
+  await injectPolyMain(tabId);
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: async (amount) => {
-        if (typeof window.__polyPlaceBet === 'function') return await window.__polyPlaceBet(amount);
-        if (typeof placePolymarketBet === 'function') return await placePolymarketBet(amount);
-        return { success: false, reason: 'Poly 스크립트 미로드 — 탭 새로고침' };
-      },
-      args: [amountUsd]
+      world: 'MAIN',
+      func: () => (typeof window.__polyMainProbe === 'function' ? window.__polyMainProbe() : null)
     });
     return results?.[0]?.result || null;
-  } catch (e) {
-    return { success: false, reason: `주입 실패: ${e.message}` };
+  } catch (_) {
+    return null;
   }
 }
 
 async function placePolyBet(polyTab, amountUsd) {
   if (!polyTab?.id) return { success: false, reason: 'Polymarket 탭 없음' };
 
-  await ensurePolyScript(polyTab.id);
-  let res = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd });
-  if (res) return res;
+  await injectPolyMain(polyTab.id);
 
-  res = await injectPolyBet(polyTab.id, amountUsd);
-  return res || { success: false, reason: 'Polymarket 응답 없음 — 탭 새로고침' };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id },
+      world: 'MAIN',
+      func: async (amount) => {
+        if (typeof window.__polyMainPlaceBet === 'function') {
+          return await window.__polyMainPlaceBet(amount);
+        }
+        return { success: false, reason: 'MAIN 베팅 스크립트 로드 실패 — 탭 새로고침' };
+      },
+      args: [amountUsd]
+    });
+    const res = results?.[0]?.result;
+    if (res) return res;
+  } catch (e) {
+    return { success: false, reason: `MAIN 베팅 실패: ${e.message}` };
+  }
+
+  return { success: false, reason: 'Polymarket MAIN 응답 없음' };
 }
 
 function scheduleTryBet() {
@@ -406,19 +431,15 @@ async function tryBet() {
     log('① Polymarket 베팅...', 'info');
     const polyRes = await placePolyBet(polyTab, polyUsd);
     if (!polyRes?.success) {
-      const probe = polyRes?.probe;
-      const extra = probe
-        ? ` [패널:${probe.hasPanel ? 'O' : 'X'} 입력:${probe.hasInput ? 'O' : 'X'} 버튼:${probe.hasBtn ? 'O' : 'X'}${probe.btnText ? ` "${probe.btnText}"` : ''}]`
-        : '';
+      const probe = polyRes?.probe || await probePolyMain(polyTab.id);
+      const extra = probe?.btnText
+        ? ` [버튼: "${probe.btnText}"${probe.btnDisabled ? ' 비활성' : ''}]`
+        : (probe ? ` [Buy버튼:${probe.hasBuyBtn ? 'O' : 'X'}]` : '');
       log(`❌ Polymarket: ${polyRes?.reason || '실패'}${extra}`, 'err');
       stopBot();
       return;
     }
-    if (polyRes.pendingWallet) {
-      log('⏳ Polymarket: Buy 클릭됨 — 지갑 서명하면서 텐텐뱃 진행', 'info');
-    } else {
-      log('✅ Polymarket 완료', 'ok');
-    }
+    log(`✅ Poly: "${polyRes.btnText || 'Buy'}" 클릭 (칩 ${polyRes.chipClicks || 0}회) — 지갑 서명!`, 'ok');
 
     log('② 텐텐뱃 슬립 준비...', 'info');
     const prep = await ensureBtiSlip(btiTab, hint);
@@ -574,12 +595,15 @@ $('diagBtn')?.addEventListener('click', async () => {
   log(`텐텐뱃: ${found.btiTab ? `탭 OK frame#${found.btiTab.frameId}` : '탭 없음'}`, found.btiTab ? 'ok' : 'err');
   log(`Polymarket: ${found.polyTab ? '탭 OK' : '탭 없음'}`, found.polyTab ? 'ok' : 'err');
   if (found.polyTab) {
+    const probe = await probePolyMain(found.polyTab.id);
+    if (probe) {
+      log(`Poly MAIN: Buy버튼${probe.hasBuyBtn ? 'O' : 'X'}${probe.btnText ? ` "${probe.btnText}"` : ''}`, probe.hasBuyBtn ? 'ok' : 'err');
+    }
     await ensurePolyScript(found.polyTab.id);
-    const probe = await sendPoly(found.polyTab.id, { type: 'PROBE_POLY' });
-    if (probe?.probe) {
-      const p = probe.probe;
-      log(`Poly UI: 패널${p.hasPanel ? 'O' : 'X'} Amount${p.hasInput ? 'O' : 'X'} Buy버튼${p.hasBtn ? 'O' : 'X'} $${p.stake || 0}`, p.hasPanel && p.hasBtn ? 'ok' : 'err');
-      if (p.btnText) log(`Poly Buy: "${p.btnText}"`, 'info');
+    const probeIso = await sendPoly(found.polyTab.id, { type: 'PROBE_POLY' });
+    if (probeIso?.probe) {
+      const p = probeIso.probe;
+      log(`Poly UI: 패널${p.hasPanel ? 'O' : 'X'} $${p.stake || 0}`, p.hasPanel ? 'info' : 'err');
     }
   }
   chrome.runtime.sendMessage({ type: 'DIAG_BTI' }, (r) => {
@@ -596,4 +620,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.1.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
