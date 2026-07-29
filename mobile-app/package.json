@@ -1,0 +1,17 @@
+{
+  "name": "arb-betting-mobile",
+  "version": "1.0.0",
+  "description": "텐텐뱃 + Polymarket 양방 베팅 모바일 앱",
+  "private": true,
+  "scripts": {
+    "sync": "npx cap sync android",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  }
+}
