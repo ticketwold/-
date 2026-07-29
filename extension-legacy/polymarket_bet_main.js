@@ -72,15 +72,37 @@
   }
 
   async function clickConfirmIfAny() {
+    let clicked = false;
     for (const btn of buttons()) {
       const t = (btn.textContent || '').trim();
-      if (/^(confirm|submit|place order|approve|sign|continue)$/i.test(t)) {
+      if (/^(confirm|submit|place order|approve|continue|yes)$/i.test(t)) {
         btn.click();
-        await sleep(350);
-        return true;
+        clicked = true;
+        await sleep(300);
       }
     }
-    return false;
+    return clicked;
+  }
+
+  function pageBetSuccess() {
+    const t = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    return /order (submitted|placed|complete)|purchase complete|successfully purchased|bought|trade submitted|shares purchased|매수 완료|주문 완료|order filled/i.test(t);
+  }
+
+  function pageBetError() {
+    const t = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    return /insufficient (balance|funds)|not enough|failed to|transaction failed|rejected|unable to place|잔액 부족|주문 실패/i.test(t);
+  }
+
+  async function waitBetResult() {
+    for (let i = 0; i < 20; i++) {
+      await sleep(200);
+      if (pageBetSuccess()) return { confirmed: true, via: 'page-success' };
+      if (pageBetError()) return { confirmed: false, via: 'page-error' };
+      await clickConfirmIfAny();
+    }
+    if (!pageBetError()) return { confirmed: true, via: 'click-only' };
+    return { confirmed: false, via: 'timeout' };
   }
 
   window.__polyMainProbe = function () {
@@ -117,18 +139,30 @@
       buyBtn.scrollIntoView({ block: 'center', inline: 'center' });
       await sleep(100);
       buyBtn.click();
-      await sleep(500);
+      await sleep(400);
       await clickConfirmIfAny();
+
+      const result = await waitBetResult();
+      if (!result.confirmed) {
+        return {
+          success: false,
+          reason: '베팅 실패 — 잔액/금액 확인',
+          btnText,
+          chipClicks,
+          amount,
+          method: 'main-world'
+        };
+      }
 
       return {
         success: true,
-        pendingWallet: true,
-        confirmed: false,
+        confirmed: true,
+        pendingWallet: false,
         btnText,
         chipClicks,
         amount,
         method: 'main-world',
-        reason: 'Buy 클릭 완료 — 지갑에서 서명하세요'
+        reason: '베팅 클릭 완료'
       };
     } catch (e) {
       return { success: false, reason: e.message, method: 'main-world' };

@@ -439,7 +439,7 @@ async function tryBet() {
       stopBot();
       return;
     }
-    log(`✅ Poly: "${polyRes.btnText || 'Buy'}" 클릭 (칩 ${polyRes.chipClicks || 0}회) — 지갑 서명!`, 'ok');
+    log(`✅ Polymarket: "${polyRes.btnText || 'Buy'}" 클릭 완료`, 'ok');
 
     log('② 텐텐뱃 슬립 준비...', 'info');
     const prep = await ensureBtiSlip(btiTab, hint);
@@ -620,4 +620,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
