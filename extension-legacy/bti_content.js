@@ -196,37 +196,33 @@ function parseSlipFromCard(card) {
     return 'ml';
   })();
 
-  // W1/W2 슬립 — 실시간 배당판 우선
+  // W1/W2 슬립 — 실시간 배당판만
   if (/^W[12]$/i.test(selectionText.trim())) {
     const boardOdds = readOddsFromBoardForSelection(selectionText, allText, 'ml');
-    const slipCardOdds = readOddsFromSlipCard(card);
-    const wOdds = boardOdds || slipCardOdds;
-    if (wOdds) {
-      const period = 'ft';
-      const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
-      const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
-      const teams = parseEventTeams(resolvedEventText);
-      return {
-        odds: wOdds,
-        eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
-        marketKind: 'ml',
-        period,
-        side,
-        line: null,
-        marketKey: `${period}_ml_${side}`,
-        mktText,
-        selectionText,
-        eventText: resolvedEventText,
-        homeTeam: teams.home,
-        awayTeam: teams.away,
-        fromSlip: !boardOdds,
-        source: boardOdds ? 'board-live' : 'slip'
-      };
-    }
+    if (!boardOdds) return null;
+    const period = 'ft';
+    const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+    const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
+    const teams = parseEventTeams(resolvedEventText);
+    return {
+      odds: boardOdds,
+      eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
+      marketKind: 'ml',
+      period,
+      side,
+      line: null,
+      marketKey: `${period}_ml_${side}`,
+      mktText,
+      selectionText,
+      eventText: resolvedEventText,
+      homeTeam: teams.home,
+      awayTeam: teams.away,
+      fromSlip: false,
+      source: 'board-live'
+    };
   }
 
-  // ── 배당: 실시간 배당판 우선 (슬립 고정 배당 X) ──
-  const slipCardOdds = readOddsFromSlipCard(card);
+  // ── 배당: 실시간 배당판만 (슬립/베팅내역 @배당 X) ──
   let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
 
   let matchedLine = null;
@@ -408,8 +404,6 @@ function parseSlipFromCard(card) {
   const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
   if (boardOdds && boardOdds > 1.01) {
     odds = boardOdds;
-  } else if ((!odds || odds <= 1.01) && slipCardOdds > 1.01) {
-    odds = slipCardOdds;
   }
   if (!boardOdds && isSlipCardSuspended(card)) return null;
   if (!odds || odds <= 1.01) return null;
@@ -478,8 +472,8 @@ function parseSlipFromCard(card) {
     mktText,
     selectionText,  // "언더 16", "삼성 라이온스" 등 실제 선택명 (기준점 검증용)
     eventText,      // "KIA 타이거즈 vs SSG 랜더스"
-    fromSlip: !usedBoard,
-    source: usedBoard ? 'board-live' : (boardOdds > 1.01 ? 'board-live' : 'slip')
+    fromSlip: false,
+    source: usedBoard ? 'board-live' : 'board'
   };
 }
 
@@ -541,89 +535,44 @@ function readWMlOddsFromVisibleBoard(wNum) {
   return null;
 }
 
-function readSlipLooseFromPanel(hint) {
-  // 슬립 카드 없으면 패널 텍스트(베팅내역 @배당) 읽지 않음
-  if (!getRealSlipCards().length) return null;
+function readSlipLooseFromPanel(_hint) {
+  // 베팅내역/패널 @배당 텍스트는 절대 읽지 않음 (배당판만 사용)
+  return null;
+}
 
+function isInsideBetHistory(el) {
+  let node = el;
+  for (let i = 0; i < 18 && node; i++) {
+    const cn = String(node.className || '');
+    const id = String(node.id || '');
+    const aria = String(node.getAttribute?.('aria-label') || '');
+    const blob = `${cn} ${id} ${aria}`.toLowerCase();
+    if (/mybets|my-bets|bet-history|bethistory|betsliphistory|openbets|settledbets|cashout|내\s*베팅|베팅\s*내역|베팅내역|미결제|정산|캐시아웃/i.test(blob)) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function isActiveBetslipOpen() {
   const input = findBtiBetInput();
-  const roots = [];
-  if (input) {
-    let el = input.parentElement;
-    for (let i = 0; i < 12 && el; i++) {
-      const cn = String(el.className || '');
-      if (/betslip|BetSlip|slip/i.test(cn)) { roots.push(el); break; }
-      el = el.parentElement;
-    }
+  if (!input) return false;
+  const r = input.getBoundingClientRect();
+  if (!r || r.width < 4 || r.height < 4) return false;
+  try {
+    const st = window.getComputedStyle(input);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+  } catch (_) {}
+  let el = input.parentElement;
+  for (let i = 0; i < 14 && el; i++) {
+    const cn = String(el.className || '');
+    if (/betslip|BetSlip|betslip_fe/i.test(cn)) return true;
+    el = el.parentElement;
   }
-  document.querySelectorAll('[class*="betslip"], [class*="BetSlip"], [class*="betslip_fe"]').forEach((el) => roots.push(el));
-
-  const seen = new Set();
-  const uniqueRoots = roots.filter((r) => {
-    if (!r || seen.has(r)) return false;
-    seen.add(r);
-    return true;
-  });
-
-  const candidates = [];
-  for (const root of uniqueRoots) {
-    const text = (root.innerText || root.textContent || '').replace(/\s+/g, ' ');
-    if (text.length < 8) continue;
-
-    for (const m of text.matchAll(/W([12])[^0-9]{0,20}(?:@|배당)?\s*(\d+\.\d{2,3})/gi)) {
-      const odds = parseOddsText(m[2]);
-      if (!odds) continue;
-      candidates.push({
-        odds,
-        selectionText: `W${m[1]}`,
-        side: m[1] === '2' ? 'away' : 'home',
-        marketKind: 'ml',
-        period: 'ft',
-        marketKey: `ft_ml_${m[1] === '2' ? 'away' : 'home'}`,
-        source: 'slip-loose',
-        fromSlip: true
-      });
-    }
-
-    const atMatches = text.match(/(?:@|배당)\s*(\d+\.\d{2,3})/g) || [];
-    for (const chunk of atMatches) {
-      const odds = parseOddsText(chunk.replace(/[^\d.]/g, ''));
-      if (!odds) continue;
-      candidates.push({
-        odds,
-        selectionText: '',
-        side: 'home',
-        marketKind: 'ml',
-        period: 'ft',
-        marketKey: 'ft_ml_home',
-        source: 'slip-loose',
-        fromSlip: true
-      });
-    }
-  }
-
-  if (!candidates.length) return null;
-
-  const oppose = hint?.excludeTeam || hint?.polyTeam;
-  if (oppose) {
-    const board = readBtiBoardOdds(hint);
-    if (board?.odds > 1) return board;
-  }
-
-  if (hint?.side === 'away' || hint?.side === 'a') {
-    const w2 = candidates.find((c) => /^W2$/i.test(c.selectionText));
-    if (w2) return w2;
-    return candidates[candidates.length - 1];
-  }
-  if (hint?.side === 'home' || hint?.side === 'h') {
-    const w1 = candidates.find((c) => /^W1$/i.test(c.selectionText));
-    if (w1) return w1;
-    return candidates[0];
-  }
-
-  return candidates[candidates.length - 1];
+  return false;
 }
 
 function getRealSlipCards() {
+  if (!isActiveBetslipOpen()) return [];
   const selectors = [
     '[class*="betslip_fe_BetSecondary_bet"]',
     '[class*="BetSecondary_bet"]',
@@ -634,6 +583,7 @@ function getRealSlipCards() {
   for (const sel of selectors) {
     for (const el of document.querySelectorAll(sel)) {
       if (seen.has(el)) continue;
+      if (isInsideBetHistory(el)) continue;
       const cn = String(el.className || '');
       if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('bageGroup') ||
           cn.includes('badge') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
@@ -652,7 +602,7 @@ function getRealSlipCards() {
   if (!cards.length) {
     for (const el of document.querySelectorAll('[class*="betInformation__title"]')) {
       const card = el.closest('[class*="bet"]') || el.closest('[class*="Bet"]') || el.parentElement?.parentElement;
-      if (!card || seen.has(card)) continue;
+      if (!card || seen.has(card) || isInsideBetHistory(card)) continue;
       const txt = card.textContent || '';
       if (txt.length < 8 || txt.length > 800) continue;
       if (!/W[12]|@\s*\d+\.\d{2}|베팅|bet/i.test(txt)) continue;
@@ -665,7 +615,7 @@ function getRealSlipCards() {
     const slipRoot = document.querySelector('[class*="betslip_fe"], [class*="Betslip"]');
     if (slipRoot) {
       for (const el of slipRoot.querySelectorAll('div, section, article, li')) {
-        if (seen.has(el)) continue;
+        if (seen.has(el) || isInsideBetHistory(el)) continue;
         const txt = (el.textContent || '').trim();
         if (txt.length < 10 || txt.length > 400) continue;
         if (!/W[12]/i.test(txt) && !/@\s*\d+\.\d{2}/.test(txt)) continue;
@@ -680,10 +630,8 @@ function getRealSlipCards() {
 }
 
 function readSlipOddsFromDom() {
-  const cards = getRealSlipCards();
-  if (!cards.length) return 0;
-  const n = readOddsFromSlipCard(cards[0]);
-  return n || 0;
+  const slip = readBtiOdds();
+  return slip?.odds > 1.01 ? slip.odds : 0;
 }
 
 function validateBtiOdds(targetOdds) {
@@ -707,22 +655,22 @@ function findBtiBetInput() {
 }
 
 function probeBtiBetFrame() {
-  const slip = readBtiSlip();
+  const odds = readBtiOdds();
   const cards = getRealSlipCards();
-  const loose = readSlipLooseFromPanel();
   const input = findBtiBetInput();
   const betBtn = findBtiBetButton();
-  const hasSlip = cards.length > 0 || (slip?.odds > 1) || (loose?.odds > 1);
+  const hasSlip = cards.length > 0 || (odds?.odds > 1);
   const r = input?.getBoundingClientRect?.();
   const hasInput = !!input && r && r.width > 0 && r.height > 0;
   return {
     hasSlip,
     hasInput,
     hasBtn: !!betBtn,
-    slipOdds: slip?.odds > 1 ? slip.odds : (loose?.odds > 1 ? loose.odds : 0),
+    slipOdds: odds?.odds > 1 ? odds.odds : 0,
     slipCount: cards.length,
     buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
-    href: location.href
+    href: location.href,
+    source: odds?.source || ''
   };
 }
 
@@ -1421,7 +1369,6 @@ function readBtiOdds(hint) {
     const live = readLiveBoardOddsForSlip(slip);
     if (live?.odds > 1.01) return live;
   }
-  if (slip?.odds > 1.01) return enrichBtiSlip(slip);
 
   return null;
 }
@@ -1495,13 +1442,13 @@ function searchBtiOdds(query) {
       || normalizeQuery(ev.awayTeam).includes(q);
   });
 
-  return { ...board, query, hits, hitCount: hits.length, slip: readBtiSlip() };
+  return { ...board, query, hits, hitCount: hits.length, slip: readBtiOdds() };
 }
 
 // popup / background 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'READ_SLIP') {
-    sendResponse({ slip: readBtiSlip() });
+    sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;
   }
   if (msg.type === 'READ_BTI_ODDS') {

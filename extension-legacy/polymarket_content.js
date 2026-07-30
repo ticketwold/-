@@ -214,9 +214,53 @@ function teamMatchesButton(team, text) {
   const bt = norm(t);
   if (!nt || !bt) return false;
   if (bt.includes(nt) || nt.includes(bt)) return true;
-  const words = String(team).split(/\s+/).filter((w) => w.length >= 3);
+
+  const first = String(team).split(/\s+/).filter((w) => w.length >= 2)[0];
+  if (first) {
+    const nf = norm(first);
+    if (nf.length >= 3 && (bt.includes(nf) || nf.includes(bt))) return true;
+  }
+
+  const words = String(team).split(/\s+/).filter((w) => w.length >= 2);
   if (words.length >= 2 && words.every((w) => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t))) return true;
-  return words.some((w) => w.length >= 4 && new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t));
+  return words.some((w) => w.length >= 3 && new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t));
+}
+
+function readCentsForBuyTeam(teamHint) {
+  if (!teamHint) return null;
+
+  const candidates = [];
+  const roots = [findTradePanel(), document.body].filter(Boolean);
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 140) continue;
+
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+
+      let matched = teamMatchesButton(teamHint, t);
+      if (!matched) {
+        const row = btn.closest('[class*="outcome"], [class*="Outcome"], li, div');
+        const ctx = (row?.textContent || btn.parentElement?.textContent || '').replace(/\s+/g, ' ').trim();
+        matched = teamMatchesButton(teamHint, ctx);
+      }
+      if (!matched) continue;
+
+      let score = 0;
+      if (teamMatchesButton(teamHint, t)) score += 120;
+      score += selectionScore(btn);
+      if (/^buy\s+/i.test(t)) score += 40;
+      score += Math.max(0, 90 - t.length);
+      candidates.push({ cents, score, t });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
 }
 
 function centsFromStakePayout(stake, payout) {
@@ -264,12 +308,7 @@ function readOutcomeButtonCents(teamHint) {
       const cents = parseCentsFromText(t);
       if (!cents) continue;
 
-      let score = 0;
-      if (btn.getAttribute('aria-pressed') === 'true') score += 80;
-      if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 80;
-      if (btn.getAttribute('aria-selected') === 'true') score += 70;
-      const cls = String(btn.className || '');
-      if (/active|selected|checked|pressed/i.test(cls)) score += 50;
+      let score = selectionScore(btn);
       if (/^buy\s+/i.test(t)) score += 20;
 
       candidates.push({ cents, score, t });
@@ -293,13 +332,14 @@ function selectionScore(btn) {
 
 function readSelectedOutcomeForTeam(teamHint) {
   const candidates = [];
+  const minSel = teamHint ? 10 : 60;
   for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
     if (!visible(btn) || isBuySellTab(btn)) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
     const cents = parseCentsFromText(t);
     if (!cents) continue;
     const sel = selectionScore(btn);
-    if (sel < 60) continue;
+    if (sel < minSel) continue;
     if (teamHint && !teamMatchesButton(teamHint, t)) continue;
     candidates.push({ cents, score: sel + (teamHint && teamMatchesButton(teamHint, t) ? 50 : 0), t });
   }
@@ -355,8 +395,14 @@ function readLiveListedCents(panel, stake, payout) {
     candidates.push({ cents, score, src });
   }
 
-  // 1) Buy {팀} + 선택된 outcome 버튼 (홈/원정 전환 즉시 반영)
+  // 1) Buy {팀} 기준 — 선택 상태 없이도 홈/원정 즉시 반영
   if (team) {
+    const buyTeam = readCentsForBuyTeam(team);
+    if (buyTeam) add(buyTeam, 620, 'buy-team');
+
+    const buyBtn = readBuyButtonCents(panelEl);
+    if (buyBtn) add(buyBtn, 580, 'buy-btn');
+
     const selected = readSelectedOutcomeForTeam(team);
     if (selected) add(selected, 500, 'selected');
 
@@ -364,22 +410,24 @@ function readLiveListedCents(panel, stake, payout) {
     if (teamBtn) add(teamBtn, 450, 'team-btn');
   }
 
-  // 2) Avg price — 현재 선택 팀 패널
+  // 2) Avg price — 팀 전환 직후 stale 할 수 있어 낮은 우선순위
   const avg = readListedPriceCents(panelEl);
-  if (avg) add(avg, 400, 'avg');
+  if (avg) add(avg, 200, 'avg');
 
-  // 3) To win / Amount (팀 전환 직후 stale 할 수 있어 낮은 우선순위)
+  // 3) To win / Amount
   const implied = centsFromStakePayout(stake, payout);
-  if (implied) add(implied, 320, 'implied');
+  if (implied) add(implied, 100, 'implied');
 
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
 
   const best = candidates[0];
   // 팀 기준 값이 있으면 stale implied/avg 로 덮어쓰지 않음
-  if (best.src === 'selected' || best.src === 'team-btn') return best.cents;
+  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn') return best.cents;
 
-  const teamPick = candidates.find((c) => c.src === 'selected' || c.src === 'team-btn');
+  const teamPick = candidates.find((c) =>
+    c.src === 'buy-team' || c.src === 'buy-btn' || c.src === 'selected' || c.src === 'team-btn'
+  );
   if (teamPick && Math.abs(teamPick.cents - best.cents) >= 3) return teamPick.cents;
 
   return best.cents;
