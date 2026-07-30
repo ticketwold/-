@@ -76,7 +76,7 @@ function formatBtiMeta(slip) {
     if (slip.side === 'away' || slip.side === 'a') label = slip.awayTeam || team || '-';
     else label = slip.homeTeam || team || '-';
   } else label = team || '-';
-  if (slip.source === 'board-live' || slip.source === 'board' || slip.source === 'main-scrape') {
+  if (slip.source === 'board-live' || slip.source === 'board' || slip.source === 'main-scrape' || slip.source === 'slip-display' || slip.source === 'merged') {
     return `${label} · 실시간`;
   }
   return label;
@@ -205,6 +205,67 @@ async function injectReadBtiFrame(tabId, frameId) {
           if (/counter|Counter|베팅/i.test(blob)) { hasInput = true; break; }
         }
 
+        function readSlipPanel() {
+          if (!hasInput) return null;
+          const roots = [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
+          if (!roots.length) roots.push(document.body);
+          for (const root of roots) {
+            for (const card of root.querySelectorAll('[class*="bet"], [class*="Bet"]')) {
+              if (!vis(card)) continue;
+              const txt = (card.textContent || '').trim();
+              if (txt.length < 6 || txt.length > 900) continue;
+              if (card.querySelector('input')) continue;
+              if (!/W[12]|betInformation|우승|winner|맵|map/i.test(txt)) continue;
+
+              const title = card.querySelector('[class*="betInformation__title"]');
+              const selectionText = title?.textContent?.trim() || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : '');
+              const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+              const eventText = eventEl?.textContent?.trim() || '';
+
+              for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]')) {
+                const o = parseOdds(sp.textContent);
+                if (o) return { odds: o, selectionText, eventText, source: 'slip-display', hasInput: true };
+              }
+              const nums = [];
+              for (const sp of card.querySelectorAll('span, div, b, strong')) {
+                const t = (sp.textContent || '').trim();
+                if (!/^\d+\.\d{2,3}$/.test(t)) continue;
+                const o = parseOdds(t);
+                if (o) nums.push(o);
+              }
+              if (nums.length) {
+                return { odds: nums[nums.length - 1], selectionText, eventText, source: 'slip-display', hasInput: true };
+              }
+            }
+          }
+          return null;
+        }
+
+        const slipPanel = readSlipPanel();
+        if (slipPanel?.odds > 1.01) {
+          let homeTeam = '';
+          let awayTeam = '';
+          if (slipPanel.eventText) {
+            for (const sep of [' vs ', ' VS ', ' 대 ']) {
+              if (slipPanel.eventText.includes(sep)) {
+                [homeTeam, awayTeam] = slipPanel.eventText.split(sep, 2).map((s) => s.trim());
+                break;
+              }
+            }
+          }
+          let teamLabel = slipPanel.selectionText;
+          if (/^W1$/i.test(teamLabel)) teamLabel = homeTeam || teamLabel;
+          if (/^W2$/i.test(teamLabel)) teamLabel = awayTeam || teamLabel;
+          return {
+            ...slipPanel,
+            teamLabel,
+            homeTeam,
+            awayTeam,
+            marketKind: 'ml',
+            buttonCount: 0
+          };
+        }
+
         const board = [];
         for (const btn of document.querySelectorAll('button')) {
           if (!vis(btn)) continue;
@@ -223,57 +284,13 @@ async function injectReadBtiFrame(tabId, frameId) {
           board.push({ odds, txt, selected });
         }
 
-        let selectionText = '';
-        let eventText = '';
-        let mktText = '';
-        if (hasInput) {
-          for (const el of document.querySelectorAll('[class*="betInformation__title"], [class*="betInformation__eventName"], [class*="betInformation__marketName"]')) {
-            const t = (el.textContent || '').trim();
-            if (!t) continue;
-            if (/vs|VS|대/.test(t)) eventText = t;
-            else if (/맵|map|우승|winner|승패|money/i.test(t)) mktText = t;
-            else if (t.length < 50) selectionText = selectionText || t;
-          }
-        }
+        if (!board.length) return null;
 
-        let odds = null;
-        if (selectionText && board.length) {
-          if (/^W1$/i.test(selectionText) && board.length >= 1) odds = board[0].odds;
-          else if (/^W2$/i.test(selectionText) && board.length >= 2) odds = board[board.length - 1].odds;
-          else {
-            const hit = board.find((b) => teamMatch(selectionText, b.txt));
-            if (hit) odds = hit.odds;
-          }
-        }
-        if (!odds) {
-          const sel = board.find((b) => b.selected) || board[0];
-          odds = sel?.odds || null;
-        }
-        if (!odds) return null;
-
-        let homeTeam = '';
-        let awayTeam = '';
-        if (eventText) {
-          for (const sep of [' vs ', ' VS ', ' 대 ']) {
-            if (eventText.includes(sep)) {
-              [homeTeam, awayTeam] = eventText.split(sep, 2).map((s) => s.trim());
-              break;
-            }
-          }
-        }
-
-        let teamLabel = selectionText;
-        if (/^W1$/i.test(selectionText)) teamLabel = homeTeam || selectionText;
-        if (/^W2$/i.test(selectionText)) teamLabel = awayTeam || selectionText;
-
+        const sel = board.find((b) => b.selected) || board[0];
         return {
-          odds,
-          selectionText,
-          eventText,
-          mktText,
-          teamLabel,
-          homeTeam,
-          awayTeam,
+          odds: sel.odds,
+          selectionText: sel.txt,
+          teamLabel: sel.txt,
           source: 'main-scrape',
           hasInput,
           buttonCount: board.length,
@@ -381,15 +398,17 @@ async function probeBtiFrame(tabId, frameId, hint = {}) {
     ping = await sendBti(tabId, frameId, { type: 'PING' });
   }
 
-  let slip = null;
-  if (ping?.ok) {
-    const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint });
-    slip = res?.slip || null;
-  }
-  if (!(slip?.odds > 1.01)) {
-    const scraped = await injectReadBtiFrame(tabId, frameId);
-    if (scraped?.odds > 1.01) slip = scraped;
-  }
+  const contentPromise = ping?.ok
+    ? sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint }).then((res) => res?.slip || null)
+    : Promise.resolve(null);
+  const scrapePromise = injectReadBtiFrame(tabId, frameId);
+
+  let [contentSlip, scraped] = await Promise.all([contentPromise, scrapePromise]);
+  let slip = (contentSlip?.odds > 1.01) ? contentSlip : scraped;
+
+  if (!(slip?.odds > 1.01) && contentSlip?.odds > 1.01) slip = contentSlip;
+  if (!(slip?.odds > 1.01) && scraped?.odds > 1.01) slip = scraped;
+
   if (!(slip?.odds > 1.01) && ping?.ok && (hint.excludeTeam || hint.polyTeam)) {
     const res2 = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: {} });
     if (res2?.slip?.odds > 1.01) slip = res2.slip;
@@ -402,9 +421,36 @@ async function probeBtiFrame(tabId, frameId, hint = {}) {
   return { frameId, ping, slip, score: scoreBtiProbe(ping, slip) };
 }
 
+function mergeBtiFrameResults(results) {
+  if (!results.length) return { slip: null, frameId: 0 };
+
+  const sorted = [...results].sort((a, b) => b.score - a.score);
+  const best = sorted[0];
+
+  const slipPanel = sorted.find((r) => r.slip?.source === 'slip-display' && r.slip?.odds > 1.01);
+  const boardHit = sorted.find((r) => r.slip?.odds > 1.01 && (r.slip?.buttonCount > 0 || r.ping?.buttonCount > 0));
+
+  if (slipPanel?.slip && boardHit?.slip && slipPanel.frameId !== boardHit.frameId) {
+    const merged = {
+      ...slipPanel.slip,
+      odds: boardHit.slip.odds,
+      source: 'merged',
+      buttonCount: boardHit.slip.buttonCount || boardHit.ping?.buttonCount || 0
+    };
+    return { slip: merged, frameId: boardHit.frameId };
+  }
+
+  const pick = sorted.find((r) => r.slip?.odds > 1.01) || best;
+  return { slip: pick?.slip || null, frameId: pick?.frameId ?? 0 };
+}
+
 async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
-  const now = Date.now();
-  const useCacheOnly = !forceFull && (now - lastBtiFullScanAt) < BTI_FULL_SCAN_MS;
+  const frames = await getAllFrames(tabId);
+  const order = [];
+  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
+  for (const f of frames) {
+    if (!order.includes(f.frameId)) order.push(f.frameId);
+  }
 
   if (!forceFull && lastBtiFrame?.tabId === tabId) {
     const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint);
@@ -414,25 +460,13 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
     }
   }
 
-  if (useCacheOnly && lastBtiFrame?.tabId === tabId) {
-    return { slip: null, frameId: lastBtiFrame.frameId };
-  }
-
-  const frames = await getAllFrames(tabId);
-  const order = [];
-  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
-  for (const f of frames) {
-    if (!order.includes(f.frameId)) order.push(f.frameId);
-  }
-
   const results = await Promise.all(order.map((frameId) => probeBtiFrame(tabId, frameId, hint)));
-  results.sort((a, b) => b.score - a.score);
-  const best = results[0];
-  lastBtiFullScanAt = now;
-  if (best?.slip?.odds > 1.01) {
-    lastBtiFrame = { tabId, frameId: best.frameId };
+  const merged = mergeBtiFrameResults(results);
+  lastBtiFullScanAt = Date.now();
+  if (merged.slip?.odds > 1.01) {
+    lastBtiFrame = { tabId, frameId: merged.frameId };
   }
-  return { slip: best?.slip || null, frameId: best?.frameId ?? (lastBtiFrame?.frameId || 0) };
+  return merged;
 }
 
 async function findBtiFrame(tabId) {
@@ -484,8 +518,8 @@ async function readBtiSlip(btiTab) {
     return null;
   }
 
-  const hint = btiHintFromPoly(cachedPoly);
-  const merged = await readBtiFromAllFrames(btiTab.id, hint);
+  // 슬립 비교 UI: hint 없이 현재 슬립/배당판 배당 표시
+  const merged = await readBtiFromAllFrames(btiTab.id, {});
   if (merged.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: merged.frameId };
     btiTab.frameId = merged.frameId;
@@ -493,14 +527,14 @@ async function readBtiSlip(btiTab) {
     return merged.slip;
   }
 
-  const forced = await readBtiFromAllFrames(btiTab.id, hint, true);
+  const forced = await readBtiFromAllFrames(btiTab.id, {}, true);
   if (forced.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: forced.frameId };
     lastStatus.bti = '';
     return forced.slip;
   }
 
-  lastStatus.bti = lastBtiFrame?.tabId === btiTab.id ? '텐텐뱃: 배당판 배당 없음' : '텐텐뱃: BTI iframe 미연결';
+  lastStatus.bti = '텐텐뱃: 배당판 배당 없음 — 슬립에 담고 ↻';
   return null;
 }
 
@@ -867,4 +901,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.4.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.4.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

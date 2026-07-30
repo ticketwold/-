@@ -560,6 +560,107 @@ function isInsideBetHistory(el) {
   return false;
 }
 
+function readActiveSlipDisplayOdds() {
+  if (!isActiveBetslipOpen()) return null;
+
+  const roots = [];
+  for (const el of document.querySelectorAll('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]')) {
+    if (!roots.includes(el)) roots.push(el);
+  }
+  if (!roots.length) roots.push(document.body);
+
+  for (const root of roots) {
+    const cards = root.querySelectorAll(
+      '[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation"]'
+    );
+    for (const card of cards) {
+      if (isInsideBetHistory(card)) continue;
+      const txt = (card.textContent || '').trim();
+      if (txt.length < 6 || txt.length > 900) continue;
+      if (card.querySelector('input[id="counter"], input[class*="Counter"]')) continue;
+
+      const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+      const selectionText = titleEls[0]?.textContent?.trim() || '';
+      const marketTitleText = titleEls[1]?.textContent?.trim() || '';
+      const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+      const eventText = eventEl?.textContent?.trim() || '';
+      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
+
+      if (!selectionText && !/W[12]/i.test(txt)) continue;
+
+      for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
+        if (isStruckThrough(sp)) continue;
+        const n = parseOddsText(sp.textContent);
+        if (n) {
+          return enrichBtiSlip({
+            odds: n,
+            selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
+            eventText,
+            mktText: marketTitleText,
+            source: 'slip-display',
+            fromSlip: false,
+            marketKind: 'ml'
+          });
+        }
+      }
+
+      for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"]')) {
+        if (isStruckThrough(sp)) continue;
+        const n = parseOddsText(sp.textContent);
+        if (n) {
+          return enrichBtiSlip({
+            odds: n,
+            selectionText,
+            eventText,
+            mktText: marketTitleText,
+            source: 'slip-display',
+            fromSlip: false,
+            marketKind: 'ml'
+          });
+        }
+      }
+
+      const boardOdds = readOddsFromBoardForSelection(
+        selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
+        allText,
+        'ml'
+      );
+      if (boardOdds > 1.01) {
+        return enrichBtiSlip({
+          odds: boardOdds,
+          selectionText,
+          eventText,
+          mktText: marketTitleText,
+          source: 'board-live',
+          fromSlip: false,
+          marketKind: 'ml'
+        });
+      }
+
+      const nums = [];
+      for (const sp of card.querySelectorAll('span, div, b, strong, p')) {
+        if (isStruckThrough(sp)) continue;
+        const t = (sp.textContent || '').trim();
+        if (!/^\d+\.\d{2,3}$/.test(t)) continue;
+        const n = parseOddsText(t);
+        if (n) nums.push(n);
+      }
+      if (nums.length) {
+        return enrichBtiSlip({
+          odds: nums[nums.length - 1],
+          selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
+          eventText,
+          mktText: marketTitleText,
+          source: 'slip-display',
+          fromSlip: false,
+          marketKind: 'ml'
+        });
+      }
+    }
+  }
+  return null;
+}
+
 function getRealSlipCards() {
   if (!isActiveBetslipOpen()) return [];
   const selectors = [
@@ -681,7 +782,10 @@ function isActiveBetslipOpen() {
       }
     }
   }
-  return hasVisibleBetslipCards();
+  if (hasVisibleBetslipCards()) return true;
+  const betBtn = findBtiBetButton();
+  if (betBtn && /베팅|bet/i.test(betBtn.textContent || '')) return true;
+  return false;
 }
 
 function probeBtiBetFrame() {
@@ -1465,6 +1569,9 @@ function readEmergencyBoardOdds(hint = {}) {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
+
+  const slipDisplay = readActiveSlipDisplayOdds();
+  if (slipDisplay?.odds > 1.01) return slipDisplay;
 
   const board = readBtiBoardOdds(hintObj);
   if (board?.odds > 1.01) {
