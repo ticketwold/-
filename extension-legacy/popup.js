@@ -321,13 +321,8 @@ function slipOdds(slip) {
 }
 
 function mergeSlipCached(cached, fresh) {
-  if (!fresh) return cached ?? null;
+  if (!fresh || !slipOdds(fresh)) return null;
   const freshOdds = slipOdds(fresh);
-  if (!freshOdds || freshOdds <= 1) {
-    if (cached && slipOdds(cached) > 1) return { ...cached, ...fresh, odds: cached.odds };
-    return fresh;
-  }
-  // priceCents 또는 odds가 바뀌면 항상 최신값 사용
   if (!cached) return { ...fresh, odds: freshOdds };
   const cachedCents = cached.priceCents;
   if (fresh.priceCents && fresh.priceCents !== cachedCents) {
@@ -337,6 +332,16 @@ function mergeSlipCached(cached, fresh) {
     return { ...cached, ...fresh, odds: freshOdds };
   }
   return { ...cached, ...fresh, odds: freshOdds };
+}
+
+function applySlipUpdate(source, slip) {
+  if (source === 'bti') {
+    cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
+  }
+  if (source === 'polymarket') {
+    cachedPoly = slipOdds(slip) ? mergeSlipCached(cachedPoly, slip) : null;
+  }
+  updateSlipUI(cachedBti, cachedPoly);
 }
 
 async function refreshSlips() {
@@ -490,12 +495,6 @@ async function pollLoop() {
   if (profit !== null && profit >= getMinProfit()) scheduleTryBet();
 }
 
-function applySlipUpdate(source, slip) {
-  if (source === 'bti') cachedBti = mergeSlipCached(cachedBti, slip);
-  if (source === 'polymarket') cachedPoly = mergeSlipCached(cachedPoly, slip);
-  updateSlipUI(cachedBti, cachedPoly);
-}
-
 function onOddsChanged(msg) {
   if (msg.source === 'bti') applySlipUpdate('bti', msg.slip);
   if (msg.source === 'polymarket') applySlipUpdate('polymarket', msg.slip);
@@ -623,4 +622,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.8 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

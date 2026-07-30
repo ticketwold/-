@@ -152,7 +152,7 @@ function isSlipCardSuspended(card) {
 
 function readBtiSlip(hint) {
   const realCards = getRealSlipCards();
-  if (!realCards.length) return readSlipLooseFromPanel(hint);
+  if (!realCards.length) return null;
 
   let best = null;
   for (let i = realCards.length - 1; i >= 0; i--) {
@@ -167,7 +167,7 @@ function readBtiSlip(hint) {
     if (hint?.side === 'home' && slip.side === 'away' && /^W2$/i.test(slip.selectionText || '')) continue;
     if (!best || slip.odds > best.odds) best = slip;
   }
-  return best || readSlipLooseFromPanel(hint);
+  return best;
 }
 
 function parseSlipFromCard(card) {
@@ -542,6 +542,9 @@ function readWMlOddsFromVisibleBoard(wNum) {
 }
 
 function readSlipLooseFromPanel(hint) {
+  // 슬립 카드 없으면 패널 텍스트(베팅내역 @배당) 읽지 않음
+  if (!getRealSlipCards().length) return null;
+
   const input = findBtiBetInput();
   const roots = [];
   if (input) {
@@ -1402,26 +1405,25 @@ function readLiveBoardOddsForSlip(slip) {
 }
 
 function readBtiOdds(hint) {
-  const slip = readBtiSlip(hint);
+  const hintObj = hint || {};
+  const hasCards = getRealSlipCards().length > 0;
 
-  // 슬립 선택이 있으면 해당 팀/마켓의 실시간 배당판 우선
-  if (slip?.selectionText) {
-    const live = readLiveBoardOddsForSlip(slip);
-    if (live?.odds > 1.01) return live;
-  }
-
-  const board = readBtiBoardOdds(hint || {});
+  // 슬립 없어도 배당판 실시간 우선 (카트 비운 뒤 베팅내역 배당 X)
+  const board = readBtiBoardOdds(hintObj);
   if (board?.odds > 1.01) {
     return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
   }
 
-  if (slip?.odds > 1.01) {
-    return enrichBtiSlip(slip);
-  }
+  if (!hasCards) return null;
 
-  const loose = readSlipLooseFromPanel(hint);
-  if (loose?.odds > 1.01) return enrichBtiSlip(loose);
-  return loose ? enrichBtiSlip(loose) : null;
+  const slip = readBtiSlip(hintObj);
+  if (slip?.selectionText) {
+    const live = readLiveBoardOddsForSlip(slip);
+    if (live?.odds > 1.01) return live;
+  }
+  if (slip?.odds > 1.01) return enrichBtiSlip(slip);
+
+  return null;
 }
 
 async function ensureSlipFromBoard(hint = {}) {
