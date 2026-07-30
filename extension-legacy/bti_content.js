@@ -724,11 +724,11 @@ function readSlipOddsFromDom() {
   return slip?.odds > 1.01 ? slip.odds : 0;
 }
 
-function validateBtiOdds(targetOdds) {
+function validateBtiOdds(targetOdds, tolerance = 0.06) {
   if (!targetOdds || targetOdds <= 1) return { valid: true };
   const curOdds = readSlipOddsFromDom();
   if (!curOdds) return { valid: true };
-  if (Math.abs(curOdds - targetOdds) > 0.06) {
+  if (Math.abs(curOdds - targetOdds) > tolerance) {
     return {
       valid: false,
       reason: `배당 변경: 목표=${targetOdds}, 현재=${curOdds}`,
@@ -957,15 +957,17 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       teamNamesMatch(existing.selectionText, oppose) || teamNamesMatch(existing.teamLabel, oppose)
     );
 
-    if (!realCards.length || wrongSlip) {
+    if (!hint.skipEnsure && (!realCards.length || wrongSlip)) {
       const ensured = await ensureSlipFromBoard(hint);
       if (!ensured.ok) return { success: false, reason: ensured.reason || '슬립 카드 없음' };
       realCards = getRealSlipCards();
       if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
+    } else if (!realCards.length) {
+      return { success: false, reason: '슬립 카드 없음 — 준비 단계 실패' };
     }
 
-    const stable = await waitSlipStable(targetOdds, 3000);
-    if (!stable.ready && targetOdds) {
+    const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 1500 : 3000);
+    if (!stable.ready && targetOdds && !hint.skipEnsure) {
       return { success: false, reason: stable.reason || '슬립 배당 미확정' };
     }
 
@@ -982,7 +984,8 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     }
 
     if (targetOdds !== undefined && targetOdds !== null) {
-      const oddsValidation = validateBtiOdds(targetOdds);
+      const oddsTol = hint.skipEnsure ? 0.15 : 0.06;
+      const oddsValidation = validateBtiOdds(targetOdds, oddsTol);
       if (!oddsValidation.valid) {
         return {
           success: false,

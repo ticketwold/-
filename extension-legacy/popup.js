@@ -458,15 +458,28 @@ function btiBoardFrameId(tabId) {
   return 0;
 }
 
+function isBtiFrameSuccess(msg, res) {
+  if (!res) return false;
+  if (msg.type === 'PLACE_BET') return res.success === true;
+  if (msg.type === 'ENSURE_BTI_SLIP') return res.ok === true;
+  return true;
+}
+
 async function sendBtiToFrames(tabId, frameIds, msg) {
   const seen = new Set();
+  let lastRes = null;
+  let lastFrameId = frameIds[0] || 0;
+
   for (const frameId of frameIds) {
     if (seen.has(frameId)) continue;
     seen.add(frameId);
     const res = await sendBti(tabId, frameId, msg);
-    if (res) return { res, frameId };
+    if (!res) continue;
+    lastRes = res;
+    lastFrameId = frameId;
+    if (isBtiFrameSuccess(msg, res)) return { res, frameId };
   }
-  return { res: null, frameId: frameIds[0] || 0 };
+  return { res: lastRes, frameId: lastFrameId };
 }
 
 function mergeBtiFrameResults(results) {
@@ -699,8 +712,8 @@ async function refreshSlips() {
 async function placeBtiBet(btiTab, amount, targetOdds, hint = {}) {
   const frameIds = [
     btiSlipFrameId(btiTab.id),
-    btiBoardFrameId(btiTab.id),
-    lastBtiFrame?.tabId === btiTab.id ? lastBtiFrame.frameId : 0
+    lastBtiFrame?.tabId === btiTab.id ? lastBtiFrame.frameId : 0,
+    btiBoardFrameId(btiTab.id)
   ];
   const { res } = await sendBtiToFrames(btiTab.id, frameIds, {
     type: 'PLACE_BET', amount, targetOdds, hint
@@ -806,33 +819,36 @@ async function tryBet() {
   log(`   금액: 텐텐뱃 ${btiBet.toLocaleString()}원 / Poly $${polyUsd.toFixed(2)}`, 'info');
 
   try {
-    log('① Polymarket 베팅...', 'info');
-    const polyRes = await placePolyBet(polyTab, polyUsd);
-    if (!polyRes?.success) {
-      const probe = polyRes?.probe || await probePolyMain(polyTab.id);
-      const extra = probe?.btnText
-        ? ` [버튼: "${probe.btnText}"${probe.btnDisabled ? ' 비활성' : ''}]`
-        : (probe ? ` [Buy버튼:${probe.hasBuyBtn ? 'O' : 'X'}]` : '');
-      log(`❌ Polymarket: ${polyRes?.reason || '실패'}${extra}`, 'err');
-      stopBot();
-      return;
-    }
-    log(`✅ Polymarket: "${polyRes.btnText || 'Buy'}" 클릭 완료`, 'ok');
-
-    log('② 텐텐뱃 반대편 슬립 준비...', 'info');
+    log('① 텐텐뱃 반대편 슬립 준비...', 'info');
     const prep = await ensureBtiSlip(btiTab, hint);
     if (!prep?.ok) {
       log(`❌ 텐텐뱃 슬립 준비 실패: ${prep?.reason || '알 수 없음'}`, 'err');
       stopBot();
       return;
     }
+    log(`✅ 슬립 준비 (${prep.alreadyHad ? '기존' : '클릭'}) 배당 ${(prep.slip?.odds || btiOdds).toFixed(3)}`, 'ok');
 
-    log('③ 텐텐뱃 베팅...', 'info');
-    const btiRes = await placeBtiBet(btiTab, btiBet, btiOdds, hint);
+    log('② Polymarket + 텐텐뱃 동시 베팅...', 'info');
+    const betHint = { ...hint, skipEnsure: true, prepped: true };
+    const [polyRes, btiRes] = await Promise.all([
+      placePolyBet(polyTab, polyUsd),
+      placeBtiBet(btiTab, btiBet, btiOdds, betHint)
+    ]);
+
+    if (!polyRes?.success) {
+      const probe = polyRes?.probe || await probePolyMain(polyTab.id);
+      const extra = probe?.btnText
+        ? ` [버튼: "${probe.btnText}"${probe.btnDisabled ? ' 비활성' : ''}]`
+        : (probe ? ` [Buy버튼:${probe.hasBuyBtn ? 'O' : 'X'}]` : '');
+      log(`❌ Polymarket: ${polyRes?.reason || '실패'}${extra}`, 'err');
+    } else {
+      log(`✅ Polymarket: "${polyRes.btnText || 'Buy'}" 클릭 완료`, 'ok');
+    }
+
     log(btiRes?.success ? '✅ 텐텐뱃 완료' : `❌ 텐텐뱃: ${btiRes?.reason}`, btiRes?.success ? 'ok' : 'err');
 
     if (btiRes?.success && polyRes?.success) {
-      log('🎯 양쪽 베팅 완료 — 봇 정지', 'ok');
+      log('🎯 양쪽 동시 베팅 완료 — 봇 정지', 'ok');
     } else {
       log('⚠️ 한쪽 실패 — 봇 정지 (수동 확인 필요)', 'err');
     }
@@ -991,4 +1007,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.4.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.4.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
