@@ -196,10 +196,11 @@ function parseSlipFromCard(card) {
     return 'ml';
   })();
 
-  // W1/W2 슬립 — 슬립 카드 배당 우선, 배당판 폴백
+  // W1/W2 슬립 — 실시간 배당판 우선
   if (/^W[12]$/i.test(selectionText.trim())) {
+    const boardOdds = readOddsFromBoardForSelection(selectionText, allText, 'ml');
     const slipCardOdds = readOddsFromSlipCard(card);
-    const wOdds = slipCardOdds || readOddsFromBoardForSelection(selectionText, allText, 'ml');
+    const wOdds = boardOdds || slipCardOdds;
     if (wOdds) {
       const period = 'ft';
       const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
@@ -218,15 +219,15 @@ function parseSlipFromCard(card) {
         eventText: resolvedEventText,
         homeTeam: teams.home,
         awayTeam: teams.away,
-        fromSlip: true,
-        source: 'slip'
+        fromSlip: !boardOdds,
+        source: boardOdds ? 'board-live' : 'slip'
       };
     }
   }
 
-  // ── 3. 배당 읽기: 슬립 카드(변동 반영) → 배당판 폴백 ──
+  // ── 배당: 실시간 배당판 우선 (슬립 고정 배당 X) ──
   const slipCardOdds = readOddsFromSlipCard(card);
-  let odds = slipCardOdds || readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
 
   let matchedLine = null;
   let matchedSide = null;
@@ -405,13 +406,12 @@ function parseSlipFromCard(card) {
   if (!odds) odds = 0;
 
   const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-  if (boardOdds && odds > 1 && Math.abs(boardOdds - odds) / Math.max(odds, boardOdds) > 0.2) {
+  if (boardOdds && boardOdds > 1.01) {
     odds = boardOdds;
-  } else if (boardOdds && odds <= 1.01) {
-    odds = boardOdds;
+  } else if ((!odds || odds <= 1.01) && slipCardOdds > 1.01) {
+    odds = slipCardOdds;
   }
   if (!boardOdds && isSlipCardSuspended(card)) return null;
-  if ((!odds || odds <= 1.01) && slipCardOdds > 1.01) odds = slipCardOdds;
   if (!odds || odds <= 1.01) return null;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
@@ -465,6 +465,7 @@ function parseSlipFromCard(card) {
   // URL에서 이벤트 ID 추출
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
   const eventId = urlMatch ? urlMatch[1] : null;
+  const usedBoard = boardOdds > 1.01 && Math.abs(odds - boardOdds) < 0.001;
 
   return {
     odds,
@@ -477,8 +478,8 @@ function parseSlipFromCard(card) {
     mktText,
     selectionText,  // "언더 16", "삼성 라이온스" 등 실제 선택명 (기준점 검증용)
     eventText,      // "KIA 타이거즈 vs SSG 랜더스"
-    fromSlip: true,
-    source: 'slip'
+    fromSlip: !usedBoard,
+    source: usedBoard ? 'board-live' : (boardOdds > 1.01 ? 'board-live' : 'slip')
   };
 }
 
@@ -1385,22 +1386,39 @@ function readBtiBoardOdds(hint = {}) {
   });
 }
 
-function readBtiOdds(hint) {
-  const board = readBtiBoardOdds(hint || {});
-  const recentBoardClick = lastBoardClickAt && (Date.now() - lastBoardClickAt < 20000);
-  const boardSelected = board?.odds > 1.01 && (
-    recentBoardClick || isBoardButtonSelected(lastBoardClickBtn)
-  );
+function readLiveBoardOddsForSlip(slip) {
+  if (!slip?.selectionText) return null;
+  const ctx = `${slip.mktText || ''} ${slip.marketTitleText || ''} ${slip.eventText || ''}`;
+  const live = readOddsFromBoardForSelection(slip.selectionText, ctx, slip.marketKind || 'ml');
+  if (live > 1.01) {
+    return enrichBtiSlip({
+      ...slip,
+      odds: live,
+      source: 'board-live',
+      fromSlip: false
+    });
+  }
+  return null;
+}
 
-  if (board?.odds > 1.01 && boardSelected) {
+function readBtiOdds(hint) {
+  const slip = readBtiSlip(hint);
+
+  // 슬립 선택이 있으면 해당 팀/마켓의 실시간 배당판 우선
+  if (slip?.selectionText) {
+    const live = readLiveBoardOddsForSlip(slip);
+    if (live?.odds > 1.01) return live;
+  }
+
+  const board = readBtiBoardOdds(hint || {});
+  if (board?.odds > 1.01) {
     return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
   }
 
-  const slip = readBtiSlip(hint);
   if (slip?.odds > 1.01) {
-    return enrichBtiSlip({ ...slip, fromSlip: slip.fromSlip !== false, source: slip.source || 'slip' });
+    return enrichBtiSlip(slip);
   }
-  if (board?.odds > 1.01) return enrichBtiSlip(board);
+
   const loose = readSlipLooseFromPanel(hint);
   if (loose?.odds > 1.01) return enrichBtiSlip(loose);
   return loose ? enrichBtiSlip(loose) : null;
