@@ -73,7 +73,7 @@ function readOddsFromSlipCard(card) {
 }
 
 function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
-  const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+  const allBtns = queryBoardButtons();
   if (!selectionText) return null;
 
   const wMatch = String(selectionText).trim().match(/^W([12])$/i);
@@ -560,19 +560,6 @@ function isInsideBetHistory(el) {
   return false;
 }
 
-function isActiveBetslipOpen() {
-  const input = findBtiBetInput();
-  if (!input) return false;
-  const r = input.getBoundingClientRect();
-  if (!r || r.width < 4 || r.height < 4) return false;
-  try {
-    const st = window.getComputedStyle(input);
-    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-  } catch (_) {}
-  // BTI 스킨마다 betslip 클래스명이 달라서 — 금액 입력이 보이면 활성 슬립으로 간주
-  return true;
-}
-
 function getRealSlipCards() {
   if (!isActiveBetslipOpen()) return [];
   const selectors = [
@@ -652,8 +639,49 @@ function validateBtiOdds(targetOdds) {
 }
 
 function findBtiBetInput() {
-  return document.getElementById('counter')
+  const direct = document.getElementById('counter')
     || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[class*="counter"], input[class*="Counter"]');
+  if (direct) return direct;
+
+  function walk(root) {
+    if (!root?.querySelectorAll) return null;
+    for (const inp of root.querySelectorAll('input, textarea')) {
+      const ph = inp.placeholder || '';
+      const cls = String(inp.className || '');
+      const id = inp.id || '';
+      if (id === 'counter' || /counter|Counter|베팅/i.test(cls + ph + id)) return inp;
+    }
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        const found = walk(el.shadowRoot);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return walk(document);
+}
+
+function hasVisibleBetslipCards() {
+  return !!document.querySelector(
+    '[class*="betslip_fe"] [class*="betInformation__title"], [class*="BetSecondary_bet"] [class*="betInformation__title"], [class*="betInformation__eventName"]'
+  );
+}
+
+function isActiveBetslipOpen() {
+  const input = findBtiBetInput();
+  if (input) {
+    const r = input.getBoundingClientRect();
+    if (r && r.width >= 4 && r.height >= 4) {
+      try {
+        const st = window.getComputedStyle(input);
+        if (st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0) return true;
+      } catch (_) {
+        return true;
+      }
+    }
+  }
+  return hasVisibleBetslipCards();
 }
 
 function probeBtiBetFrame() {
@@ -670,7 +698,7 @@ function probeBtiBetFrame() {
     hasBtn: !!betBtn,
     slipOdds: odds?.odds > 1 ? odds.odds : 0,
     slipCount: cards.length,
-    buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
+    buttonCount: queryBoardButtons().length,
     href: location.href,
     source: odds?.source || ''
   };
@@ -920,12 +948,39 @@ function getTeamLabelFromBoardContext(btn, side, home, away) {
   return '';
 }
 
+function queryBoardButtons() {
+  const selectors = [
+    'button[class*="master_fe_Selections_selection"]',
+    'button[class*="Selections_selection"]',
+    'button[class*="selection"][class*="Selection"]'
+  ];
+  const seen = new Set();
+  const out = [];
+  for (const sel of selectors) {
+    for (const btn of document.querySelectorAll(sel)) {
+      if (seen.has(btn)) continue;
+      seen.add(btn);
+      out.push(btn);
+    }
+  }
+  return out;
+}
+
 function parseSelectionButton(btn) {
   if (!btn) return null;
   const rawText = (btn.textContent || '').trim();
-  const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
-  if (!oddsEl) return null;
-  const odds = parseFloat(oddsEl.textContent.trim());
+  const oddsEl = btn.querySelector(
+    '[class*="master_fe_Selections_odds"], [class*="Selections_odds"], [class*="selections_odds"], [class*="odds"], [class*="Odds"]'
+  );
+  let odds = oddsEl ? parseFloat(String(oddsEl.textContent || '').trim()) : NaN;
+  if (!odds || odds <= 1.01 || odds >= 100) {
+    const tail = rawText.match(/(\d+\.\d{2,3})\s*$/);
+    if (tail) odds = parseFloat(tail[1]);
+    else {
+      const any = rawText.match(/(\d+\.\d{2,3})/);
+      if (any) odds = parseFloat(any[1]);
+    }
+  }
   if (!odds || odds <= 1.01 || odds >= 100) return null;
 
   const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
@@ -1043,7 +1098,7 @@ function detectBoardSide(text, marketKind) {
 }
 
 function scrapeBoardSelections() {
-  const btns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+  const btns = queryBoardButtons();
   const byEvent = new Map();
 
   btns.forEach((btn, idx) => {
@@ -1360,6 +1415,41 @@ function readLiveBoardOddsForSlip(slip) {
   return null;
 }
 
+function readEmergencyBoardOdds(hint = {}) {
+  const parsed = queryBoardButtons()
+    .map((btn) => parseSelectionButton(btn))
+    .filter((p) => p?.odds && p.element && isElementVisible(p.element));
+  if (!parsed.length) return null;
+
+  const oppose = hint.excludeTeam || hint.polyTeam;
+  let pick = null;
+  if (oppose) {
+    pick = parsed.find((p) => !teamNamesMatch(p.label, oppose) && !teamNamesMatch(p.rawText, oppose));
+  }
+  if (!pick) {
+    pick = parsed.find((p) => isBoardButtonSelected(p.element)) || parsed[0];
+  }
+  if (!pick?.odds) return null;
+
+  const evText = findEventNameNearButton(pick.element) || '';
+  const { home, away } = parseEventTeams(evText);
+  return enrichBtiSlip({
+    odds: pick.odds,
+    eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
+    marketKind: 'ml',
+    period: 'ft',
+    side: pick === parsed[0] ? 'home' : 'away',
+    line: pick.line ?? null,
+    marketKey: 'ft_ml_home',
+    selectionText: pick.label || pick.rawText || '',
+    eventText: evText,
+    homeTeam: home,
+    awayTeam: away,
+    source: 'board-emergency',
+    fromSlip: false
+  });
+}
+
 function readBtiOdds(hint) {
   const hintObj = hint || {};
 
@@ -1389,6 +1479,9 @@ function readBtiOdds(hint) {
   if (any?.odds > 1.01) {
     return enrichBtiSlip({ ...any, source: 'board', fromSlip: false });
   }
+
+  const emergency = readEmergencyBoardOdds(hintObj);
+  if (emergency?.odds > 1.01) return emergency;
 
   return null;
 }
@@ -1522,7 +1615,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       version: '2.30',
       href: location.href,
       isTop: window === window.top,
-      buttonCount: document.querySelectorAll('button[class*="master_fe_Selections_selection"]').length,
+      buttonCount: queryBoardButtons().length,
       hasSlip: probe.hasSlip,
       hasInput: probe.hasInput,
       hasBtn: probe.hasBtn,

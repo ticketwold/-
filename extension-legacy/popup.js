@@ -169,7 +169,53 @@ async function injectReadPoly(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => (typeof readPolymarketSlip === 'function' ? readPolymarketSlip() : null)
+      func: () => {
+        function parseCents(txt) {
+          const m = String(txt || '').match(/(\d+(?:\.\d+)?)\s*¢/);
+          if (!m) return null;
+          const c = parseFloat(m[1]);
+          return c >= 1 && c < 100 ? c : null;
+        }
+        function norm(s) {
+          return String(s || '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+        }
+        function teamMatch(team, text) {
+          const nt = norm(team);
+          const bt = norm(text);
+          if (!nt || !bt) return false;
+          return bt.includes(nt) || nt.includes(bt);
+        }
+
+        let team = '';
+        for (const btn of document.querySelectorAll('button, [role="button"]')) {
+          const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          const m = t.match(/^buy\s+(.+)$/i);
+          if (m) { team = m[1].trim(); break; }
+        }
+
+        const candidates = [];
+        for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+          const r = btn.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          const cents = parseCents(t);
+          if (!cents) continue;
+          let score = 0;
+          if (team && teamMatch(team, t)) score += 100;
+          if (btn.getAttribute('aria-pressed') === 'true') score += 50;
+          candidates.push({ cents, score, team: t });
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        const pick = candidates[0];
+        if (!pick) return null;
+        return {
+          source: 'polymarket',
+          odds: 100 / pick.cents,
+          priceCents: pick.cents,
+          teamLabel: team,
+          marketKind: 'ml'
+        };
+      }
     });
     return results?.[0]?.result || null;
   } catch (_) {
@@ -177,32 +223,53 @@ async function injectReadPoly(tabId) {
   }
 }
 
-async function findBtiFrame(tabId) {
+async function readBtiFromAllFrames(tabId, hint = {}) {
   const frames = await getAllFrames(tabId);
-  const order = [];
-  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
-  for (const f of frames) {
-    if (!order.includes(f.frameId)) order.push(f.frameId);
-  }
+  let bestSlip = null;
+  let bestScore = -1;
+  let bestFrameId = lastBtiFrame?.tabId === tabId ? lastBtiFrame.frameId : 0;
 
-  let best = null;
-  let bestOdds = 0;
-
-  for (const frameId of order) {
+  for (const { frameId } of frames) {
     await ensureBtiScript(tabId, frameId);
     const ping = await sendBti(tabId, frameId, { type: 'PING' });
-    if (!ping) continue;
+    if (!ping?.ok) continue;
 
-    const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: btiHintFromPoly(cachedPoly) });
-    const odds = res?.slip?.odds || 0;
-    if (odds > bestOdds) {
-      bestOdds = odds;
-      best = { frameId, ping, slip: res?.slip };
-    } else if (!best && (ping.hasSlip || ping.buttonCount > 0)) {
-      best = { frameId, ping, slip: res?.slip };
+    const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint });
+    const slip = res?.slip;
+    let score = 0;
+    if (slip?.odds > 1.01) score += 1000 + slip.odds;
+    if (ping.hasInput) score += 500;
+    if (ping.slipCount > 0) score += 300;
+    if (ping.slipOdds > 1) score += 250;
+    if (ping.buttonCount > 0) score += Math.min(ping.buttonCount, 100);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestSlip = slip;
+      bestFrameId = frameId;
     }
   }
-  return best;
+
+  if (!(bestSlip?.odds > 1.01) && (hint.excludeTeam || hint.polyTeam)) {
+    return readBtiFromAllFrames(tabId, {});
+  }
+
+  return { slip: bestSlip, frameId: bestFrameId };
+}
+
+async function findBtiFrame(tabId) {
+  const merged = await readBtiFromAllFrames(tabId, btiHintFromPoly(cachedPoly));
+  if (!merged.slip && merged.frameId === 0) {
+    const frames = await getAllFrames(tabId);
+    for (const { frameId } of frames) {
+      const ping = await sendBti(tabId, frameId, { type: 'PING' });
+      if (ping?.ok && (ping.hasInput || ping.buttonCount > 0)) {
+        return { frameId, ping, slip: null };
+      }
+    }
+  }
+  const ping = await sendBti(tabId, merged.frameId, { type: 'PING' });
+  return { frameId: merged.frameId, ping, slip: merged.slip };
 }
 
 async function findTabs() {
@@ -252,39 +319,17 @@ async function readBtiSlip(btiTab, prefilled) {
     return null;
   }
 
-  const frameId = btiTab.frameId || 0;
   const hint = btiHintFromPoly(cachedPoly);
-
-  let res = await sendBti(btiTab.id, frameId, { type: 'READ_BTI_ODDS', hint });
-  if (res?.slip?.odds > 1) {
+  const merged = await readBtiFromAllFrames(btiTab.id, hint);
+  if (merged.slip?.odds > 1) {
+    lastBtiFrame = { tabId: btiTab.id, frameId: merged.frameId };
+    btiTab.frameId = merged.frameId;
     lastStatus.bti = '';
-    return res.slip;
+    return merged.slip;
   }
 
-  await ensureBtiScript(btiTab.id, frameId);
-  res = await sendBti(btiTab.id, frameId, { type: 'READ_BTI_ODDS', hint });
-  if (res?.slip?.odds > 1) {
-    lastStatus.bti = '';
-    return res.slip;
-  }
-
-  if (hint.excludeTeam || hint.polyTeam) {
-    res = await sendBti(btiTab.id, frameId, { type: 'READ_BTI_ODDS', hint: {} });
-    if (res?.slip?.odds > 1) {
-      lastStatus.bti = '';
-      return res.slip;
-    }
-  }
-
-  const frame = await findBtiFrame(btiTab.id);
-  if (frame?.slip?.odds > 1) {
-    lastBtiFrame = { tabId: btiTab.id, frameId: frame.frameId };
-    lastStatus.bti = '';
-    return frame.slip;
-  }
-
-  lastStatus.bti = !res ? '텐텐뱃: BTI iframe 미연결' : '텐텐뱃: 배당판 배당 없음';
-  return res?.slip || null;
+  lastStatus.bti = merged.frameId != null ? '텐텐뱃: 배당판 배당 없음' : '텐텐뱃: BTI iframe 미연결';
+  return merged.slip || null;
 }
 
 async function readPolySlip(polyTab) {
@@ -633,4 +678,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.9 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.3.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
