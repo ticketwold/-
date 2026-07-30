@@ -163,21 +163,46 @@ function readPayoutAmount(panel, stake) {
   return values.length ? Math.max(...values) : null;
 }
 
+const MIN_POLY_CENTS = 1;
+const MAX_POLY_CENTS = 99;
+
+function isValidPolyCents(c) {
+  return Number.isFinite(c) && c >= MIN_POLY_CENTS && c < MAX_POLY_CENTS;
+}
+
 function readListedPriceCents(panel) {
   const t = (panel?.innerText || '').replace(/\s+/g, ' ');
-  const m = t.match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);
-  if (m) return parseFloat(m[1]);
-  return null;
+  const candidates = [];
+  const specs = [
+    { re: /avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /average\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 60 }
+  ];
+
+  for (const { re, score } of specs) {
+    let m;
+    while ((m = re.exec(t)) !== null) {
+      const c = parseFloat(m[1]);
+      const ctx = t.slice(Math.max(0, m.index - 16), m.index + m[0].length + 16);
+      if (/min|max|slippage|fee|spread|limit|impact/i.test(ctx)) continue;
+      if (!isValidPolyCents(c)) continue;
+      candidates.push({ cents: c, score });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
 }
 
 function parseCentsFromText(txt) {
   const t = String(txt || '').replace(/\s+/g, ' ').trim();
   if (/^\+\s*\$/.test(t) || /^sell\s+/i.test(t)) return null;
+  if (/@\s*\d/.test(t) && /\+\s*\$/.test(t)) return null;
   const m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
   if (!m) return null;
   const c = parseFloat(m[1]);
-  if (c <= 0 || c >= 100) return null;
-  if (c <= 2 && !/[A-Za-z]{2,}/.test(t)) return null;
+  if (!isValidPolyCents(c)) return null;
   return c;
 }
 
@@ -276,22 +301,49 @@ function readBuyButtonCents(panel) {
 
 function readLiveListedCents(panel) {
   const panelEl = panel || findTradePanel();
-  const sources = [
-    readListedPriceCents(panelEl),
-    readBuyButtonCents(panelEl),
-    readOutcomeButtonCents(readTeamLabel(panelEl)),
-    readPageOutcomeCents()
-  ].filter((c) => c > 0 && c < 100);
+  const team = readTeamLabel(panelEl);
+  const candidates = [];
 
-  if (!sources.length) return null;
-  // 선택된 outcome 버튼 가격 우선 (가장 실시간)
-  const selected = readOutcomeButtonCents(readTeamLabel(panelEl));
-  if (selected) return selected;
-  return sources[0];
+  function add(cents, score) {
+    if (!isValidPolyCents(cents)) return;
+    candidates.push({ cents, score });
+  }
+
+  const selected = readOutcomeButtonCents(team);
+  if (selected) add(selected, 200);
+
+  const pageSelected = readPageOutcomeCents();
+  if (pageSelected) add(pageSelected, 180);
+
+  const avg = readListedPriceCents(panelEl);
+  if (avg) add(avg, 120);
+
+  const buyBtn = readBuyButtonCents(panelEl);
+  if (buyBtn) add(buyBtn, 100);
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function formatCentsLabel(cents) {
+  if (!cents) return '';
+  return Number.isInteger(cents) ? `${cents}¢` : `${cents.toFixed(1)}¢`;
+}
+
+function sanitizePolyOdds(odds, listedCents, stake, payout) {
+  if (odds && odds > 1 && odds <= 50) return odds;
+  if (isValidPolyCents(listedCents)) return oddsFromCents(listedCents);
+  if (stake && payout) {
+    const fromPay = calcOddsFromStakeAndPayout(stake, payout);
+    if (fromPay && fromPay > 1 && fromPay <= 50) return fromPay;
+  }
+  if (odds && odds > 50) return null;
+  return odds && odds > 1 ? odds : null;
 }
 
 function oddsFromCents(cents) {
-  if (!cents || cents <= 0 || cents >= 100) return null;
+  if (!isValidPolyCents(cents)) return null;
   const price = cents / 100;
   return price > 0 && price < 1 ? 1 / price : null;
 }
@@ -306,17 +358,12 @@ function readPolymarketSlip() {
   let odds = oddsFromCents(listedCents);
   let fromPayout = false;
 
-  // ¢ 실시간 가격 우선 (To win은 늦게 갱신됨)
   if (!odds && stake && payout) {
     odds = calcOddsFromStakeAndPayout(stake, payout);
     fromPayout = !!(odds && odds > 1.001);
   }
 
-  if (!odds || odds <= 1.001) {
-    if (listedCents) {
-      odds = oddsFromCents(listedCents);
-    }
-  }
+  odds = sanitizePolyOdds(odds, listedCents, stake, payout);
 
   if (!odds || odds <= 1.001) {
     return {
@@ -324,14 +371,26 @@ function readPolymarketSlip() {
       odds: null,
       needsStake: !listedCents,
       teamLabel: team,
-      priceCents: listedCents || null,
-      hint: listedCents ? `${listedCents}¢ 배당 읽는 중` : 'Polymarket 탭에서 outcome 선택',
+      priceCents: isValidPolyCents(listedCents) ? listedCents : null,
+      hint: listedCents ? `${formatCentsLabel(listedCents)} 배당 읽는 중` : 'Polymarket 탭에서 outcome 선택',
       marketKind: 'ml'
     };
   }
 
-  const priceCents = listedCents || decimalToCents(odds);
+  const priceCents = isValidPolyCents(listedCents) ? listedCents : decimalToCents(odds);
+  if (!isValidPolyCents(priceCents)) {
+    return {
+      source: 'polymarket',
+      odds: null,
+      needsStake: true,
+      teamLabel: team,
+      hint: '배당 읽기 실패 — outcome 다시 클릭',
+      marketKind: 'ml'
+    };
+  }
+
   const profit = fromPayout && payout && stake && payout >= stake ? payout - stake : null;
+  const centsLabel = formatCentsLabel(priceCents);
 
   return {
     source: 'polymarket',
@@ -340,8 +399,8 @@ function readPolymarketSlip() {
     price: priceCents / 100,
     teamLabel: team,
     outcome: team,
-    selectionText: team ? `${team} @ ${priceCents}¢` : `${priceCents}¢`,
-    displayLabel: `${priceCents}¢ (${odds.toFixed(3)})`,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel: `${centsLabel} (${odds.toFixed(3)})`,
     stake: stake || null,
     payout: fromPayout && payout ? payout : (stake ? stake * odds : null),
     toWin: profit,
@@ -364,7 +423,8 @@ function calcOddsFromStakeAndPayout(stake, payout) {
 
 function decimalToCents(decimal) {
   if (!decimal || decimal <= 1) return null;
-  return Math.round(1000 / decimal) / 10;
+  const c = Math.round(1000 / decimal) / 10;
+  return isValidPolyCents(c) ? c : null;
 }
 
 function robustClick(el) {
