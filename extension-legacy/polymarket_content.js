@@ -199,11 +199,25 @@ function parseCentsFromText(txt) {
   const t = String(txt || '').replace(/\s+/g, ' ').trim();
   if (/^\+\s*\$/.test(t) || /^sell\s+/i.test(t)) return null;
   if (/@\s*\d/.test(t) && /\+\s*\$/.test(t)) return null;
-  const m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
-  if (!m) return null;
-  const c = parseFloat(m[1]);
-  if (!isValidPolyCents(c)) return null;
-  return c;
+
+  let m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (m) {
+    const c = parseFloat(m[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  m = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (m) {
+    const c = parseFloat(m[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  if (/^0\.\d{2,4}$/.test(t)) {
+    const c = parseFloat(t) * 100;
+    if (isValidPolyCents(c)) return c;
+  }
+
+  return null;
 }
 
 function teamMatchesButton(team, text) {
@@ -348,6 +362,47 @@ function readSelectedOutcomeForTeam(teamHint) {
   return candidates[0].cents;
 }
 
+function readSelectedTeamFromBoard() {
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const pressed = btn.getAttribute('aria-pressed') === 'true'
+      || btn.getAttribute('aria-selected') === 'true'
+      || btn.getAttribute('data-state') === 'on'
+      || btn.getAttribute('data-state') === 'checked';
+    if (!pressed) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const cleaned = t.replace(/\d+(?:\.\d+)?\s*¢/g, '').replace(/\d+(?:\.\d+)?\s*%/g, '').trim();
+    if (cleaned.length >= 2 && cleaned.length < 80) return cleaned;
+  }
+  return '';
+}
+
+function readEventBoardCents(teamHint) {
+  const candidates = [];
+  const roots = [findTradePanel(), document.body].filter(Boolean);
+
+  for (const root of roots) {
+    for (const el of root.querySelectorAll('button, [role="button"], [role="radio"], [class*="outcome"], [class*="Outcome"]')) {
+      if (!visible(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 160) continue;
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+      if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+
+      let score = 40;
+      if (teamHint && teamMatchesButton(teamHint, t)) score += 120;
+      score += selectionScore(el);
+      if (/^buy\s+/i.test(t)) score += 30;
+      candidates.push({ cents, score });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
 function readTeamLabel(panel) {
   const scopes = [panel, findTradePanel(), document.body].filter(Boolean);
   const seen = new Set();
@@ -364,9 +419,12 @@ function readTeamLabel(panel) {
     }
 
     const text = scope.innerText || '';
-    const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@]+?)(?:\s*$|\s+Avg|\s+To win)/i);
+    const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@%]+?)(?:\s*$|\s+Avg|\s+To win)/i);
     if (buyM) return buyM[1].trim();
   }
+
+  const selected = readSelectedTeamFromBoard();
+  if (selected) return selected;
 
   return '';
 }
@@ -427,6 +485,8 @@ function readLiveListedCents(panel, stake, payout) {
   if (!candidates.length) {
     const page = readPageOutcomeCents(team);
     if (page) add(page, 420, 'page');
+    const board = readEventBoardCents(team);
+    if (board) add(board, 480, 'event-board');
   }
 
   if (!candidates.length) return null;

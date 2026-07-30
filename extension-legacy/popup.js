@@ -636,15 +636,30 @@ async function readBtiSlip(btiTab) {
   return null;
 }
 
+async function readPolySlipFromApi(polyTab) {
+  if (!polyTab?.url) return null;
+  const slug = slugFromPolyUrl(polyTab.url);
+  if (!slug) return null;
+  try {
+    const event = await fetchPolyEventBySlug(slug);
+    if (!event) return null;
+    const teamHint = polyTeamHintFromUrl(polyTab.url);
+    return polyEventToSlip(event, teamHint);
+  } catch (_) {
+    return null;
+  }
+}
+
 async function readPolySlip(polyTab) {
   if (!polyTab?.id) {
     lastStatus.poly = 'Polymarket: 탭 없음 — polymarket.com 열기';
     return null;
   }
 
-  const [res, injected] = await Promise.all([
+  const [res, injected, apiSlip] = await Promise.all([
     sendPoly(polyTab.id, { type: 'READ_SLIP' }),
-    injectReadPoly(polyTab.id)
+    injectReadPoly(polyTab.id),
+    readPolySlipFromApi(polyTab)
   ]);
 
   if (res?.slip?.odds > 1) {
@@ -655,6 +670,10 @@ async function readPolySlip(polyTab) {
     lastStatus.poly = '';
     return injected;
   }
+  if (apiSlip?.odds > 1) {
+    lastStatus.poly = '';
+    return apiSlip;
+  }
 
   await ensurePolyScript(polyTab.id);
   const res2 = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
@@ -663,13 +682,19 @@ async function readPolySlip(polyTab) {
     return res2.slip;
   }
 
+  const apiSlip2 = await readPolySlipFromApi(polyTab);
+  if (apiSlip2?.odds > 1) {
+    lastStatus.poly = '';
+    return apiSlip2;
+  }
+
   if (injected?.needsStake || res2?.slip?.needsStake) {
     lastStatus.poly = 'Polymarket: 금액($) 입력 필요';
     return injected || res2?.slip;
   }
 
-  lastStatus.poly = 'Polymarket: 배당 읽기 실패 — 탭 새로고침';
-  return injected || res2?.slip || null;
+  lastStatus.poly = 'Polymarket: /event/ 페이지에서 팀 선택';
+  return injected || res2?.slip || apiSlip2 || null;
 }
 
 function slipOdds(slip) {
@@ -976,7 +1001,10 @@ $('openPanelBtn')?.addEventListener('click', openPanel);
 $('openPanelFromSearch')?.addEventListener('click', openPanel);
 $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로고침', 'info'); });
 ['slipMinProfit', 'minProfit', 'btiBet', 'usdRate'].forEach((id) => {
-  $(id)?.addEventListener('input', () => updateSlipUI(cachedBti, cachedPoly));
+  $(id)?.addEventListener('input', () => {
+    updateSlipUI(cachedBti, cachedPoly);
+    if (calcRunning) scheduleSyncPolyAmount();
+  });
 });
 
 $('diagBtn')?.addEventListener('click', async () => {
@@ -1015,4 +1043,4 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.5.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.5.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

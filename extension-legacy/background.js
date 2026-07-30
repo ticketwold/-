@@ -1,5 +1,5 @@
 // background.js v5 — 텐텐뱃 (x10x10s) + Polymarket 전용
-importScripts('sites_config.js', 'teams.js', 'odds.js');
+importScripts('sites_config.js', 'teams.js', 'odds.js', 'poly_api.js');
 
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0';
 const BTI_HOST_HINTS = ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'];
@@ -258,46 +258,6 @@ async function getBtiLiveMatchups(tabId) {
   return result;
 }
 
-function parsePolyOutcomes(market) {
-  try {
-    const outcomes = typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : (market.outcomes || []);
-    const prices = typeof market.outcomePrices === 'string'
-      ? JSON.parse(market.outcomePrices)
-      : (market.outcomePrices || market.outcome_prices || []);
-    return { outcomes, prices };
-  } catch (_) { return { outcomes: [], prices: [] }; }
-}
-
-function parsePolymarketEvents(events) {
-  const result = [];
-  for (const e of events || []) {
-    const title = e.title || '';
-    const vs = title.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s+-|\s*\(|$)/i);
-    if (!vs) continue;
-    const home = vs[1].trim();
-    const away = vs[2].trim();
-    const ml = [];
-    for (const m of (e.markets || [])) {
-      const { outcomes, prices } = parsePolyOutcomes(m);
-      if (outcomes.length !== 2 || prices.length < 2) continue;
-      for (let i = 0; i < 2; i++) {
-        const dec = polyPriceToDecimal(parseFloat(prices[i]));
-        if (dec) ml.push({ team: outcomes[i], side: i === 0 ? 'home' : 'away', price: parseFloat(prices[i]), decimal: dec });
-      }
-    }
-    if (!ml.length) continue;
-    result.push({ id: String(e.id), home, away, title, league: e.seriesSlug || '', ml });
-  }
-  return result;
-}
-
-async function getPolymarketMatchups(limit = 120) {
-  const url = `${SITE_CONFIG.GAMMA_API}/events?tag_id=${SITE_CONFIG.GAMMA_SPORTS_TAG}&active=true&closed=false&limit=${limit}&_t=${Date.now()}`;
-  const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
-  if (!res.ok) throw new Error(`Polymarket API ${res.status}`);
-  return parsePolymarketEvents(await res.json());
-}
-
 function findArbOpportunities(btiList, polyList) {
   const opps = [];
   for (const bti of btiList) {
@@ -340,7 +300,7 @@ async function runSearchOnce() {
     }
   }
   let polyAll = [];
-  try { polyAll = await getPolymarketMatchups(150); } catch (e) {
+  try { polyAll = await getPolymarketMatchups(); } catch (e) {
     console.warn('[Poly API]', e.message);
   }
   const opps = findArbOpportunities(btiAll, polyAll);
