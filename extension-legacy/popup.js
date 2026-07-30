@@ -620,4 +620,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
