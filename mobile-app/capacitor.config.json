@@ -1,0 +1,11 @@
+{
+  "appId": "com.ticketwold.arbbot",
+  "appName": "양방 베팅 봇",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -1,0 +1,25 @@
+# 가상배팅 테스트용 설정 (Mock A/B 사이트)
+poll_interval: 1.0
+min_profit_margin: 0.1
+total_stake: 100000
+max_concurrent_bets: 5
+dry_run: true
+log_level: INFO
+
+site_a:
+  name: "Pinnacle(Mock)"
+  adapter: mock
+  base_url: "https://www.pinnacle.com/ko/"
+
+site_b:
+  name: "PBC00(Mock)"
+  adapter: mock
+  base_url: "https://pbc00.com"
+
+sports:
+  - football
+  - basketball
+
+markets:
+  - moneyline
+  - over_under

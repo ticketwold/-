@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body class="panel-mode">
+<header>
+  <div class="header-row">
+    <div>
+      <h1>⚡ 양방 베팅 봇</h1>
+      <div class="sub">텐텐뱃 + Polymarket · v5.2.3</div>
+    </div>
+    <button id="refreshBtn" class="btn-icon" title="새로고침">↻</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="search">🔍 라이브 서치</button>
+  <button class="tab" data-tab="slip">📋 슬립 비교</button>
+</nav>
+
+<section id="tab-search" class="panel active">
+  <div class="row two-col">
+    <div>
+      <label>최소 수익률 (%)</label>
+      <input type="number" id="minProfit" value="1" min="0" step="0.1">
+    </div>
+    <div class="row-actions">
+      <button id="searchStart" class="btn primary">서치 시작</button>
+      <button id="searchStop" class="btn" disabled>정지</button>
+    </div>
+  </div>
+  <div id="searchStats" class="hint">x10x10s + Polymarket 탭을 열고 서치를 시작하세요</div>
+  <div id="searchResults" class="results"></div>
+</section>
+
+<section id="tab-slip" class="panel">
+  <div class="slip-grid">
+    <div>
+      <label>텐텐뱃</label>
+      <div class="slip-box">
+        <div class="odds" id="btiOdds">-</div>
+        <div class="meta team-name" id="btiMeta">-</div>
+      </div>
+    </div>
+    <div>
+      <label>Polymarket</label>
+      <div class="slip-box">
+        <div class="odds" id="polyOdds">-</div>
+        <div class="meta" id="polyMeta">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="profit-box">
+    <div class="label">예상 수익률</div>
+    <div class="profit" id="profit">-</div>
+    <div class="hint" id="profitHint">양쪽 슬립에 담고 (Poly는 금액 입력)</div>
+  </div>
+
+  <div class="row two-col">
+    <div>
+      <label>최소 수익률 (%)</label>
+      <input type="number" id="slipMinProfit" value="1" min="0" step="0.1">
+    </div>
+    <div>
+      <label>텐텐뱃 베팅금 (원)</label>
+      <input type="number" id="btiBet" value="10000" min="1000" step="1000">
+    </div>
+  </div>
+  <div class="row">
+    <label>USD 환율 (원)</label>
+    <input type="number" id="usdRate" value="1400" min="1000" step="10">
+  </div>
+
+  <div class="calc-box">
+    <div><span>텐텐뱃</span> <strong id="calcBti">-</strong></div>
+    <div><span>Polymarket</span> <strong id="calcPoly">-</strong></div>
+  </div>
+
+  <div class="btn-row">
+    <button id="botStart" class="btn primary">봇 시작</button>
+    <button id="botStop" class="btn" disabled>봇 정지</button>
+    <button id="diagBtn" class="btn small">진단</button>
+  </div>
+</section>
+
+<div id="log" class="log"></div>
+
+<script src="sites_config.js"></script>
+<script src="odds.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

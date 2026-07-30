@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "양방 베팅 봇",
+  "version": "5.2.3",
+  "description": "텐텐뱃 (x10x10s) + Polymarket 양방 서치 및 슬립 비교 베팅",
+  "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows"],
+  "host_permissions": [
+    "*://*.x10x10s.com/*",
+    "*://polymarket.com/*",
+    "*://*.polymarket.com/*",
+    "*://gamma-api.polymarket.com/*",
+    "*://*.bti-sports.com/*",
+    "*://*.bti-sports.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.bti-sports.io/*", "*://*.bti-sports.com/*", "*://*.x10x10s.com/*"],
+      "js": ["bti_content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://polymarket.com/*", "*://*.polymarket.com/*"],
+      "js": ["polymarket_content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "양방 봇 (텐텐뱃 + Polymarket) — 클릭하면 창 열림"
+  }
+}

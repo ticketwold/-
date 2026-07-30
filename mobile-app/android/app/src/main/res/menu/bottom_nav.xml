@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_control"
+        android:title="봇"
+        android:icon="@android:drawable/ic_menu_manage" />
+    <item
+        android:id="@+id/nav_bti"
+        android:title="텐텐뱃"
+        android:icon="@android:drawable/ic_menu_compass" />
+    <item
+        android:id="@+id/nav_poly"
+        android:title="Poly"
+        android:icon="@android:drawable/ic_menu_mapmode" />
+</menu>
