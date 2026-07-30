@@ -3,7 +3,7 @@
 'use strict';
 
 const POLL_MS = 16;
-const FALLBACK_REFRESH_MS = 3000;
+const FALLBACK_REFRESH_MS = 250;
 const IS_PANEL = document.body.classList.contains('panel-mode');
 let botRunning = false;
 let betInProgress = false;
@@ -309,28 +309,39 @@ async function readPolySlip(polyTab) {
   return injected || res?.slip || null;
 }
 
+function slipOdds(slip) {
+  if (!slip) return null;
+  if (slip.odds > 1) return slip.odds;
+  if (slip.priceCents > 0 && slip.priceCents < 100) return 100 / slip.priceCents;
+  return null;
+}
+
+function mergeSlipCached(cached, fresh) {
+  if (!fresh) return cached ?? null;
+  const freshOdds = slipOdds(fresh);
+  if (!freshOdds || freshOdds <= 1) {
+    if (cached && slipOdds(cached) > 1) return { ...cached, ...fresh, odds: cached.odds };
+    return fresh;
+  }
+  // priceCents 또는 odds가 바뀌면 항상 최신값 사용
+  if (!cached) return { ...fresh, odds: freshOdds };
+  const cachedCents = cached.priceCents;
+  if (fresh.priceCents && fresh.priceCents !== cachedCents) {
+    return { ...cached, ...fresh, odds: freshOdds };
+  }
+  if (!cached.odds || Math.abs(freshOdds - cached.odds) > 0.0001) {
+    return { ...cached, ...fresh, odds: freshOdds };
+  }
+  return { ...cached, ...fresh, odds: freshOdds };
+}
+
 async function refreshSlips() {
   const found = await findTabs();
   const poly = await readPolySlip(found.polyTab);
   const bti = await readBtiSlip(found.btiTab, found.btiSlip);
 
-  if (poly?.odds > 1) cachedPoly = poly;
-  else if (poly) {
-    if (cachedPoly?.odds > 1) {
-      cachedPoly = { ...cachedPoly, ...poly, odds: cachedPoly.odds };
-    } else {
-      cachedPoly = poly;
-    }
-  }
-
-  if (bti?.odds > 1) cachedBti = bti;
-  else if (bti) {
-    if (cachedBti?.odds > 1) {
-      cachedBti = { ...cachedBti, ...bti, odds: cachedBti.odds };
-    } else {
-      cachedBti = bti;
-    }
-  }
+  cachedPoly = mergeSlipCached(cachedPoly, poly);
+  cachedBti = mergeSlipCached(cachedBti, bti);
 
   updateSlipUI(cachedBti, cachedPoly);
   return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
@@ -476,20 +487,8 @@ async function pollLoop() {
 }
 
 function applySlipUpdate(source, slip) {
-  if (source === 'bti') {
-    if (slip?.odds > 1) cachedBti = slip;
-    else if (slip) {
-      if (cachedBti?.odds > 1) cachedBti = { ...cachedBti, ...slip, odds: cachedBti.odds };
-      else cachedBti = slip;
-    } else cachedBti = null;
-  }
-  if (source === 'polymarket') {
-    if (slip?.odds > 1) cachedPoly = slip;
-    else if (slip) {
-      if (cachedPoly?.odds > 1) cachedPoly = { ...cachedPoly, ...slip, odds: cachedPoly.odds };
-      else cachedPoly = slip;
-    } else cachedPoly = null;
-  }
+  if (source === 'bti') cachedBti = mergeSlipCached(cachedBti, slip);
+  if (source === 'polymarket') cachedPoly = mergeSlipCached(cachedPoly, slip);
   updateSlipUI(cachedBti, cachedPoly);
 }
 
@@ -510,7 +509,7 @@ function startBot() {
   $('botStop').disabled = false;
   log('봇 시작', 'info');
   refreshSlips();
-  pollTimer = setInterval(pollLoop, 500);
+  pollTimer = setInterval(pollLoop, POLL_MS);
 }
 
 function stopBot() {
@@ -620,4 +619,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.4 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

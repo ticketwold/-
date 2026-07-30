@@ -257,44 +257,81 @@ function readTeamLabel(panel) {
   return '';
 }
 
+function readBuyButtonCents(panel) {
+  const scope = panel || findTradePanel() || document.body;
+  for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!/^buy\s+/i.test(t)) continue;
+    const cents = parseCentsFromText(t);
+    if (cents) return cents;
+    const sibling = btn.parentElement;
+    if (sibling) {
+      const m = (sibling.textContent || '').match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);
+      if (m) return parseFloat(m[1]);
+    }
+  }
+  return null;
+}
+
+function readLiveListedCents(panel) {
+  const panelEl = panel || findTradePanel();
+  const sources = [
+    readListedPriceCents(panelEl),
+    readBuyButtonCents(panelEl),
+    readOutcomeButtonCents(readTeamLabel(panelEl)),
+    readPageOutcomeCents()
+  ].filter((c) => c > 0 && c < 100);
+
+  if (!sources.length) return null;
+  // 선택된 outcome 버튼 가격 우선 (가장 실시간)
+  const selected = readOutcomeButtonCents(readTeamLabel(panelEl));
+  if (selected) return selected;
+  return sources[0];
+}
+
+function oddsFromCents(cents) {
+  if (!cents || cents <= 0 || cents >= 100) return null;
+  const price = cents / 100;
+  return price > 0 && price < 1 ? 1 / price : null;
+}
+
 function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readStake(panel);
   const payout = readPayoutAmount(panel, stake);
   const team = readTeamLabel(panel);
-  let listedCents = readListedPriceCents(panel);
-  if (!listedCents) listedCents = readOutcomeButtonCents(team);
+  const listedCents = readLiveListedCents(panel);
 
-  let odds = null;
+  let odds = oddsFromCents(listedCents);
   let fromPayout = false;
 
-  if (stake && payout) {
+  // ¢ 실시간 가격 우선 (To win은 늦게 갱신됨)
+  if (!odds && stake && payout) {
     odds = calcOddsFromStakeAndPayout(stake, payout);
     fromPayout = !!(odds && odds > 1.001);
   }
 
-  if (!fromPayout && listedCents) {
-    const price = listedCents / 100;
-    if (price > 0 && price < 1) odds = 1 / price;
+  if (!odds || odds <= 1.001) {
+    if (listedCents) {
+      odds = oddsFromCents(listedCents);
+    }
   }
 
   if (!odds || odds <= 1.001) {
-    if (!stake) {
-      return {
-        source: 'polymarket',
-        odds: null,
-        needsStake: !listedCents,
-        teamLabel: team,
-        hint: listedCents ? '¢ 배당 추정치 (금액 입력 시 To win 반영)' : 'Polymarket 탭에서 금액($) 입력 필요',
-        marketKind: 'ml',
-        priceCents: listedCents || null
-      };
-    }
-    return null;
+    return {
+      source: 'polymarket',
+      odds: null,
+      needsStake: !listedCents,
+      teamLabel: team,
+      priceCents: listedCents || null,
+      hint: listedCents ? `${listedCents}¢ 배당 읽는 중` : 'Polymarket 탭에서 outcome 선택',
+      marketKind: 'ml'
+    };
   }
 
   const priceCents = listedCents || decimalToCents(odds);
-  const profit = fromPayout && payout >= stake ? payout - stake : null;
+  const profit = fromPayout && payout && stake && payout >= stake ? payout - stake : null;
 
   return {
     source: 'polymarket',
@@ -306,15 +343,16 @@ function readPolymarketSlip() {
     selectionText: team ? `${team} @ ${priceCents}¢` : `${priceCents}¢`,
     displayLabel: `${priceCents}¢ (${odds.toFixed(3)})`,
     stake: stake || null,
-    payout: fromPayout ? payout : (stake ? stake * odds : null),
+    payout: fromPayout && payout ? payout : (stake ? stake * odds : null),
     toWin: profit,
     hint: stake && payout
       ? `베팅 $${stake} → 수령 $${payout.toFixed(2)}`
-      : (stake ? '' : '금액 입력 시 To win 반영'),
+      : (listedCents ? `실시간 ${priceCents}¢` : ''),
     marketKind: 'ml',
     period: 'ft',
     marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
-    fromPayout
+    fromPayout,
+    liveCents: !!listedCents
   };
 }
 
@@ -748,7 +786,8 @@ try {
 
   function slipKey(slip) {
     if (!slip) return '';
-    return `${slip.odds || 'x'}_${slip.stake || ''}_${slip.payout || ''}_${slip.teamLabel || ''}_${slip.priceCents || ''}`;
+    const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
+    return `${slip.priceCents || 'c'}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}`;
   }
 
   function tick() {
@@ -761,6 +800,7 @@ try {
   }
 
   function notifyNow() {
+    last = ''; // 강제 갱신
     tick();
     requestAnimationFrame(() => {
       tick();
@@ -771,7 +811,7 @@ try {
   function schedule() {
     if (pending) return;
     pending = true;
-    queueMicrotask(() => {
+    requestAnimationFrame(() => {
       pending = false;
       tick();
     });
@@ -779,8 +819,8 @@ try {
 
   if (document.body) {
     document.addEventListener('click', (e) => {
-      const btn = e.target?.closest?.('button, [role="button"], [role="radio"]');
-      if (!btn || isBuySellTab(btn)) return;
+      const btn = e.target?.closest?.('button, [role="button"], [role="radio"], a');
+      if (!btn) return;
       notifyNow();
     }, true);
 
@@ -790,6 +830,7 @@ try {
       attributeFilter: ['class', 'data-state', 'aria-pressed', 'aria-selected', 'aria-label', 'value']
     });
     document.addEventListener('input', notifyNow, true);
+    document.addEventListener('change', notifyNow, true);
     setInterval(tick, 16);
     notifyNow();
   }

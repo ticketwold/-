@@ -292,8 +292,8 @@ function parsePolymarketEvents(events) {
 }
 
 async function getPolymarketMatchups(limit = 120) {
-  const url = `${SITE_CONFIG.GAMMA_API}/events?tag_id=${SITE_CONFIG.GAMMA_SPORTS_TAG}&active=true&closed=false&limit=${limit}`;
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const url = `${SITE_CONFIG.GAMMA_API}/events?tag_id=${SITE_CONFIG.GAMMA_SPORTS_TAG}&active=true&closed=false&limit=${limit}&_t=${Date.now()}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
   if (!res.ok) throw new Error(`Polymarket API ${res.status}`);
   return parsePolymarketEvents(await res.json());
 }
@@ -369,7 +369,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (searchRunning) {
         searchInterval = setInterval(() => {
           runSearchOnce().then((r) => broadcast({ type: 'SEARCH_RESULT', ...r }));
-        }, 1500);
+        }, 500);
       }
     }).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
