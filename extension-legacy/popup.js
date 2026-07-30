@@ -64,12 +64,16 @@ function formatOdds(slip) {
 function formatBtiMeta(slip) {
   if (!slip) return '-';
   const team = slip.teamLabel || slip.selectionText || '';
-  if (team && !/^W[12]$/i.test(team)) return team;
-  if (slip.homeTeam || slip.awayTeam) {
-    if (slip.side === 'away' || slip.side === 'a') return slip.awayTeam || team || '-';
-    return slip.homeTeam || team || '-';
+  let label = team;
+  if (team && !/^W[12]$/i.test(team)) label = team;
+  else if (slip.homeTeam || slip.awayTeam) {
+    if (slip.side === 'away' || slip.side === 'a') label = slip.awayTeam || team || '-';
+    else label = slip.homeTeam || team || '-';
+  } else label = team || '-';
+  if (slip.source === 'board-live' || slip.source === 'board') {
+    return `${label} · 실시간`;
   }
-  return team || '-';
+  return label;
 }
 
 function formatPolyMeta(slip) {
@@ -619,4 +623,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
