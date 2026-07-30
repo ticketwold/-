@@ -311,8 +311,8 @@ async function readPolySlip(polyTab) {
 
 function slipOdds(slip) {
   if (!slip) return null;
-  if (slip.odds > 1) return slip.odds;
-  if (slip.priceCents > 0 && slip.priceCents < 100) return 100 / slip.priceCents;
+  if (slip.odds > 1 && slip.odds <= 50) return slip.odds;
+  if (slip.priceCents >= 1 && slip.priceCents < 100) return 100 / slip.priceCents;
   return null;
 }
 
@@ -619,4 +619,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.5 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

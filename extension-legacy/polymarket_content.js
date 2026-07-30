@@ -206,13 +206,34 @@ function parseCentsFromText(txt) {
   return c;
 }
 
-function readPageOutcomeCents() {
+function teamMatchesButton(team, text) {
+  if (!team) return true;
+  const t = String(text || '');
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+  const nt = norm(team);
+  const bt = norm(t);
+  if (!nt || !bt) return false;
+  if (bt.includes(nt) || nt.includes(bt)) return true;
+  const words = String(team).split(/\s+/).filter((w) => w.length >= 3);
+  if (words.length >= 2 && words.every((w) => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t))) return true;
+  return words.some((w) => w.length >= 4 && new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t));
+}
+
+function centsFromStakePayout(stake, payout) {
+  if (!stake || !payout || payout <= stake * 1.01) return null;
+  const cents = (stake / payout) * 100;
+  if (!isValidPolyCents(cents)) return null;
+  return Math.round(cents * 10) / 10;
+}
+
+function readPageOutcomeCents(teamHint) {
   const candidates = [];
   for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
     if (!visible(btn) || isBuySellTab(btn)) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
     const cents = parseCentsFromText(t);
     if (!cents) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
 
     let score = 0;
     if (btn.getAttribute('aria-pressed') === 'true') score += 90;
@@ -220,7 +241,6 @@ function readPageOutcomeCents() {
     if (btn.getAttribute('aria-selected') === 'true') score += 80;
     const cls = String(btn.className || '');
     if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) score += 60;
-    if (/^buy\s+/i.test(t)) score += 15;
     if (t.length < 80) score += 10;
 
     candidates.push({ cents, score });
@@ -231,6 +251,8 @@ function readPageOutcomeCents() {
 }
 
 function readOutcomeButtonCents(teamHint) {
+  if (!teamHint) return null;
+
   const candidates = [];
   const roots = [findTradePanel(), document.body].filter(Boolean);
 
@@ -238,6 +260,7 @@ function readOutcomeButtonCents(teamHint) {
     for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
       if (!visible(btn) || isBuySellTab(btn)) continue;
       const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!teamMatchesButton(teamHint, t)) continue;
       const cents = parseCentsFromText(t);
       if (!cents) continue;
 
@@ -247,18 +270,13 @@ function readOutcomeButtonCents(teamHint) {
       if (btn.getAttribute('aria-selected') === 'true') score += 70;
       const cls = String(btn.className || '');
       if (/active|selected|checked|pressed/i.test(cls)) score += 50;
-      if (teamHint && new RegExp(teamHint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t)) score += 100;
       if (/^buy\s+/i.test(t)) score += 20;
 
       candidates.push({ cents, score, t });
     }
   }
 
-  if (!candidates.length) {
-    const pageCents = readPageOutcomeCents();
-    if (pageCents) return pageCents;
-    return null;
-  }
+  if (!candidates.length) return readPageOutcomeCents(teamHint);
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0].cents;
 }
@@ -293,37 +311,49 @@ function readBuyButtonCents(panel) {
     const sibling = btn.parentElement;
     if (sibling) {
       const m = (sibling.textContent || '').match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);
-      if (m) return parseFloat(m[1]);
+      if (m) {
+        const c = parseFloat(m[1]);
+        if (isValidPolyCents(c)) return c;
+      }
     }
   }
   return null;
 }
 
-function readLiveListedCents(panel) {
+function readLiveListedCents(panel, stake, payout) {
   const panelEl = panel || findTradePanel();
   const team = readTeamLabel(panelEl);
   const candidates = [];
 
-  function add(cents, score) {
+  function add(cents, score, src) {
     if (!isValidPolyCents(cents)) return;
-    candidates.push({ cents, score });
+    candidates.push({ cents, score, src });
   }
 
-  const selected = readOutcomeButtonCents(team);
-  if (selected) add(selected, 200);
+  // 1) 주문 패널 To win / Amount → 가장 정확 (예: $10 → $44.30 = 22.6¢)
+  const implied = centsFromStakePayout(stake, payout);
+  if (implied) add(implied, 400, 'implied');
 
-  const pageSelected = readPageOutcomeCents();
-  if (pageSelected) add(pageSelected, 180);
-
+  // 2) Avg price (주문 패널 내)
   const avg = readListedPriceCents(panelEl);
-  if (avg) add(avg, 120);
+  if (avg) add(avg, 350, 'avg');
 
-  const buyBtn = readBuyButtonCents(panelEl);
-  if (buyBtn) add(buyBtn, 100);
+  // 3) Buy {팀명} 과 일치하는 outcome 버튼만 (예: Nigma Galaxy 21¢)
+  if (team) {
+    const teamBtn = readOutcomeButtonCents(team);
+    if (teamBtn) add(teamBtn, 300, 'team-btn');
+  }
 
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].cents;
+
+  // implied/avg vs team-btn 차이 크면 주문 패널 값 우선
+  const best = candidates[0];
+  const panelBest = candidates.find((c) => c.src === 'implied' || c.src === 'avg');
+  if (panelBest && best.src === 'team-btn' && Math.abs(panelBest.cents - best.cents) >= 8) {
+    return panelBest.cents;
+  }
+  return best.cents;
 }
 
 function formatCentsLabel(cents) {
@@ -353,12 +383,16 @@ function readPolymarketSlip() {
   const stake = readStake(panel);
   const payout = readPayoutAmount(panel, stake);
   const team = readTeamLabel(panel);
-  const listedCents = readLiveListedCents(panel);
+  const listedCents = readLiveListedCents(panel, stake, payout);
 
   let odds = oddsFromCents(listedCents);
   let fromPayout = false;
 
-  if (!odds && stake && payout) {
+  const implied = centsFromStakePayout(stake, payout);
+  if (implied) {
+    odds = oddsFromCents(implied);
+    fromPayout = true;
+  } else if (!odds && stake && payout) {
     odds = calcOddsFromStakeAndPayout(stake, payout);
     fromPayout = !!(odds && odds > 1.001);
   }
@@ -377,7 +411,7 @@ function readPolymarketSlip() {
     };
   }
 
-  const priceCents = isValidPolyCents(listedCents) ? listedCents : decimalToCents(odds);
+  const priceCents = isValidPolyCents(listedCents) ? listedCents : (implied || decimalToCents(odds));
   if (!isValidPolyCents(priceCents)) {
     return {
       source: 'polymarket',
@@ -406,7 +440,7 @@ function readPolymarketSlip() {
     toWin: profit,
     hint: stake && payout
       ? `베팅 $${stake} → 수령 $${payout.toFixed(2)}`
-      : (listedCents ? `실시간 ${priceCents}¢` : ''),
+      : (listedCents ? `실시간 ${formatCentsLabel(priceCents)}` : ''),
     marketKind: 'ml',
     period: 'ft',
     marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
