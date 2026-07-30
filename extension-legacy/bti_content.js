@@ -763,6 +763,14 @@ function findBtiBetInput() {
   return walk(document);
 }
 
+function readBtiStake() {
+  const input = findBtiBetInput();
+  if (!input) return 0;
+  const raw = String(input.value || '').replace(/,/g, '').trim();
+  const v = parseInt(raw, 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 function hasVisibleBetslipCards() {
   return !!document.querySelector(
     '[class*="betslip_fe"] [class*="betInformation__title"], [class*="BetSecondary_bet"] [class*="betInformation__title"], [class*="betInformation__eventName"]'
@@ -1707,6 +1715,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;
   }
+  if (msg.type === 'READ_BTI_STAKE') {
+    sendResponse({ stake: readBtiStake() });
+    return false;
+  }
   if (msg.type === 'ENSURE_BTI_SLIP') {
     ensureSlipFromBoard(msg.hint || {}).then(sendResponse);
     return true;
@@ -1763,6 +1775,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 });
+
+(function startBtiStakeObserver() {
+  let lastStake = 0;
+  function notifyStake() {
+    const stake = readBtiStake();
+    if (stake === lastStake) return;
+    lastStake = stake;
+    if (stake <= 0) return;
+    try {
+      chrome.runtime.sendMessage({ type: 'BTI_STAKE_CHANGED', stake });
+    } catch (_) {}
+  }
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t || t.id !== 'counter' && !/counter|Counter|베팅/i.test(String(t.className || '') + (t.placeholder || ''))) return;
+    notifyStake();
+  }, true);
+  document.addEventListener('change', notifyStake, true);
+  setInterval(notifyStake, 500);
+})();
 
 // ── MutationObserver: BTI 배당/슬립 변화 즉시 감지 ──
 (function startBtiObserver() {

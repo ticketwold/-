@@ -773,6 +773,35 @@ function readAmountFromPanel(panel) {
   return null;
 }
 
+async function setPolyTradeAmount(amountUsd, force = true) {
+  const panel = findTradePanel();
+  if (!panel) return { ok: false, reason: '주문 패널 없음 — outcome 클릭 후 Amount 표시' };
+
+  ensureBuyTabSelected(panel);
+  await sleep(120);
+
+  const rounded = Math.max(1, Math.round(amountUsd * 100) / 100);
+  const existing = readAmountFromPanel(panel);
+  if (!force && existing && Math.abs(existing - rounded) < 0.05) {
+    return { ok: true, stake: existing, method: 'unchanged' };
+  }
+  if (existing && Math.abs(existing - rounded) < 0.02) {
+    return { ok: true, stake: existing, method: 'skip-same' };
+  }
+
+  const field = findAmountInput(panel);
+  if (field) {
+    await typeIntoField(field, String(rounded));
+    await sleep(180);
+    const stake = readAmountFromPanel(panel);
+    if (stake && stake >= 0.5) {
+      return { ok: true, stake, method: 'type', target: rounded };
+    }
+  }
+
+  return { ok: false, reason: `금액 입력 실패 — Amount에 $${rounded} 직접 입력`, stake: existing || 0 };
+}
+
 async function fillTradeAmount(panel, amount) {
   const rounded = Math.max(1, Math.round(amount * 100) / 100);
   const existing = readAmountFromPanel(panel);
@@ -956,6 +985,10 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     sendResponse({ ok: true, probe: probePolyBetUi() });
     return false;
   }
+  if (msg.type === 'SET_POLY_AMOUNT') {
+    setPolyTradeAmount(msg.amount, msg.force !== false).then(sendResponse);
+    return true;
+  }
   if (msg.type === 'PLACE_BET') {
     placePolymarketBet(msg.amount).then(sendResponse);
     return true;
@@ -964,6 +997,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 
 try {
   window.__polyPlaceBet = placePolymarketBet;
+  window.__polySetAmount = setPolyTradeAmount;
   window.__polyProbe = probePolyBetUi;
   window.__polyReadSlip = readPolymarketSlip;
 } catch (_) {}
