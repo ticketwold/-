@@ -268,6 +268,14 @@ async function readBtiSlip(btiTab, prefilled) {
     return res.slip;
   }
 
+  if (hint.excludeTeam || hint.polyTeam) {
+    res = await sendBti(btiTab.id, frameId, { type: 'READ_BTI_ODDS', hint: {} });
+    if (res?.slip?.odds > 1) {
+      lastStatus.bti = '';
+      return res.slip;
+    }
+  }
+
   const frame = await findBtiFrame(btiTab.id);
   if (frame?.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: frame.frameId };
@@ -275,7 +283,7 @@ async function readBtiSlip(btiTab, prefilled) {
     return frame.slip;
   }
 
-  lastStatus.bti = res?.slip ? '텐텐뱃: 슬립 배당 없음' : '텐텐뱃: BTI iframe 미연결';
+  lastStatus.bti = !res ? '텐텐뱃: BTI iframe 미연결' : '텐텐뱃: 배당판 배당 없음';
   return res?.slip || null;
 }
 

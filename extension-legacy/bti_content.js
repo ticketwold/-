@@ -191,6 +191,7 @@ function parseSlipFromCard(card) {
   const slipMktType = (function() {
     const t = allText.toLowerCase();
     if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
+    if ((t.includes('맵') || t.includes('map')) && (t.includes('우승') || t.includes('winner'))) return 'ml';
     if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
     if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
     return 'ml';
@@ -198,7 +199,13 @@ function parseSlipFromCard(card) {
 
   // W1/W2 슬립 — 실시간 배당판만
   if (/^W[12]$/i.test(selectionText.trim())) {
-    const boardOdds = readOddsFromBoardForSelection(selectionText, allText, 'ml');
+    let boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+    if (!boardOdds) {
+      const teams = parseEventTeams(eventText);
+      const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+      const teamLabel = side === 'away' ? teams.away : teams.home;
+      if (teamLabel) boardOdds = readOddsFromBoardForSelection(teamLabel, allText, slipMktType);
+    }
     if (!boardOdds) return null;
     const period = 'ft';
     const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
@@ -509,7 +516,7 @@ function readWMlOddsFromVisibleBoard(wNum) {
   );
   for (const mkt of marketRoots) {
     const label = (mkt.querySelector('[class*="marketName"], [class*="MarketName"]')?.textContent || mkt.textContent || '').slice(0, 120);
-    if (!/승리|winner|winning|money|승패|win\s*team/i.test(label)) continue;
+    if (!/승리|winner|winning|money|승패|win\s*team|맵.*우승|map.*winner|우승자/i.test(label)) continue;
     const btns = Array.from(mkt.querySelectorAll('button[class*="master_fe_Selections_selection"]'))
       .map((b) => parseSelectionButton(b))
       .filter((p) => p?.odds && p.element && isElementVisible(p.element));
@@ -545,9 +552,9 @@ function isInsideBetHistory(el) {
   for (let i = 0; i < 18 && node; i++) {
     const cn = String(node.className || '');
     const id = String(node.id || '');
-    const aria = String(node.getAttribute?.('aria-label') || '');
-    const blob = `${cn} ${id} ${aria}`.toLowerCase();
-    if (/mybets|my-bets|bet-history|bethistory|betsliphistory|openbets|settledbets|cashout|내\s*베팅|베팅\s*내역|베팅내역|미결제|정산|캐시아웃/i.test(blob)) return true;
+    const testId = String(node.getAttribute?.('data-testid') || '');
+    const blob = `${cn} ${id} ${testId}`.toLowerCase();
+    if (/mybets|my-bets|my_bets|bet-history|bethistory|betsliphistory|openbets|settledbets|bet_history|historybets|pastbets/i.test(blob)) return true;
     node = node.parentElement;
   }
   return false;
@@ -562,13 +569,8 @@ function isActiveBetslipOpen() {
     const st = window.getComputedStyle(input);
     if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
   } catch (_) {}
-  let el = input.parentElement;
-  for (let i = 0; i < 14 && el; i++) {
-    const cn = String(el.className || '');
-    if (/betslip|BetSlip|betslip_fe/i.test(cn)) return true;
-    el = el.parentElement;
-  }
-  return false;
+  // BTI 스킨마다 betslip 클래스명이 달라서 — 금액 입력이 보이면 활성 슬립으로 간주
+  return true;
 }
 
 function getRealSlipCards() {
@@ -1025,6 +1027,7 @@ function detectMarketType(text) {
   const t = (text || '').toLowerCase();
   if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
   if (t.includes('승리팀') || t.includes('승리') || t.includes('winner') || t.includes('winning team')) return 'ml';
+  if ((t.includes('맵') || t.includes('map')) && (t.includes('우승') || t.includes('winner'))) return 'ml';
   if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
   if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
   return 'ml';
@@ -1302,7 +1305,12 @@ function readBtiBoardOdds(hint = {}) {
   if (visiblePool.length >= 2) pool = visiblePool;
   else if (!pool.length) pool = collectVisibleMlButtons();
 
-  const pick = pickBoardSelection(pool, hint);
+  let pick = pickBoardSelection(pool, hint);
+  if (!pick?.odds) {
+    const fallback = collectVisibleMlButtons();
+    if (fallback.length) pick = pickBoardSelection(fallback, hint);
+  }
+  if (!pick?.odds && pool.length) pick = pool.find((s) => s.odds > 1.01 && s.element && isElementVisible(s.element)) || pool[0];
   if (!pick?.odds) return null;
 
   const evText = event?.eventText || findEventNameNearButton(pick.element) || '';
@@ -1354,20 +1362,32 @@ function readLiveBoardOddsForSlip(slip) {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
-  const hasCards = getRealSlipCards().length > 0;
 
-  // 슬립 없어도 배당판 실시간 우선 (카트 비운 뒤 베팅내역 배당 X)
   const board = readBtiBoardOdds(hintObj);
   if (board?.odds > 1.01) {
     return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
   }
 
-  if (!hasCards) return null;
+  // hint에 excludeTeam 있으면 반대편 못 찾을 때 전체 보드로 재시도
+  if (hintObj.excludeTeam || hintObj.polyTeam) {
+    const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
+    if (plain?.odds > 1.01) {
+      return enrichBtiSlip({ ...plain, source: 'board', fromSlip: false });
+    }
+  }
 
-  const slip = readBtiSlip(hintObj);
-  if (slip?.selectionText) {
-    const live = readLiveBoardOddsForSlip(slip);
-    if (live?.odds > 1.01) return live;
+  const hasCards = getRealSlipCards().length > 0;
+  if (hasCards) {
+    const slip = readBtiSlip({ ...hintObj, excludeTeam: null, polyTeam: null });
+    if (slip?.selectionText) {
+      const live = readLiveBoardOddsForSlip(slip);
+      if (live?.odds > 1.01) return live;
+    }
+  }
+
+  const any = readBtiBoardOdds({});
+  if (any?.odds > 1.01) {
+    return enrichBtiSlip({ ...any, source: 'board', fromSlip: false });
   }
 
   return null;

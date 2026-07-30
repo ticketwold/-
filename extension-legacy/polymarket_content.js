@@ -349,18 +349,24 @@ function readSelectedOutcomeForTeam(teamHint) {
 }
 
 function readTeamLabel(panel) {
-  const panelEl = panel || findTradePanel();
-  const text = panelEl?.innerText || '';
+  const scopes = [panel, findTradePanel(), document.body].filter(Boolean);
+  const seen = new Set();
 
-  for (const btn of (panelEl || document).querySelectorAll('button, [role="button"]')) {
-    if (!visible(btn)) continue;
-    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    const m = t.match(/^buy\s+(.+)$/i);
-    if (m) return m[1].trim();
+  for (const scope of scopes) {
+    if (!scope || seen.has(scope)) continue;
+    seen.add(scope);
+
+    for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+      if (!visible(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const m = t.match(/^buy\s+(.+)$/i);
+      if (m) return m[1].trim();
+    }
+
+    const text = scope.innerText || '';
+    const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@]+?)(?:\s*$|\s+Avg|\s+To win)/i);
+    if (buyM) return buyM[1].trim();
   }
-
-  const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@]+?)(?:\s*$|\s+Avg|\s+To win)/i);
-  if (buyM) return buyM[1].trim();
 
   return '';
 }
@@ -418,15 +424,20 @@ function readLiveListedCents(panel, stake, payout) {
   const implied = centsFromStakePayout(stake, payout);
   if (implied) add(implied, 100, 'implied');
 
+  if (!candidates.length) {
+    const page = readPageOutcomeCents(team);
+    if (page) add(page, 420, 'page');
+  }
+
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
 
   const best = candidates[0];
   // 팀 기준 값이 있으면 stale implied/avg 로 덮어쓰지 않음
-  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn') return best.cents;
+  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn' || best.src === 'page') return best.cents;
 
   const teamPick = candidates.find((c) =>
-    c.src === 'buy-team' || c.src === 'buy-btn' || c.src === 'selected' || c.src === 'team-btn'
+    c.src === 'buy-team' || c.src === 'buy-btn' || c.src === 'selected' || c.src === 'team-btn' || c.src === 'page'
   );
   if (teamPick && Math.abs(teamPick.cents - best.cents) >= 3) return teamPick.cents;
 
