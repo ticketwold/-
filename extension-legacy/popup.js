@@ -324,6 +324,9 @@ function mergeSlipCached(cached, fresh) {
   if (!fresh || !slipOdds(fresh)) return null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
+  if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
+    return { ...fresh, odds: freshOdds };
+  }
   const cachedCents = cached.priceCents;
   if (fresh.priceCents && fresh.priceCents !== cachedCents) {
     return { ...cached, ...fresh, odds: freshOdds };
@@ -622,4 +625,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.2.8 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.2.9 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

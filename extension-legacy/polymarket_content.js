@@ -281,22 +281,47 @@ function readOutcomeButtonCents(teamHint) {
   return candidates[0].cents;
 }
 
+function selectionScore(btn) {
+  let score = 0;
+  if (btn.getAttribute('aria-pressed') === 'true') score += 120;
+  if (btn.getAttribute('aria-selected') === 'true') score += 110;
+  if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 110;
+  const cls = String(btn.className || '');
+  if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) score += 80;
+  return score;
+}
+
+function readSelectedOutcomeForTeam(teamHint) {
+  const candidates = [];
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+    const sel = selectionScore(btn);
+    if (sel < 60) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+    candidates.push({ cents, score: sel + (teamHint && teamMatchesButton(teamHint, t) ? 50 : 0), t });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
 function readTeamLabel(panel) {
   const panelEl = panel || findTradePanel();
   const text = panelEl?.innerText || '';
 
   for (const btn of (panelEl || document).querySelectorAll('button, [role="button"]')) {
     if (!visible(btn)) continue;
-    const m = (btn.textContent || '').match(/^buy\s+([A-Za-z0-9][^\n$¢@]{0,40})/i);
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const m = t.match(/^buy\s+(.+)$/i);
     if (m) return m[1].trim();
   }
 
-  const buyM = text.match(/(?:Buy|매수)\s+([A-Za-z0-9][^\n$¢@]{0,40})/i);
+  const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@]+?)(?:\s*$|\s+Avg|\s+To win)/i);
   if (buyM) return buyM[1].trim();
 
-  const h1 = document.querySelector('h1')?.textContent || '';
-  const vs = h1.match(/(.+?)\s+vs\.?\s+(.+)/i);
-  if (vs) return vs[2].trim();
   return '';
 }
 
@@ -330,29 +355,33 @@ function readLiveListedCents(panel, stake, payout) {
     candidates.push({ cents, score, src });
   }
 
-  // 1) 주문 패널 To win / Amount → 가장 정확 (예: $10 → $44.30 = 22.6¢)
-  const implied = centsFromStakePayout(stake, payout);
-  if (implied) add(implied, 400, 'implied');
-
-  // 2) Avg price (주문 패널 내)
-  const avg = readListedPriceCents(panelEl);
-  if (avg) add(avg, 350, 'avg');
-
-  // 3) Buy {팀명} 과 일치하는 outcome 버튼만 (예: Nigma Galaxy 21¢)
+  // 1) Buy {팀} + 선택된 outcome 버튼 (홈/원정 전환 즉시 반영)
   if (team) {
+    const selected = readSelectedOutcomeForTeam(team);
+    if (selected) add(selected, 500, 'selected');
+
     const teamBtn = readOutcomeButtonCents(team);
-    if (teamBtn) add(teamBtn, 300, 'team-btn');
+    if (teamBtn) add(teamBtn, 450, 'team-btn');
   }
+
+  // 2) Avg price — 현재 선택 팀 패널
+  const avg = readListedPriceCents(panelEl);
+  if (avg) add(avg, 400, 'avg');
+
+  // 3) To win / Amount (팀 전환 직후 stale 할 수 있어 낮은 우선순위)
+  const implied = centsFromStakePayout(stake, payout);
+  if (implied) add(implied, 320, 'implied');
 
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
 
-  // implied/avg vs team-btn 차이 크면 주문 패널 값 우선
   const best = candidates[0];
-  const panelBest = candidates.find((c) => c.src === 'implied' || c.src === 'avg');
-  if (panelBest && best.src === 'team-btn' && Math.abs(panelBest.cents - best.cents) >= 8) {
-    return panelBest.cents;
-  }
+  // 팀 기준 값이 있으면 stale implied/avg 로 덮어쓰지 않음
+  if (best.src === 'selected' || best.src === 'team-btn') return best.cents;
+
+  const teamPick = candidates.find((c) => c.src === 'selected' || c.src === 'team-btn');
+  if (teamPick && Math.abs(teamPick.cents - best.cents) >= 3) return teamPick.cents;
+
   return best.cents;
 }
 
@@ -389,9 +418,15 @@ function readPolymarketSlip() {
   let fromPayout = false;
 
   const implied = centsFromStakePayout(stake, payout);
-  if (implied) {
+  if (!odds && implied) {
     odds = oddsFromCents(implied);
     fromPayout = true;
+  } else if (odds && implied) {
+    const impliedOdds = oddsFromCents(implied);
+    if (impliedOdds && Math.abs(implied - listedCents) <= 2) {
+      odds = impliedOdds;
+      fromPayout = true;
+    }
   } else if (!odds && stake && payout) {
     odds = calcOddsFromStakeAndPayout(stake, payout);
     fromPayout = !!(odds && odds > 1.001);
