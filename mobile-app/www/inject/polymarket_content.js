@@ -579,10 +579,12 @@ function hasInPageDialog() {
 
 function findModalActionButton() {
   const patterns = [
-    /^(confirm|submit|place order|approve|sign|continue|yes|확인|승인|주문)$/i,
-    /confirm (purchase|buy|order|trade)/i,
+    /confirm/i,
     /place order/i,
-    /^buy\s+/i
+    /submit order/i,
+    /complete purchase/i,
+    /approve/i,
+    /^(submit|continue|yes|확인|승인|주문)$/i
   ];
   const scopes = [];
   for (const dlg of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) scopes.push(dlg);
@@ -611,18 +613,23 @@ function pageHasOrderError() {
 }
 
 async function waitAfterBuyClick(panel, btn) {
-  for (let i = 0; i < 20; i++) {
-    await sleep(200);
+  for (let i = 0; i < 30; i++) {
+    await sleep(80);
     if (pageHasOrderSuccess()) {
       return { success: true, confirmed: true, btnText: (btn?.textContent || '').trim().slice(0, 50) };
     }
     if (pageHasOrderError()) {
       return { success: false, reason: '주문 거부/잔액 부족' };
     }
+    for (const inp of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
+      if (!visible(inp)) continue;
+      const ctx = (inp.closest('[role="dialog"], label, div')?.textContent || '').slice(0, 200);
+      if (/risk|understand|agree|accept|terms/i.test(ctx) && !inp.checked && inp.getAttribute('aria-checked') !== 'true') {
+        robustClick(inp);
+      }
+    }
     const modalBtn = findModalActionButton();
     if (modalBtn) robustClick(modalBtn);
-    const retryBtn = findPlaceOrderButton(panel);
-    if (retryBtn && i < 2 && !hasInPageDialog()) robustClick(retryBtn);
   }
 
   // Polymarket 캐시 잔액: Buy 클릭만으로 주문됨 (지갑 서명 불필요)
