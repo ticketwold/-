@@ -952,13 +952,26 @@ function queryBoardButtons() {
   const selectors = [
     'button[class*="master_fe_Selections_selection"]',
     'button[class*="Selections_selection"]',
-    'button[class*="selection"][class*="Selection"]'
+    'button[class*="selection"][class*="Selection"]',
+    'button[class*="Selection"]'
   ];
   const seen = new Set();
   const out = [];
   for (const sel of selectors) {
     for (const btn of document.querySelectorAll(sel)) {
       if (seen.has(btn)) continue;
+      seen.add(btn);
+      out.push(btn);
+    }
+  }
+  if (!out.length) {
+    for (const btn of document.querySelectorAll('button')) {
+      if (seen.has(btn) || !isElementVisible(btn)) continue;
+      const txt = (btn.textContent || '').trim();
+      if (/오버|언더|over|under/i.test(txt)) continue;
+      const hasOddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+      const hasOddsText = /\d+\.\d{2,3}/.test(txt);
+      if (!hasOddsEl && !hasOddsText) continue;
       seen.add(btn);
       out.push(btn);
     }

@@ -3,7 +3,8 @@
 'use strict';
 
 const POLL_MS = 16;
-const FALLBACK_REFRESH_MS = 250;
+const FALLBACK_REFRESH_MS = 800;
+const BTI_FULL_SCAN_MS = 2500;
 const IS_PANEL = document.body.classList.contains('panel-mode');
 let botRunning = false;
 let betInProgress = false;
@@ -14,6 +15,11 @@ let pollTimer = null;
 let cachedBti = null;
 let cachedPoly = null;
 let lastBtiFrame = null;
+let lastBtiFullScanAt = 0;
+let refreshPending = false;
+let refreshQueued = false;
+let polyScriptReady = new Set();
+let btiScriptReady = new Set();
 let lastStatus = { bti: '', poly: '' };
 
 function log(text, cls = '') {
@@ -70,7 +76,7 @@ function formatBtiMeta(slip) {
     if (slip.side === 'away' || slip.side === 'a') label = slip.awayTeam || team || '-';
     else label = slip.homeTeam || team || '-';
   } else label = team || '-';
-  if (slip.source === 'board-live' || slip.source === 'board') {
+  if (slip.source === 'board-live' || slip.source === 'board' || slip.source === 'main-scrape') {
     return `${label} · 실시간`;
   }
   return label;
@@ -146,23 +152,139 @@ function sendPoly(tabId, msg) {
 }
 
 async function ensureBtiScript(tabId, frameId) {
+  const key = `${tabId}:${frameId}`;
+  if (btiScriptReady.has(key)) return;
   try {
     await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       files: ['bti_content.js']
     });
-    await new Promise((r) => setTimeout(r, 150));
+    btiScriptReady.add(key);
   } catch (_) {}
 }
 
 async function ensurePolyScript(tabId) {
+  if (polyScriptReady.has(tabId)) return;
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ['polymarket_content.js']
     });
-    await new Promise((r) => setTimeout(r, 200));
+    polyScriptReady.add(tabId);
   } catch (_) {}
+}
+
+async function injectReadBtiFrame(tabId, frameId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => {
+        function vis(el) {
+          const r = el?.getBoundingClientRect?.();
+          return !!(r && r.width > 2 && r.height > 2);
+        }
+        function parseOdds(t) {
+          const n = parseFloat(String(t || '').trim());
+          if (!n || n <= 1.01 || n >= 100) return null;
+          return n;
+        }
+        function norm(s) {
+          return String(s || '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+        }
+        function teamMatch(a, b) {
+          const na = norm(a);
+          const nb = norm(b);
+          if (!na || !nb) return false;
+          return na.includes(nb) || nb.includes(na);
+        }
+
+        let hasInput = false;
+        for (const inp of document.querySelectorAll('input, textarea')) {
+          if (!vis(inp)) continue;
+          const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
+          if (/counter|Counter|베팅/i.test(blob)) { hasInput = true; break; }
+        }
+
+        const board = [];
+        for (const btn of document.querySelectorAll('button')) {
+          if (!vis(btn)) continue;
+          const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!txt || /오버|언더|over|under/i.test(txt)) continue;
+          let odds = null;
+          const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+          if (oddsEl) odds = parseOdds(oddsEl.textContent);
+          if (!odds) {
+            const m = txt.match(/(\d+\.\d{2,3})\s*$/);
+            if (m) odds = parseOdds(m[1]);
+          }
+          if (!odds) continue;
+          const selected = btn.getAttribute('aria-pressed') === 'true'
+            || /selected|active|pressed|highlight/i.test(btn.className || '');
+          board.push({ odds, txt, selected });
+        }
+
+        let selectionText = '';
+        let eventText = '';
+        let mktText = '';
+        if (hasInput) {
+          for (const el of document.querySelectorAll('[class*="betInformation__title"], [class*="betInformation__eventName"], [class*="betInformation__marketName"]')) {
+            const t = (el.textContent || '').trim();
+            if (!t) continue;
+            if (/vs|VS|대/.test(t)) eventText = t;
+            else if (/맵|map|우승|winner|승패|money/i.test(t)) mktText = t;
+            else if (t.length < 50) selectionText = selectionText || t;
+          }
+        }
+
+        let odds = null;
+        if (selectionText && board.length) {
+          if (/^W1$/i.test(selectionText) && board.length >= 1) odds = board[0].odds;
+          else if (/^W2$/i.test(selectionText) && board.length >= 2) odds = board[board.length - 1].odds;
+          else {
+            const hit = board.find((b) => teamMatch(selectionText, b.txt));
+            if (hit) odds = hit.odds;
+          }
+        }
+        if (!odds) {
+          const sel = board.find((b) => b.selected) || board[0];
+          odds = sel?.odds || null;
+        }
+        if (!odds) return null;
+
+        let homeTeam = '';
+        let awayTeam = '';
+        if (eventText) {
+          for (const sep of [' vs ', ' VS ', ' 대 ']) {
+            if (eventText.includes(sep)) {
+              [homeTeam, awayTeam] = eventText.split(sep, 2).map((s) => s.trim());
+              break;
+            }
+          }
+        }
+
+        let teamLabel = selectionText;
+        if (/^W1$/i.test(selectionText)) teamLabel = homeTeam || selectionText;
+        if (/^W2$/i.test(selectionText)) teamLabel = awayTeam || selectionText;
+
+        return {
+          odds,
+          selectionText,
+          eventText,
+          mktText,
+          teamLabel,
+          homeTeam,
+          awayTeam,
+          source: 'main-scrape',
+          hasInput,
+          buttonCount: board.length,
+          marketKind: 'ml'
+        };
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function injectReadPoly(tabId) {
@@ -193,6 +315,22 @@ async function injectReadPoly(tabId) {
           if (m) { team = m[1].trim(); break; }
         }
 
+        const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ');
+        const avgM = bodyText.match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
+        if (avgM) {
+          const c = parseFloat(avgM[1]);
+          if (c >= 1 && c < 100) {
+            return {
+              source: 'polymarket',
+              odds: 100 / c,
+              priceCents: c,
+              teamLabel: team,
+              marketKind: 'ml',
+              displayLabel: `${c}¢ (${(100 / c).toFixed(3)})`
+            };
+          }
+        }
+
         const candidates = [];
         for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
           const r = btn.getBoundingClientRect();
@@ -201,9 +339,10 @@ async function injectReadPoly(tabId) {
           const cents = parseCents(t);
           if (!cents) continue;
           let score = 0;
-          if (team && teamMatch(team, t)) score += 100;
-          if (btn.getAttribute('aria-pressed') === 'true') score += 50;
-          candidates.push({ cents, score, team: t });
+          if (team && teamMatch(team, t)) score += 120;
+          if (btn.getAttribute('aria-pressed') === 'true') score += 80;
+          if (/^buy\s+/i.test(t)) score += 40;
+          candidates.push({ cents, score });
         }
         candidates.sort((a, b) => b.score - a.score);
         const pick = candidates[0];
@@ -213,7 +352,8 @@ async function injectReadPoly(tabId) {
           odds: 100 / pick.cents,
           priceCents: pick.cents,
           teamLabel: team,
-          marketKind: 'ml'
+          marketKind: 'ml',
+          displayLabel: `${pick.cents}¢ (${(100 / pick.cents).toFixed(3)})`
         };
       }
     });
@@ -223,51 +363,80 @@ async function injectReadPoly(tabId) {
   }
 }
 
-async function readBtiFromAllFrames(tabId, hint = {}) {
-  const frames = await getAllFrames(tabId);
-  let bestSlip = null;
-  let bestScore = -1;
-  let bestFrameId = lastBtiFrame?.tabId === tabId ? lastBtiFrame.frameId : 0;
+function scoreBtiProbe(ping, slip) {
+  let score = 0;
+  if (slip?.odds > 1.01) score += 1000 + slip.odds;
+  if (ping?.hasInput || slip?.hasInput) score += 500;
+  if (ping?.slipCount > 0) score += 300;
+  if (ping?.slipOdds > 1) score += 250;
+  if (ping?.buttonCount > 0) score += Math.min(ping.buttonCount, 100);
+  if (slip?.buttonCount > 0) score += Math.min(slip.buttonCount, 80);
+  return score;
+}
 
-  for (const { frameId } of frames) {
+async function probeBtiFrame(tabId, frameId, hint = {}) {
+  let ping = await sendBti(tabId, frameId, { type: 'PING' });
+  if (!ping?.ok) {
     await ensureBtiScript(tabId, frameId);
-    const ping = await sendBti(tabId, frameId, { type: 'PING' });
-    if (!ping?.ok) continue;
+    ping = await sendBti(tabId, frameId, { type: 'PING' });
+  }
 
+  let slip = null;
+  if (ping?.ok) {
     const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint });
-    const slip = res?.slip;
-    let score = 0;
-    if (slip?.odds > 1.01) score += 1000 + slip.odds;
-    if (ping.hasInput) score += 500;
-    if (ping.slipCount > 0) score += 300;
-    if (ping.slipOdds > 1) score += 250;
-    if (ping.buttonCount > 0) score += Math.min(ping.buttonCount, 100);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestSlip = slip;
-      bestFrameId = frameId;
+    slip = res?.slip || null;
+  }
+  if (!(slip?.odds > 1.01)) {
+    const scraped = await injectReadBtiFrame(tabId, frameId);
+    if (scraped?.odds > 1.01) slip = scraped;
+  }
+  if (!(slip?.odds > 1.01) && ping?.ok && (hint.excludeTeam || hint.polyTeam)) {
+    const res2 = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: {} });
+    if (res2?.slip?.odds > 1.01) slip = res2.slip;
+    else {
+      const scraped2 = await injectReadBtiFrame(tabId, frameId);
+      if (scraped2?.odds > 1.01) slip = scraped2;
     }
   }
 
-  if (!(bestSlip?.odds > 1.01) && (hint.excludeTeam || hint.polyTeam)) {
-    return readBtiFromAllFrames(tabId, {});
+  return { frameId, ping, slip, score: scoreBtiProbe(ping, slip) };
+}
+
+async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
+  const now = Date.now();
+  const useCacheOnly = !forceFull && (now - lastBtiFullScanAt) < BTI_FULL_SCAN_MS;
+
+  if (!forceFull && lastBtiFrame?.tabId === tabId) {
+    const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint);
+    if (fast.slip?.odds > 1.01) {
+      lastBtiFrame = { tabId, frameId: fast.frameId };
+      return { slip: fast.slip, frameId: fast.frameId };
+    }
   }
 
-  return { slip: bestSlip, frameId: bestFrameId };
+  if (useCacheOnly && lastBtiFrame?.tabId === tabId) {
+    return { slip: null, frameId: lastBtiFrame.frameId };
+  }
+
+  const frames = await getAllFrames(tabId);
+  const order = [];
+  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
+  for (const f of frames) {
+    if (!order.includes(f.frameId)) order.push(f.frameId);
+  }
+
+  const results = await Promise.all(order.map((frameId) => probeBtiFrame(tabId, frameId, hint)));
+  results.sort((a, b) => b.score - a.score);
+  const best = results[0];
+  lastBtiFullScanAt = now;
+  if (best?.slip?.odds > 1.01) {
+    lastBtiFrame = { tabId, frameId: best.frameId };
+  }
+  return { slip: best?.slip || null, frameId: best?.frameId ?? (lastBtiFrame?.frameId || 0) };
 }
 
 async function findBtiFrame(tabId) {
-  const merged = await readBtiFromAllFrames(tabId, btiHintFromPoly(cachedPoly));
-  if (!merged.slip && merged.frameId === 0) {
-    const frames = await getAllFrames(tabId);
-    for (const { frameId } of frames) {
-      const ping = await sendBti(tabId, frameId, { type: 'PING' });
-      if (ping?.ok && (ping.hasInput || ping.buttonCount > 0)) {
-        return { frameId, ping, slip: null };
-      }
-    }
-  }
+  const merged = await readBtiFromAllFrames(tabId, btiHintFromPoly(cachedPoly), true);
   const ping = await sendBti(tabId, merged.frameId, { type: 'PING' });
   return { frameId: merged.frameId, ping, slip: merged.slip };
 }
@@ -290,14 +459,11 @@ async function findTabs() {
   if (!polyTab && polyTabs.length) polyTab = polyTabs[0];
 
   if (btiTab) {
-    const frame = await findBtiFrame(btiTab.id);
-    if (frame) {
-      btiTab = { id: btiTab.id, url: btiTab.url, frameId: frame.frameId };
-      lastBtiFrame = { tabId: btiTab.id, frameId: frame.frameId };
-      if (frame.slip?.odds > 1) return { btiTab, polyTab: polyTab ? { id: polyTab.id, url: polyTab.url } : null, btiSlip: frame.slip };
-    } else {
-      btiTab = { id: btiTab.id, url: btiTab.url, frameId: lastBtiFrame?.frameId || 0 };
-    }
+    btiTab = {
+      id: btiTab.id,
+      url: btiTab.url,
+      frameId: lastBtiFrame?.tabId === btiTab.id ? lastBtiFrame.frameId : 0
+    };
   }
 
   return {
@@ -312,8 +478,7 @@ function btiHintFromPoly(poly) {
   return team ? { excludeTeam: team, polyTeam: team } : {};
 }
 
-async function readBtiSlip(btiTab, prefilled) {
-  if (prefilled?.odds > 1) return prefilled;
+async function readBtiSlip(btiTab) {
   if (!btiTab?.id) {
     lastStatus.bti = '텐텐뱃: x10x10s 탭 없음';
     return null;
@@ -328,8 +493,15 @@ async function readBtiSlip(btiTab, prefilled) {
     return merged.slip;
   }
 
-  lastStatus.bti = merged.frameId != null ? '텐텐뱃: 배당판 배당 없음' : '텐텐뱃: BTI iframe 미연결';
-  return merged.slip || null;
+  const forced = await readBtiFromAllFrames(btiTab.id, hint, true);
+  if (forced.slip?.odds > 1) {
+    lastBtiFrame = { tabId: btiTab.id, frameId: forced.frameId };
+    lastStatus.bti = '';
+    return forced.slip;
+  }
+
+  lastStatus.bti = lastBtiFrame?.tabId === btiTab.id ? '텐텐뱃: 배당판 배당 없음' : '텐텐뱃: BTI iframe 미연결';
+  return null;
 }
 
 async function readPolySlip(polyTab) {
@@ -338,32 +510,34 @@ async function readPolySlip(polyTab) {
     return null;
   }
 
-  let res = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
+  const [res, injected] = await Promise.all([
+    sendPoly(polyTab.id, { type: 'READ_SLIP' }),
+    injectReadPoly(polyTab.id)
+  ]);
+
   if (res?.slip?.odds > 1) {
     lastStatus.poly = '';
     return res.slip;
   }
-
-  await ensurePolyScript(polyTab.id);
-  res = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
-  if (res?.slip?.odds > 1) {
-    lastStatus.poly = '';
-    return res.slip;
-  }
-
-  const injected = await injectReadPoly(polyTab.id);
   if (injected?.odds > 1) {
     lastStatus.poly = '';
     return injected;
   }
 
-  if (injected?.needsStake || res?.slip?.needsStake) {
+  await ensurePolyScript(polyTab.id);
+  const res2 = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
+  if (res2?.slip?.odds > 1) {
+    lastStatus.poly = '';
+    return res2.slip;
+  }
+
+  if (injected?.needsStake || res2?.slip?.needsStake) {
     lastStatus.poly = 'Polymarket: 금액($) 입력 필요';
-    return injected || res?.slip;
+    return injected || res2?.slip;
   }
 
   lastStatus.poly = 'Polymarket: 배당 읽기 실패 — 탭 새로고침';
-  return injected || res?.slip || null;
+  return injected || res2?.slip || null;
 }
 
 function slipOdds(slip) {
@@ -401,15 +575,30 @@ function applySlipUpdate(source, slip) {
 }
 
 async function refreshSlips() {
-  const found = await findTabs();
-  const poly = await readPolySlip(found.polyTab);
-  const bti = await readBtiSlip(found.btiTab, found.btiSlip);
+  if (refreshPending) {
+    refreshQueued = true;
+    return { bti: cachedBti, poly: cachedPoly };
+  }
+  refreshPending = true;
+  try {
+    const found = await findTabs();
+    const [poly, bti] = await Promise.all([
+      readPolySlip(found.polyTab),
+      readBtiSlip(found.btiTab)
+    ]);
 
-  cachedPoly = mergeSlipCached(cachedPoly, poly);
-  cachedBti = mergeSlipCached(cachedBti, bti);
+    cachedPoly = mergeSlipCached(cachedPoly, poly);
+    cachedBti = mergeSlipCached(cachedBti, bti);
 
-  updateSlipUI(cachedBti, cachedPoly);
-  return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
+    updateSlipUI(cachedBti, cachedPoly);
+    return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
+  } finally {
+    refreshPending = false;
+    if (refreshQueued) {
+      refreshQueued = false;
+      refreshSlips();
+    }
+  }
 }
 
 async function placeBtiBet(btiTab, amount, targetOdds, hint = {}) {
@@ -678,4 +867,4 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => { if (!botRunning) refreshSlips(); }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.3.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.4.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
