@@ -1,4 +1,4 @@
-// background.js v5 — 텐텐뱃 (x10x10s) + Polymarket 전용
+// background.js v5.7 — 텐텐뱃 (x10x10s) + Polymarket / BC.Game
 importScripts('sites_config.js', 'teams.js', 'odds.js', 'poly_api.js');
 
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0';
@@ -189,12 +189,26 @@ async function pickBtiTab() {
   return null;
 }
 
-async function findPolymarketTab() {
+async function findLeg2Tab() {
   const tabs = await chrome.tabs.query({});
+  let best = null;
+  let bestScore = -1;
+  const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const activeId = activeTabs[0]?.id;
+
   for (const tab of tabs) {
-    if (tab.url && isPolymarketUrl(tab.url)) return { id: tab.id, url: tab.url };
+    if (!tab.url || !isLeg2PredictionUrl(tab.url)) continue;
+    let score = 0;
+    if (isLeg2EventUrl(tab.url)) score += 20;
+    if (/predictions/i.test(tab.url)) score += 5;
+    if (tab.id === activeId) score += 15;
+    if (score > bestScore) {
+      bestScore = score;
+      best = tab;
+    }
   }
-  return null;
+  if (!best) return null;
+  return { id: best.id, url: best.url, site: leg2SiteKey(best.url) };
 }
 
 function parseBtiSelectionPrice(s) {
@@ -304,13 +318,15 @@ async function runSearchOnce() {
     console.warn('[Poly API]', e.message);
   }
   const opps = findArbOpportunities(btiAll, polyAll);
+  const leg2Tab = await findLeg2Tab();
   return {
     opportunities: opps,
     stats: {
       btiTotal: btiAll.length,
       btiTabFound: !!btiTab,
       polyTotal: polyAll.length,
-      polyTabFound: !!(await findPolymarketTab()),
+      polyTabFound: !!leg2Tab,
+      leg2Site: leg2Tab ? leg2SiteLabel(leg2Tab.url) : '예측',
       matched: opps.length
     }
   };

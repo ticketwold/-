@@ -10,7 +10,10 @@ const POLY_PRIORITY_SPORTS = new Set([
 ]);
 
 function slugFromPolyUrl(url) {
-  const m = String(url || '').match(/\/event\/([^/?#]+)/i);
+  const s = String(url || '');
+  let m = s.match(/\/predictions\/event\/([^/?#]+)/i);
+  if (m) return decodeURIComponent(m[1]);
+  m = s.match(/\/event\/([^/?#]+)/i);
   return m ? decodeURIComponent(m[1]) : null;
 }
 
@@ -144,7 +147,7 @@ function pickPolyOutcomeForHint(ml, teamHint) {
   return ml[0];
 }
 
-function polyEventToSlip(event, teamHint = '') {
+function polyEventToSlip(event, teamHint = '', siteKey = 'polymarket') {
   const matchup = polyEventToMatchup(event);
   if (!matchup) return null;
 
@@ -153,7 +156,7 @@ function polyEventToSlip(event, teamHint = '') {
 
   const cents = Math.round(row.price * 1000) / 10;
   return {
-    source: 'polymarket-api',
+    source: `${siteKey}-api`,
     odds: row.decimal,
     priceCents: cents,
     price: row.price,

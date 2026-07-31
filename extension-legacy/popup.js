@@ -1,4 +1,4 @@
-// popup.js v5.0.1 — 텐텐뱃 + Polymarket 전용
+// popup.js v5.7.0 — 텐텐뱃 + Polymarket / BC.Game
 
 'use strict';
 
@@ -35,12 +35,38 @@ function formatPolyOddsForHistory(slip) {
   return slip.odds.toFixed(3);
 }
 
+let cachedLeg2Url = null;
+
+function leg2ShortLabel() {
+  return leg2SiteShort(cachedLeg2Url) || '폴리';
+}
+
+function leg2FullLabel() {
+  return leg2SiteLabel(cachedLeg2Url) || 'Polymarket';
+}
+
+function isLeg2Source(source) {
+  return source === 'polymarket' || source === 'bcgame';
+}
+
+function updateLeg2UiLabels() {
+  const label = leg2FullLabel();
+  const short = leg2ShortLabel();
+  const leg2LabelEl = $('leg2Label');
+  if (leg2LabelEl) leg2LabelEl.textContent = label;
+  const calcLeg2 = $('calcLeg2Label');
+  if (calcLeg2) calcLeg2.textContent = label;
+  const payoutLeg2 = $('payoutLeg2Label');
+  if (payoutLeg2) payoutLeg2.textContent = `${label} 당첨금`;
+}
+
 function formatHistoryLine(bti, poly, arbBti, profit) {
   const polyO = poly?.odds > 1 ? poly.odds : null;
   const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
   const team = poly?.teamLabel || formatBtiMeta(bti) || '경기';
   const profitText = profit != null ? `${profit.toFixed(2)}%` : '-';
-  return `${team} · 텐텐뱃 ${btiO?.toFixed(3) || '-'} · 폴리 ${formatPolyOddsForHistory(poly)} · 수익률 ${profitText}`;
+  const leg2 = leg2ShortLabel();
+  return `${team} · 텐텐뱃 ${btiO?.toFixed(3) || '-'} · ${leg2} ${formatPolyOddsForHistory(poly)} · 수익률 ${profitText}`;
 }
 
 function buildHistoryKey(btiO, polyO, team) {
@@ -238,9 +264,9 @@ function updateSlipUI(bti, poly, arbBti = null) {
 
   const hint = $('profitHint');
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
-  else if (!poly?.odds) hint.textContent = lastStatus.poly || 'Polymarket: Amount 입력 후 To win 확인';
-  else if (poly?.needsStake) hint.textContent = calcRunning ? 'Polymarket Amount 입력 대기...' : 'Amount 입력 시 당첨금 기준 배당';
-  else if (profit !== null && profit >= getMinProfit()) hint.textContent = calcRunning ? `수익 구간 — Poly 금액 자동 갱신 (${profit.toFixed(2)}%)` : '수익 구간 충족';
+  else if (!poly?.odds) hint.textContent = lastStatus.poly || `${leg2FullLabel()}: Amount 입력 후 To win 확인`;
+  else if (poly?.needsStake) hint.textContent = calcRunning ? `${leg2FullLabel()} Amount 입력 대기...` : 'Amount 입력 시 당첨금 기준 배당';
+  else if (profit !== null && profit >= getMinProfit()) hint.textContent = calcRunning ? `수익 구간 — ${leg2FullLabel()} 금액 자동 갱신 (${profit.toFixed(2)}%)` : '수익 구간 충족';
   else if (profit !== null) hint.textContent = `수익 구간 밖 (최소 ${getMinProfit()}%)`;
   else hint.textContent = '배당 확인 중...';
 
@@ -301,12 +327,12 @@ function updateSlipUI(bti, poly, arbBti = null) {
           compareEl.className = 'payout-compare warn';
         }
         if (polyStakePage && Math.abs(polyStakePage - polyStakeCalc) >= 0.05) {
-          msg += ` — Poly 페이지 $${polyStakePage.toFixed(2)} ≠ 계산 $${polyStakeCalc.toFixed(2)}`;
+          msg += ` — ${leg2FullLabel()} 페이지 $${polyStakePage.toFixed(2)} ≠ 계산 $${polyStakeCalc.toFixed(2)}`;
           compareEl.className = 'payout-compare warn';
         }
         compareEl.textContent = msg;
       } else {
-        compareEl.textContent = 'Polymarket 금액 입력 후 비교';
+        compareEl.textContent = `${leg2FullLabel()} 금액 입력 후 비교`;
         compareEl.className = 'payout-compare muted';
       }
     }
@@ -520,11 +546,11 @@ async function injectReadBtiFrame(tabId, frameId) {
   }
 }
 
-async function injectReadPoly(tabId) {
+async function injectReadPoly(tabId, siteKey = 'polymarket') {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => {
+      func: (site) => {
         function vis(el) {
           if (!el) return false;
           const r = el.getBoundingClientRect();
@@ -586,7 +612,7 @@ async function injectReadPoly(tabId) {
           const odds = total / stake;
           if (odds > 1.001 && odds <= 100) {
             return {
-              source: 'polymarket',
+              source: site,
               odds,
               priceCents: Math.round((stake / total) * 1000) / 10,
               displayLabel: `${odds.toFixed(3)} · 당첨 $${toWin.toFixed(2)}`,
@@ -598,7 +624,8 @@ async function injectReadPoly(tabId) {
           }
         }
         return null;
-      }
+      },
+      args: [siteKey]
     });
     return results?.[0]?.result || null;
   } catch (_) {
@@ -771,19 +798,32 @@ async function findBtiFrame(tabId) {
 async function findTabs() {
   const tabs = await chrome.tabs.query({});
   let btiTab = null;
-  const polyTabs = [];
+  const leg2Tabs = [];
 
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (isPolymarketUrl(tab.url)) polyTabs.push(tab);
+    if (isLeg2PredictionUrl(tab.url)) leg2Tabs.push(tab);
     if (isWrapperUrl(tab.url) && !btiTab) btiTab = tab;
   }
 
   let polyTab = null;
-  for (const t of polyTabs) {
-    if (/\/event\//i.test(t.url || '')) { polyTab = t; break; }
+  let bestScore = -1;
+  const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const activeId = activeTabs[0]?.id;
+
+  for (const t of leg2Tabs) {
+    let score = 0;
+    if (isLeg2EventUrl(t.url)) score += 20;
+    if (/predictions/i.test(t.url || '')) score += 5;
+    if (t.id === activeId) score += 15;
+    if (score > bestScore) {
+      bestScore = score;
+      polyTab = t;
+    }
   }
-  if (!polyTab && polyTabs.length) polyTab = polyTabs[0];
+
+  if (polyTab?.url) cachedLeg2Url = polyTab.url;
+  updateLeg2UiLabels();
 
   if (btiTab) {
     btiTab = {
@@ -839,17 +879,21 @@ async function readPolySlipFromApi(polyTab) {
     const event = await fetchPolyEventBySlug(slug);
     if (!event) return null;
     const teamHint = polyTeamHintFromUrl(polyTab.url);
-    return polyEventToSlip(event, teamHint);
+    return polyEventToSlip(event, teamHint, leg2SiteKey(polyTab.url) || 'polymarket');
   } catch (_) {
     return null;
   }
 }
 
 async function readPolySlip(polyTab) {
+  const leg2Label = leg2SiteLabel(polyTab?.url);
   if (!polyTab?.id) {
-    lastStatus.poly = 'Polymarket: 탭 없음 — polymarket.com 열기';
+    lastStatus.poly = `${leg2FullLabel()}: 탭 없음 — Polymarket 또는 BC.Game 예측 페이지 열기`;
     return null;
   }
+
+  cachedLeg2Url = polyTab.url;
+  updateLeg2UiLabels();
 
   await ensurePolyScript(polyTab.id);
 
@@ -857,8 +901,9 @@ async function readPolySlip(polyTab) {
   const res = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
   if (res?.slip) slip = res.slip;
 
+  const siteKey = leg2SiteKey(polyTab.url) || 'polymarket';
   if (!slip?.fromPayout) {
-    const injected = await injectReadPoly(polyTab.id);
+    const injected = await injectReadPoly(polyTab.id, siteKey);
     if (injected?.fromPayout) slip = { ...slip, ...injected };
   }
 
@@ -868,7 +913,7 @@ async function readPolySlip(polyTab) {
   }
 
   if (slip?.odds > 1) {
-    lastStatus.poly = slip.needsStake ? 'Polymarket: Amount 입력 필요' : '';
+    lastStatus.poly = slip.needsStake ? `${leg2Label}: Amount 입력 필요` : '';
     return slip;
   }
 
@@ -879,11 +924,11 @@ async function readPolySlip(polyTab) {
   }
 
   if (slip?.needsStake) {
-    lastStatus.poly = 'Polymarket: Amount + To win 입력 필요';
+    lastStatus.poly = `${leg2Label}: Amount + To win 입력 필요`;
     return slip;
   }
 
-  lastStatus.poly = 'Polymarket: /event/ 페이지에서 팀 선택';
+  lastStatus.poly = `${leg2Label}: 이벤트 페이지에서 팀 선택 (/event/ 또는 /predictions/event/)`;
   return slip || apiSlip || null;
 }
 
@@ -910,7 +955,7 @@ function applySlipUpdate(source, slip) {
   if (source === 'bti') {
     cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
   }
-  if (source === 'polymarket') {
+  if (isLeg2Source(source)) {
     cachedPoly = slipOdds(slip) ? mergeSlipCached(cachedPoly, slip) : null;
   }
   updateSlipUI(cachedBti, cachedPoly);
@@ -1089,7 +1134,7 @@ async function calcPollLoop() {
 
 function onOddsChanged(msg) {
   if (msg.source === 'bti') applySlipUpdate('bti', msg.slip);
-  if (msg.source === 'polymarket') applySlipUpdate('polymarket', msg.slip);
+  if (isLeg2Source(msg.source)) applySlipUpdate(msg.source, msg.slip);
   if (!calcRunning) return;
   scheduleSyncPolyAmount();
 }
@@ -1129,7 +1174,7 @@ function renderSearchResults(data) {
   if (!data) return;
 
   const s = data.stats || {};
-  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · Poly ${s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / Poly ${s.polyTabFound ? 'O' : 'X'})`;
+  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · 예측 ${s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / ${s.leg2Site || '예측'} ${s.polyTabFound ? 'O' : 'X'})`;
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');
@@ -1199,7 +1244,7 @@ $('diagBtn')?.addEventListener('click', async () => {
   log('진단...', 'info');
   const found = await findTabs();
   log(`텐텐뱃: ${found.btiTab ? `탭 OK frame#${found.btiTab.frameId}` : '탭 없음'}`, found.btiTab ? 'ok' : 'err');
-  log(`Polymarket: ${found.polyTab ? '탭 OK' : '탭 없음'}`, found.polyTab ? 'ok' : 'err');
+  log(`Polymarket/BC.Game: ${found.polyTab ? `${leg2SiteLabel(found.polyTab.url)} 탭 OK` : '탭 없음'}`, found.polyTab ? 'ok' : 'err');
   if (found.polyTab) {
     const probe = await probePolyMain(found.polyTab.id);
     if (probe) {
@@ -1232,4 +1277,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.6.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.7.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

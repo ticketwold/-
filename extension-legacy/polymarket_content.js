@@ -1,4 +1,11 @@
-// Polymarket content script v5 — To win 기반 배당 (텐텐뱃 양방 전용)
+// Polymarket / BC.Game content script v5 — To win 기반 배당 (텐텐뱃 양방 전용)
+
+function predictionSiteId() {
+  try {
+    if (/bc\.game/i.test(location.hostname)) return 'bcgame';
+  } catch (_) {}
+  return 'polymarket';
+}
 
 function visible(el) {
   if (!el) return false;
@@ -716,7 +723,7 @@ function readPolymarketSlip() {
   if (slipOdds) {
     const { odds, totalPayout, profit, priceCents } = slipOdds;
     return {
-      source: 'polymarket',
+      source: predictionSiteId(),
       odds,
       priceCents,
       price: priceCents / 100,
@@ -736,13 +743,26 @@ function readPolymarketSlip() {
     };
   }
 
+  // Amount 있으나 To win 없음 — ¢ 보드 배당 표시 안 함
+  if (stake > 0 && !toWinDisplay) {
+    return {
+      source: predictionSiteId(),
+      odds: null,
+      needsStake: true,
+      teamLabel: team,
+      stake,
+      hint: 'To win 계산 대기 중...',
+      marketKind: 'ml'
+    };
+  }
+
   // 금액 없을 때만 보드 ¢ 참고
   const listedCents = readLiveListedCents(panel, 0, 0);
   const odds = oddsFromCents(listedCents);
 
   if (!odds || odds <= 1.001) {
     return {
-      source: 'polymarket',
+      source: predictionSiteId(),
       odds: null,
       needsStake: true,
       teamLabel: team,
@@ -758,7 +778,7 @@ function readPolymarketSlip() {
   const centsLabel = formatCentsLabel(priceCents);
 
   return {
-    source: 'polymarket',
+    source: predictionSiteId(),
     odds,
     priceCents,
     price: priceCents / 100,
@@ -1195,7 +1215,7 @@ async function placePolymarketBet(amountUsd) {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, site: 'polymarket', version: '5.1' });
+    sendResponse({ ok: true, site: predictionSiteId(), version: '5.2' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
@@ -1239,7 +1259,7 @@ try {
     const key = slipKey(slip);
     if (key === last) return;
     last = key;
-    try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'polymarket', slip }); } catch (_) {}
+    try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip }); } catch (_) {}
   }
 
   function notifyNow() {
@@ -1279,4 +1299,4 @@ try {
   }
 })();
 
-console.log('[Poly v5] content script loaded');
+console.log(`[Prediction v5] content script loaded (${predictionSiteId()})`);
