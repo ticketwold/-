@@ -1,4 +1,4 @@
-// popup.js v5.7.0 — 텐텐뱃 + Polymarket / BC.Game
+// popup.js v5.7.1 — 텐텐뱃 + Polymarket / BC.Game
 
 'use strict';
 
@@ -557,22 +557,44 @@ async function injectReadPoly(tabId, siteKey = 'polymarket') {
           return r.width > 0 && r.height > 0;
         }
         function parseMoney(t) {
-          const m = String(t || '').trim().match(/\$?\s*([\d,]+(?:\.\d+)?)/);
-          if (!m) return null;
-          const v = parseFloat(m[1].replace(/,/g, ''));
-          return Number.isFinite(v) && v > 0 ? v : null;
+          const s = String(t || '').trim();
+          let m = s.match(/\$?\s*([\d,]+(?:\.\d+)?)/);
+          if (m) {
+            const v = parseFloat(m[1].replace(/,/g, ''));
+            if (Number.isFinite(v) && v > 0) return v;
+          }
+          m = s.match(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
+          if (m) {
+            const v = parseFloat(m[1].replace(/,/g, ''));
+            if (Number.isFinite(v) && v > 0) return v;
+          }
+          return null;
         }
         function findPanel() {
+          function scoreTradePanelText(t) {
+            const hasToWin = /to\s*win|당첨|획득/i.test(t);
+            const hasAmount = /\bamount\b|금액/i.test(t);
+            const hasBuy = /\bbuy\b|매수/i.test(t);
+            if (!hasToWin || !hasAmount) return -1;
+            let score = 70;
+            if (t.length <= 450) score += 160;
+            else if (t.length <= 900) score += 90;
+            else if (t.length > 2000) score -= 280;
+            else if (t.length > 1200) score -= 120;
+            if (/amount\s*\(\s*usdt\s*\)/i.test(t)) score += 45;
+            const amtIdx = t.search(/\bamount\b/i);
+            const winIdx = t.search(/\bto\s*win\b/i);
+            if (amtIdx >= 0 && winIdx >= 0 && Math.abs(amtIdx - winIdx) < 450) score += 75;
+            return score;
+          }
           let best = null;
           let bestScore = -1;
           for (const el of document.querySelectorAll('div, section, aside, form')) {
             if (!vis(el)) continue;
             const t = el.innerText || '';
             if (!el.querySelector('input, [contenteditable="true"]')) continue;
-            if (!/to\s*win/i.test(t) || !/\bamount\b/i.test(t)) continue;
-            let score = 0;
-            if (/\bamount\b/i.test(t)) score += 40;
-            if (/to\s*win/i.test(t)) score += 40;
+            const score = scoreTradePanelText(t);
+            if (score < 0) continue;
             if (score > bestScore) { bestScore = score; best = el; }
           }
           return best;
@@ -581,27 +603,32 @@ async function injectReadPoly(tabId, siteKey = 'polymarket') {
           if (!panel) return null;
           for (const inp of panel.querySelectorAll('input, [contenteditable="true"]')) {
             if (!vis(inp)) continue;
+            const ph = (inp.placeholder || '').toLowerCase();
+            if (/search|검색/.test(ph)) continue;
             const v = parseMoney(inp.value || inp.textContent || inp.getAttribute('value'));
             if (v) return v;
           }
-          const m = (panel.innerText || '').match(/Amount\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+          const m = (panel.innerText || '').match(/Amount(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
           if (m) return parseFloat(m[1].replace(/,/g, '')) || null;
           return null;
         }
         function readToWin(panel) {
           if (!panel) return null;
-          const raw = panel.innerText || '';
-          const idx = raw.search(/to\s*win/i);
+          const raw = (panel.innerText || '').replace(/\s+/g, ' ');
+          const idx = raw.search(/\bto\s*win\b/i);
           if (idx < 0) return null;
-          const section = raw.slice(idx, idx + 500);
-          const vals = [];
-          for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
-            const ctx = section.slice(Math.max(0, m.index - 20), m.index + m[0].length + 20);
-            if (/avg\.?\s*price|¢/i.test(ctx)) continue;
-            const v = parseFloat(m[1].replace(/,/g, ''));
-            if (v >= 0.5) vals.push(v);
+          const section = raw.slice(idx, idx + 180);
+          let m = section.match(/\bto\s*win\b[\s\S]{0,90}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i);
+          if (m) {
+            const v = parseFloat(m[1].replace(/[+,\s]/g, ''));
+            if (v > 0) return v;
           }
-          return vals.length ? Math.max(...vals) : null;
+          m = section.match(/\bto\s*win\b[\s\S]{0,90}?≈\s*\$\s*([\d,]+(?:\.\d+)?)/i);
+          if (m) {
+            const v = parseFloat(m[1].replace(/,/g, ''));
+            if (v > 0) return v;
+          }
+          return null;
         }
 
         const panel = findPanel();
@@ -814,7 +841,8 @@ async function findTabs() {
   for (const t of leg2Tabs) {
     let score = 0;
     if (isLeg2EventUrl(t.url)) score += 20;
-    if (/predictions/i.test(t.url || '')) score += 5;
+    if (isBcGameUrl(t.url) && /\/predictions/i.test(t.url || '')) score += 18;
+    else if (/predictions/i.test(t.url || '')) score += 5;
     if (t.id === activeId) score += 15;
     if (score > bestScore) {
       bestScore = score;
@@ -1116,10 +1144,10 @@ async function syncPolyAmount() {
       updateSlipUI(cachedBti, cachedPoly, btiArb);
       if (changed) {
         const profit = calcProfit(btiOdds, polyO);
-        log(`배당 갱신 — 텐텐뱃 ${btiOdds.toFixed(3)} · 폴리 ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
+        log(`배당 갱신 — 텐텐뱃 ${btiOdds.toFixed(3)} · ${leg2ShortLabel()} ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
       }
     } else if (res?.reason) {
-      log(`Poly 금액 입력: ${res.reason}`, 'err');
+      log(`${leg2FullLabel()} 금액 입력: ${res.reason}`, 'err');
     }
   } finally {
     syncPolyPending = false;
@@ -1276,5 +1304,6 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 loadHistory();
+updateLeg2UiLabels();
 refreshSlips();
-log(`v5.7.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.7.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

@@ -200,7 +200,8 @@ async function findLeg2Tab() {
     if (!tab.url || !isLeg2PredictionUrl(tab.url)) continue;
     let score = 0;
     if (isLeg2EventUrl(tab.url)) score += 20;
-    if (/predictions/i.test(tab.url)) score += 5;
+    if (isBcGameUrl(tab.url) && /\/predictions/i.test(tab.url)) score += 18;
+    else if (/predictions/i.test(tab.url)) score += 5;
     if (tab.id === activeId) score += 15;
     if (score > bestScore) {
       bestScore = score;

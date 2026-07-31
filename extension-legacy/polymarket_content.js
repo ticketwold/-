@@ -18,6 +18,60 @@ function isBuySellTab(btn) {
   return t === 'Buy' || t === 'Sell' || t === '매수' || t === '매도';
 }
 
+function isSearchInput(inp) {
+  const blob = `${inp?.placeholder || ''} ${inp?.getAttribute?.('aria-label') || ''} ${inp?.id || ''}`.toLowerCase();
+  return /search|검색/.test(blob);
+}
+
+function parseMoneyValue(text) {
+  const t = String(text || '').trim();
+  let m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
+  if (m) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  m = t.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
+function scoreTradePanelText(t) {
+  const hasToWin = /to\s*win|당첨|획득/i.test(t);
+  const hasAmount = /\bamount\b|금액/i.test(t);
+  const hasBuy = /\bbuy\b|매수/i.test(t);
+  const hasShares = /\bshares\b/i.test(t);
+  if (!hasToWin && !hasAmount && !(hasBuy && hasShares)) return -1;
+  if (hasAmount && !hasBuy && !hasToWin && !hasShares) return -1;
+
+  let score = 0;
+  if (hasAmount) score += 35;
+  if (hasBuy) score += 30;
+  if (hasToWin) score += 25;
+  if (hasShares) score += 20;
+  if (/\blimit\b/i.test(t) || /\bmarket\b/i.test(t)) score += 15;
+  if (/(?:avg\.?\s*)?price\s*\d/i.test(t)) score += 20;
+
+  // BC.Game: 거대한 목록 컨테이너 대신 ~250자 슬립 패널 우선
+  if (t.length <= 450) score += 160;
+  else if (t.length <= 900) score += 90;
+  else if (t.length > 2000) score -= 280;
+  else if (t.length > 1200) score -= 120;
+  else score += Math.min(t.length / 40, 15);
+
+  if (/amount\s*\(\s*usdt\s*\)/i.test(t)) score += 45;
+  if (/\bbuy\s+(yes|no)\b/i.test(t)) score += 40;
+  const amtIdx = t.search(/\bamount\b/i);
+  const winIdx = t.search(/\bto\s*win\b/i);
+  if (amtIdx >= 0 && winIdx >= 0 && Math.abs(amtIdx - winIdx) < 450) score += 75;
+
+  if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
+  if (t.length < 40) score -= 50;
+  return score;
+}
+
 function findTradePanel() {
   let best = null;
   let bestScore = -1;
@@ -27,26 +81,8 @@ function findTradePanel() {
     if (!el.querySelector('input, [contenteditable="true"]')) continue;
     if (t.length > 8000) continue;
 
-    const hasToWin = /to\s*win/i.test(t);
-    const hasAmount = /\bamount\b/i.test(t);
-    const hasBuy = /\bbuy\b/i.test(t);
-    const hasShares = /\bshares\b/i.test(t);
-    const hasLimit = /\blimit\b/i.test(t);
-    const hasMarket = /\bmarket\b/i.test(t);
-    if (!hasToWin && !hasAmount && !(hasBuy && hasShares)) continue;
-    if (hasAmount && !hasBuy && !hasToWin && !hasShares) continue;
-
-    let score = 0;
-    if (hasAmount) score += 35;
-    if (hasBuy) score += 30;
-    if (hasToWin) score += 25;
-    if (hasShares) score += 20;
-    if (hasLimit || hasMarket) score += 15;
-    if (/(?:avg\.?\s*)?price\s*\d/i.test(t)) score += 20;
-    score += Math.min(t.length / 15, 80);
-    if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
-    if (t.length < 40) score -= 50;
-
+    const score = scoreTradePanelText(t);
+    if (score < 0) continue;
     if (score > bestScore) { bestScore = score; best = el; }
   }
   return best;
@@ -71,18 +107,20 @@ function findAmountInput(panel) {
 
   for (const label of root.querySelectorAll('label, span, p, div')) {
     const lt = (label.textContent || '').trim();
-    if (!/^amount$/i.test(lt) && !/^금액$/i.test(lt)) continue;
+    if (!/^amount/i.test(lt) && !/^금액/i.test(lt)) continue;
     const box = label.closest('div') || label.parentElement;
     const inp = box?.querySelector('input, textarea, [contenteditable="true"]');
-    if (inp && visible(inp)) return inp;
+    if (inp && visible(inp) && !isSearchInput(inp)) return inp;
   }
 
-  const inputs = Array.from(root.querySelectorAll('input, textarea, [contenteditable="true"]')).filter(visible);
+  const inputs = Array.from(root.querySelectorAll('input, textarea, [contenteditable="true"]'))
+    .filter((inp) => visible(inp) && !isSearchInput(inp));
   for (const inp of inputs) {
     const ph = (inp.placeholder || '').toLowerCase();
     const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
     const name = (inp.getAttribute('name') || '').toLowerCase();
-    if (ph.includes('amount') || ph.includes('$') || aria.includes('amount') || name.includes('amount')) {
+    if (ph.includes('amount') || ph.includes('$') || ph.includes('usdt')
+      || aria.includes('amount') || name.includes('amount')) {
       return inp;
     }
   }
@@ -92,7 +130,7 @@ function findAmountInput(panel) {
     const type = (inp.getAttribute('type') || '').toLowerCase();
     if (type === 'number' || type === 'text' || type === '' || inp.isContentEditable) return inp;
   }
-  return panelInputs[0] || root.querySelector('input');
+  return panelInputs[0] || root.querySelector('input:not([placeholder*="earch" i])');
 }
 
 function readFieldValue(el) {
@@ -151,11 +189,7 @@ function readPanelStake(panel) {
 }
 
 function parseMoneyOnly(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)$/);
-  if (!m) return null;
-  const v = parseFloat(m[1].replace(/,/g, ''));
-  return Number.isFinite(v) && v > 0 ? v : null;
+  return parseMoneyValue(text);
 }
 
 function isCentPriceContext(ctx, value) {
@@ -174,8 +208,34 @@ function isValidPayout(value, stake, ctx) {
   return false;
 }
 
+function readToWinNearLabel(panel) {
+  const raw = (panel?.innerText || '').replace(/\s+/g, ' ');
+  const idx = raw.search(/\bto\s*win\b/i);
+  if (idx < 0) return null;
+  const section = raw.slice(idx, idx + 180);
+  let m = section.match(/\bto\s*win\b[\s\S]{0,90}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(/[+,\s]/g, ''));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  m = section.match(/\bto\s*win\b[\s\S]{0,90}?≈\s*\$\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  m = section.match(/\bto\s*win\b[\s\S]{0,90}?\$\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
+}
+
 function readToWinFromPanel(panel) {
   const panelEl = panel || findTradePanel();
+  const near = readToWinNearLabel(panelEl);
+  if (near) return near;
+
   const scopes = [panelEl, document.body].filter(Boolean);
   const values = [];
 
@@ -183,10 +243,16 @@ function readToWinFromPanel(panel) {
     const raw = scope.innerText || '';
     for (const match of raw.matchAll(/to\s*win/gi)) {
       const section = raw.slice(match.index, match.index + 500);
+      for (const m of section.matchAll(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+        if (/avg\.?\s*price|amount\s*\(|available|slippage/i.test(ctx) && !/to\s*win/i.test(ctx)) continue;
+        if (v >= 0.01) values.push({ v, score: 135 });
+      }
       for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
         const v = parseFloat(m[1].replace(/,/g, ''));
         const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
-        if (/avg\.?\s*price|¢|price\s*\d/i.test(ctx)) continue;
+        if (/avg\.?\s*price|¢|price\s*\d|≈/i.test(ctx)) continue;
         if (v >= 0.5) values.push({ v, score: 120 });
       }
       for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
@@ -231,6 +297,9 @@ function readToWinFromPanel(panel) {
 }
 
 function readPayoutAmount(panel, stake) {
+  const fromNear = readToWinNearLabel(panel || findTradePanel());
+  if (fromNear) return fromNear;
+
   const fromPanel = readToWinFromPanel(panel);
   if (fromPanel) return fromPanel;
 
@@ -730,7 +799,9 @@ function readPolymarketSlip() {
       teamLabel: team,
       outcome: team,
       selectionText: team || '',
-      displayLabel: `${odds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`,
+      displayLabel: predictionSiteId() === 'bcgame'
+        ? `${odds.toFixed(3)} · 당첨 ${toWinDisplay.toFixed(2)} USDT`
+        : `${odds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`,
       stake,
       payout: totalPayout,
       toWin: profit,
