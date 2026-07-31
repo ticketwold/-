@@ -220,31 +220,82 @@ function parseCentsFromText(txt) {
   return null;
 }
 
+function isYesNoToken(s) {
+  return /^(yes|no)$/i.test(String(s || '').trim());
+}
+
 function teamMatchesButton(team, text) {
   if (!team) return true;
+  const teamStr = String(team).trim();
   const t = String(text || '');
+
+  if (isYesNoToken(teamStr)) {
+    return new RegExp(`\\b${teamStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(t);
+  }
+
   const norm = (s) => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
-  const nt = norm(team);
+  const nt = norm(teamStr);
   const bt = norm(t);
   if (!nt || !bt) return false;
   if (bt.includes(nt) || nt.includes(bt)) return true;
 
-  const first = String(team).split(/\s+/).filter((w) => w.length >= 2)[0];
+  const first = teamStr.split(/\s+/).filter((w) => w.length >= 2)[0];
   if (first) {
     const nf = norm(first);
     if (nf.length >= 3 && (bt.includes(nf) || nf.includes(bt))) return true;
   }
 
-  const words = String(team).split(/\s+/).filter((w) => w.length >= 2);
+  const words = teamStr.split(/\s+/).filter((w) => w.length >= 2);
   if (words.length >= 2 && words.every((w) => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t))) return true;
   return words.some((w) => w.length >= 3 && new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t));
+}
+
+function readSelectedBoardCents(teamHint) {
+  const candidates = [];
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const sel = selectionScore(btn);
+    if (sel < 80) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 120) continue;
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+
+    let score = sel + 150;
+    if (teamHint && teamMatchesButton(teamHint, t)) score += 100;
+    if (/^yes\b|^no\b/i.test(t)) score += 40;
+    candidates.push({ cents, score, t });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function getOutcomeSearchRoots() {
+  const panel = findTradePanel();
+  const roots = [];
+  if (panel) {
+    let el = panel.parentElement;
+    for (let i = 0; i < 10 && el && el !== document.body; i++) {
+      const btns = el.querySelectorAll('button, [role="button"]');
+      const hasCents = Array.from(btns).some((b) => parseCentsFromText(b.textContent || ''));
+      if (hasCents && btns.length >= 2 && btns.length <= 40) {
+        roots.push(el);
+        break;
+      }
+      el = el.parentElement;
+    }
+    roots.push(panel);
+  }
+  return roots.length ? roots : [document.body];
 }
 
 function readCentsForBuyTeam(teamHint) {
   if (!teamHint) return null;
 
   const candidates = [];
-  const roots = [findTradePanel(), document.body].filter(Boolean);
+  const roots = getOutcomeSearchRoots();
 
   for (const root of roots) {
     for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
@@ -263,9 +314,11 @@ function readCentsForBuyTeam(teamHint) {
       }
       if (!matched) continue;
 
+      const sel = selectionScore(btn);
       let score = 0;
       if (teamMatchesButton(teamHint, t)) score += 120;
-      score += selectionScore(btn);
+      score += sel;
+      if (sel >= 80) score += 300;
       if (/^buy\s+/i.test(t)) score += 40;
       score += Math.max(0, 90 - t.length);
       candidates.push({ cents, score, t });
@@ -379,6 +432,8 @@ function readSelectedTeamFromBoard() {
       || btn.getAttribute('data-state') === 'checked';
     if (!pressed) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const yesNo = t.match(/^(yes|no)\b/i);
+    if (yesNo) return yesNo[1];
     const cleaned = t.replace(/\d+(?:\.\d+)?\s*¢/g, '').replace(/\d+(?:\.\d+)?\s*%/g, '').trim();
     if (cleaned.length >= 2 && cleaned.length < 80) return cleaned;
   }
@@ -457,6 +512,19 @@ function readBuyButtonCents(panel) {
   return null;
 }
 
+function pickListedCents(candidates, hasSlip) {
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  const order = hasSlip
+    ? ['implied', 'selected-board', 'avg', 'buy-btn', 'selected', 'buy-team', 'team-btn', 'implied-fallback', 'page', 'event-board']
+    : ['selected-board', 'avg', 'buy-btn', 'selected', 'buy-team', 'team-btn', 'implied-fallback', 'page', 'event-board'];
+  for (const src of order) {
+    const hit = candidates.find((c) => c.src === src);
+    if (hit) return hit.cents;
+  }
+  return candidates[0].cents;
+}
+
 function readLiveListedCents(panel, stake, toWinDisplay) {
   const panelEl = panel || findTradePanel();
   const team = readTeamLabel(panelEl);
@@ -468,58 +536,39 @@ function readLiveListedCents(panel, stake, toWinDisplay) {
     candidates.push({ cents, score, src });
   }
 
-  // 1) Amount + To win — Polymarket 패널 실제 수령액 기준 (가장 정확)
   const implied = centsFromStakePayout(stake, toWinDisplay);
-  if (implied && hasSlip) add(implied, 820, 'implied');
+  if (implied && hasSlip) add(implied, 900, 'implied');
 
-  // 2) Avg price — 금액 입력 시 보드보다 우선
+  const selectedBoard = readSelectedBoardCents(team);
+  if (selectedBoard) add(selectedBoard, hasSlip ? 880 : 920, 'selected-board');
+
   const avg = readListedPriceCents(panelEl);
-  if (avg) add(avg, hasSlip ? 680 : 200, 'avg');
+  if (avg) add(avg, hasSlip ? 860 : 800, 'avg');
 
-  // 3) Buy {팀} / 보드 — 금액 없을 때만 높은 우선순위
-  const boardScore = hasSlip ? 280 : 620;
   if (team) {
-    const buyTeam = readCentsForBuyTeam(team);
-    if (buyTeam) add(buyTeam, boardScore, 'buy-team');
-
     const buyBtn = readBuyButtonCents(panelEl);
-    if (buyBtn) add(buyBtn, boardScore - 40, 'buy-btn');
+    if (buyBtn) add(buyBtn, 500, 'buy-btn');
 
     const selected = readSelectedOutcomeForTeam(team);
-    if (selected) add(selected, boardScore - 80, 'selected');
+    if (selected) add(selected, 480, 'selected');
+
+    const buyTeam = readCentsForBuyTeam(team);
+    if (buyTeam) add(buyTeam, 320, 'buy-team');
 
     const teamBtn = readOutcomeButtonCents(team);
-    if (teamBtn) add(teamBtn, boardScore - 120, 'team-btn');
+    if (teamBtn) add(teamBtn, 280, 'team-btn');
   }
 
-  if (!hasSlip && implied) add(implied, 100, 'implied-fallback');
+  if (!hasSlip && implied) add(implied, 260, 'implied-fallback');
 
   if (!candidates.length) {
     const page = readPageOutcomeCents(team);
-    if (page) add(page, 420, 'page');
+    if (page) add(page, 200, 'page');
     const board = readEventBoardCents(team);
-    if (board) add(board, 480, 'event-board');
+    if (board) add(board, 180, 'event-board');
   }
 
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => b.score - a.score);
-
-  const slipPick = candidates.find((c) => c.src === 'implied');
-  if (slipPick) return slipPick.cents;
-
-  const best = candidates[0];
-  if (best.src === 'avg' && hasSlip) return best.cents;
-
-  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn' || best.src === 'page') {
-    return best.cents;
-  }
-
-  const teamPick = candidates.find((c) =>
-    c.src === 'buy-team' || c.src === 'buy-btn' || c.src === 'selected' || c.src === 'team-btn' || c.src === 'page'
-  );
-  if (teamPick && Math.abs(teamPick.cents - best.cents) >= 3) return teamPick.cents;
-
-  return best.cents;
+  return pickListedCents(candidates, hasSlip);
 }
 
 function formatCentsLabel(cents) {
