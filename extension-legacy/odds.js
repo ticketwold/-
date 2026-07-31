@@ -56,10 +56,35 @@ function calcRoiPercent(stake, payout) {
   return Math.round(((payout - stake) / stake) * 1000) / 10;
 }
 
-function formatRoiPercent(pct) {
-  if (pct == null || !Number.isFinite(pct)) return '-';
-  const sign = pct >= 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}%`;
+function calcTotalInvestKrw(btiBetKrw, polyStakeUsd, rate) {
+  const polyStakeKrw = usdToKrw(polyStakeUsd, rate);
+  if (!btiBetKrw || !polyStakeKrw) return null;
+  return btiBetKrw + polyStakeKrw;
+}
+
+function calcNetProfitIfBtiWins(btiBetKrw, btiOdds, polyStakeUsd, rate) {
+  const btiTotal = calcBtiTotalPayoutKrw(btiBetKrw, btiOdds);
+  const polyStakeKrw = usdToKrw(polyStakeUsd, rate);
+  if (!btiTotal || !btiBetKrw || polyStakeKrw == null) return null;
+  return Math.round(btiTotal - btiBetKrw - polyStakeKrw);
+}
+
+function calcNetProfitIfPolyWins(btiBetKrw, polyStakeUsd, polyOdds, rate) {
+  const polyTotalKrw = usdToKrw(calcPolyTotalPayoutUsd(polyStakeUsd, polyOdds), rate);
+  const polyStakeKrw = usdToKrw(polyStakeUsd, rate);
+  if (!polyTotalKrw || !btiBetKrw || polyStakeKrw == null) return null;
+  return Math.round(polyTotalKrw - polyStakeKrw - btiBetKrw);
+}
+
+function calcNetRoiPercent(netProfitKrw, totalInvestKrw) {
+  if (netProfitKrw == null || !totalInvestKrw || totalInvestKrw <= 0) return null;
+  return Math.round((netProfitKrw / totalInvestKrw) * 1000) / 10;
+}
+
+function formatKrwSigned(amount) {
+  if (amount == null || !Number.isFinite(amount)) return '-';
+  const sign = amount >= 0 ? '+' : '';
+  return `${sign}${amount.toLocaleString()}원`;
 }
 
 function krwToUsd(krw, rate) {
