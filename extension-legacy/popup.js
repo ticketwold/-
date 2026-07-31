@@ -1,4 +1,4 @@
-// popup.js v5.7.1 — 텐텐뱃 + Polymarket / BC.Game
+// popup.js v5.7.2 — 텐텐뱃 + Polymarket / BC.Game
 
 'use strict';
 
@@ -558,32 +558,40 @@ async function injectReadPoly(tabId, siteKey = 'polymarket') {
         }
         function parseMoney(t) {
           const s = String(t || '').trim();
-          let m = s.match(/\$?\s*([\d,]+(?:\.\d+)?)/);
+          let m = s.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
           if (m) {
             const v = parseFloat(m[1].replace(/,/g, ''));
             if (Number.isFinite(v) && v > 0) return v;
           }
-          m = s.match(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
+          m = s.match(/\$?\s*([\d,]+(?:\.\d+)?)/);
           if (m) {
             const v = parseFloat(m[1].replace(/,/g, ''));
             if (Number.isFinite(v) && v > 0) return v;
           }
           return null;
         }
+        function findWinIdx(raw) {
+          const patterns = [/\bto\s*win\b/i, /우승/, /당첨(?:금)?/];
+          let best = -1;
+          for (const re of patterns) {
+            const m = raw.match(re);
+            if (m && (best < 0 || m.index < best)) best = m.index;
+          }
+          return best;
+        }
         function findPanel() {
           function scoreTradePanelText(t) {
-            const hasToWin = /to\s*win|당첨|획득/i.test(t);
+            const hasToWin = /\bto\s*win\b|우승|당첨|획득/i.test(t);
             const hasAmount = /\bamount\b|금액/i.test(t);
-            const hasBuy = /\bbuy\b|매수/i.test(t);
+            const hasBuy = /\bbuy\b|매수|구매/i.test(t);
             if (!hasToWin || !hasAmount) return -1;
             let score = 70;
+            if (hasBuy) score += 20;
             if (t.length <= 450) score += 160;
-            else if (t.length <= 900) score += 90;
             else if (t.length > 2000) score -= 280;
-            else if (t.length > 1200) score -= 120;
-            if (/amount\s*\(\s*usdt\s*\)/i.test(t)) score += 45;
-            const amtIdx = t.search(/\bamount\b/i);
-            const winIdx = t.search(/\bto\s*win\b/i);
+            if (/(?:amount|금액)\s*\(\s*usdt\s*\)/i.test(t)) score += 45;
+            const amtIdx = t.search(/\bamount\b|금액/i);
+            const winIdx = findWinIdx(t);
             if (amtIdx >= 0 && winIdx >= 0 && Math.abs(amtIdx - winIdx) < 450) score += 75;
             return score;
           }
@@ -608,24 +616,24 @@ async function injectReadPoly(tabId, siteKey = 'polymarket') {
             const v = parseMoney(inp.value || inp.textContent || inp.getAttribute('value'));
             if (v) return v;
           }
-          const m = (panel.innerText || '').match(/Amount(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+          const m = (panel.innerText || '').match(/(?:Amount|금액)(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
           if (m) return parseFloat(m[1].replace(/,/g, '')) || null;
           return null;
         }
         function readToWin(panel) {
           if (!panel) return null;
           const raw = (panel.innerText || '').replace(/\s+/g, ' ');
-          const idx = raw.search(/\bto\s*win\b/i);
+          const idx = findWinIdx(raw);
           if (idx < 0) return null;
-          const section = raw.slice(idx, idx + 180);
-          let m = section.match(/\bto\s*win\b[\s\S]{0,90}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i);
-          if (m) {
-            const v = parseFloat(m[1].replace(/[+,\s]/g, ''));
-            if (v > 0) return v;
-          }
-          m = section.match(/\bto\s*win\b[\s\S]{0,90}?≈\s*\$\s*([\d,]+(?:\.\d+)?)/i);
-          if (m) {
-            const v = parseFloat(m[1].replace(/,/g, ''));
+          const section = raw.slice(idx, idx + 200);
+          const patterns = [
+            /(?:to\s*win|우승|당첨(?:금)?)[\s\S]{0,100}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i,
+            /(?:to\s*win|우승|당첨(?:금)?)[\s\S]{0,100}?≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i
+          ];
+          for (const re of patterns) {
+            const m = section.match(re);
+            if (!m) continue;
+            const v = parseFloat(String(m[1]).replace(/,/g, '').replace(/[+,\s]/g, ''));
             if (v > 0) return v;
           }
           return null;
@@ -1306,4 +1314,4 @@ setInterval(() => {
 loadHistory();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.7.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.7.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

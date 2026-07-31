@@ -7,6 +7,29 @@ function predictionSiteId() {
   return 'polymarket';
 }
 
+const RE_WIN_LABEL = /\bto\s*win\b|우승|당첨(금)?|획득|예상\s*수익/i;
+const RE_AMOUNT_LABEL = /\bamount\b|금액/i;
+const RE_BUY_LABEL = /\bbuy\b|매수|구매/i;
+const RE_SELL_LABEL = /\bsell\b|매도|판매/i;
+const RE_AVG_PRICE = /avg\.?\s*price|average\s*price|평균\s*가격/i;
+const RE_AMOUNT_USDT = /(?:amount|금액)\s*\(\s*usdt\s*\)/i;
+
+function parseNumberToken(s) {
+  const v = parseFloat(String(s || '').replace(/,/g, '').replace(/[+,\s]/g, ''));
+  return Number.isFinite(v) ? v : NaN;
+}
+
+function findWinLabelIndex(text) {
+  const t = String(text || '');
+  const patterns = [/\bto\s*win\b/i, /우승/, /당첨(?:금)?/, /획득/, /예상\s*수익/];
+  let best = -1;
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m && (best < 0 || m.index < best)) best = m.index;
+  }
+  return best;
+}
+
 function visible(el) {
   if (!el) return false;
   const r = el.getBoundingClientRect();
@@ -15,7 +38,7 @@ function visible(el) {
 
 function isBuySellTab(btn) {
   const t = (btn?.textContent || '').replace(/\s+/g, ' ').trim();
-  return t === 'Buy' || t === 'Sell' || t === '매수' || t === '매도';
+  return /^(Buy|Sell|매수|매도|구매|판매)$/i.test(t);
 }
 
 function isSearchInput(inp) {
@@ -25,23 +48,28 @@ function isSearchInput(inp) {
 
 function parseMoneyValue(text) {
   const t = String(text || '').trim();
-  let m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
+  let m = t.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
   if (m) {
-    const v = parseFloat(m[1].replace(/,/g, ''));
-    if (Number.isFinite(v) && v > 0) return v;
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
   }
-  m = t.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
+  m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
   if (m) {
-    const v = parseFloat(m[1].replace(/,/g, ''));
-    if (Number.isFinite(v) && v > 0) return v;
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
+  }
+  m = t.match(/^≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) {
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
   }
   return null;
 }
 
 function scoreTradePanelText(t) {
-  const hasToWin = /to\s*win|당첨|획득/i.test(t);
-  const hasAmount = /\bamount\b|금액/i.test(t);
-  const hasBuy = /\bbuy\b|매수/i.test(t);
+  const hasToWin = RE_WIN_LABEL.test(t);
+  const hasAmount = RE_AMOUNT_LABEL.test(t);
+  const hasBuy = RE_BUY_LABEL.test(t);
   const hasShares = /\bshares\b/i.test(t);
   if (!hasToWin && !hasAmount && !(hasBuy && hasShares)) return -1;
   if (hasAmount && !hasBuy && !hasToWin && !hasShares) return -1;
@@ -51,20 +79,19 @@ function scoreTradePanelText(t) {
   if (hasBuy) score += 30;
   if (hasToWin) score += 25;
   if (hasShares) score += 20;
-  if (/\blimit\b/i.test(t) || /\bmarket\b/i.test(t)) score += 15;
-  if (/(?:avg\.?\s*)?price\s*\d/i.test(t)) score += 20;
+  if (/\blimit\b/i.test(t) || /\bmarket\b/i.test(t) || /마켓/i.test(t)) score += 15;
+  if (RE_AVG_PRICE.test(t)) score += 20;
 
-  // BC.Game: 거대한 목록 컨테이너 대신 ~250자 슬립 패널 우선
   if (t.length <= 450) score += 160;
   else if (t.length <= 900) score += 90;
   else if (t.length > 2000) score -= 280;
   else if (t.length > 1200) score -= 120;
   else score += Math.min(t.length / 40, 15);
 
-  if (/amount\s*\(\s*usdt\s*\)/i.test(t)) score += 45;
-  if (/\bbuy\s+(yes|no)\b/i.test(t)) score += 40;
-  const amtIdx = t.search(/\bamount\b/i);
-  const winIdx = t.search(/\bto\s*win\b/i);
+  if (RE_AMOUNT_USDT.test(t)) score += 45;
+  if (/\b(?:buy|구매)\s+(yes|no|예|아니오)\b/i.test(t)) score += 40;
+  const amtIdx = t.search(RE_AMOUNT_LABEL);
+  const winIdx = findWinLabelIndex(t);
   if (amtIdx >= 0 && winIdx >= 0 && Math.abs(amtIdx - winIdx) < 450) score += 75;
 
   if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
@@ -175,7 +202,7 @@ function readPanelStake(panel) {
 
   const text = (panelEl.innerText || '').replace(/\s+/g, ' ');
   const patterns = [
-    /Amount\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:Amount|금액)(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
     /\bamount\b[^$\d]{0,20}\$?\s*([\d,]+(?:\.\d+)?)/i
   ];
   for (const re of patterns) {
@@ -210,23 +237,19 @@ function isValidPayout(value, stake, ctx) {
 
 function readToWinNearLabel(panel) {
   const raw = (panel?.innerText || '').replace(/\s+/g, ' ');
-  const idx = raw.search(/\bto\s*win\b/i);
+  const idx = findWinLabelIndex(raw);
   if (idx < 0) return null;
-  const section = raw.slice(idx, idx + 180);
-  let m = section.match(/\bto\s*win\b[\s\S]{0,90}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i);
-  if (m) {
-    const v = parseFloat(m[1].replace(/[+,\s]/g, ''));
-    if (Number.isFinite(v) && v > 0) return v;
-  }
-  m = section.match(/\bto\s*win\b[\s\S]{0,90}?≈\s*\$\s*([\d,]+(?:\.\d+)?)/i);
-  if (m) {
-    const v = parseFloat(m[1].replace(/,/g, ''));
-    if (Number.isFinite(v) && v > 0) return v;
-  }
-  m = section.match(/\bto\s*win\b[\s\S]{0,90}?\$\s*([\d,]+(?:\.\d+)?)/i);
-  if (m) {
-    const v = parseFloat(m[1].replace(/,/g, ''));
-    if (Number.isFinite(v) && v > 0) return v;
+  const section = raw.slice(idx, idx + 200);
+  const patterns = [
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i,
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?\$\s*([\d,]+(?:\.\d+)?)/i
+  ];
+  for (const re of patterns) {
+    const m = section.match(re);
+    if (!m) continue;
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
   }
   return null;
 }
@@ -241,31 +264,34 @@ function readToWinFromPanel(panel) {
 
   for (const scope of scopes) {
     const raw = scope.innerText || '';
-    for (const match of raw.matchAll(/to\s*win/gi)) {
-      const section = raw.slice(match.index, match.index + 500);
-      for (const m of section.matchAll(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
-        const v = parseFloat(m[1].replace(/,/g, ''));
-        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
-        if (/avg\.?\s*price|amount\s*\(|available|slippage/i.test(ctx) && !/to\s*win/i.test(ctx)) continue;
-        if (v >= 0.01) values.push({ v, score: 135 });
-      }
-      for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
-        const v = parseFloat(m[1].replace(/,/g, ''));
-        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
-        if (/avg\.?\s*price|¢|price\s*\d|≈/i.test(ctx)) continue;
-        if (v >= 0.5) values.push({ v, score: 120 });
-      }
-      for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
-        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
-        if (/avg\.?\s*price|¢|amount/i.test(ctx)) continue;
-        const v = parseFloat(m[1].replace(/,/g, ''));
-        if (v >= 0.5) values.push({ v, score: 100 });
+    const winPatterns = [/\bto\s*win\b/gi, /우승/g, /당첨(?:금)?/g, /획득/g];
+    for (const winRe of winPatterns) {
+      for (const match of raw.matchAll(winRe)) {
+        const section = raw.slice(match.index, match.index + 500);
+        for (const m of section.matchAll(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
+          const v = parseNumberToken(m[1]);
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /(?:amount|금액)\s*\(|사용\s*가능|available|slippage|슬리피지/i.test(ctx)) continue;
+          if (v >= 0.01) values.push({ v, score: 135 });
+        }
+        for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+          const v = parseNumberToken(m[1]);
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /¢|price\s*\d|≈/i.test(ctx)) continue;
+          if (v >= 0.5) values.push({ v, score: 120 });
+        }
+        for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /¢|amount|금액/i.test(ctx)) continue;
+          const v = parseNumberToken(m[1]);
+          if (v >= 0.5) values.push({ v, score: 100 });
+        }
       }
     }
 
     for (const el of scope.querySelectorAll('*')) {
       const own = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!/^to\s*win$/i.test(own) && !/^to\s*win$/i.test(own.replace(/[^\w\s]/g, ' '))) continue;
+      if (!/^to\s*win$/i.test(own) && !/^우승$/i.test(own) && !/^당첨(?:금)?$/i.test(own)) continue;
 
       let box = el.parentElement;
       for (let d = 0; d < 6 && box; d++) {
@@ -355,6 +381,7 @@ function readListedPriceCents(panel) {
   const specs = [
     { re: /avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
     { re: /average\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /평균\s*가격\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
     { re: /price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 60 }
   ];
 
@@ -665,12 +692,12 @@ function readTeamLabel(panel) {
     for (const btn of scope.querySelectorAll('button, [role="button"]')) {
       if (!visible(btn)) continue;
       const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      const m = t.match(/^buy\s+(.+)$/i);
+      const m = t.match(/^(?:buy|구매)\s+(.+)$/i);
       if (m) return m[1].trim();
     }
 
     const text = scope.innerText || '';
-    const buyM = text.match(/(?:Buy|매수)\s+([^\n$¢@%]+?)(?:\s*$|\s+Avg|\s+To win)/i);
+    const buyM = text.match(/(?:Buy|매수|구매)\s+([^\n$¢@%]+?)(?:\s*$|\s+(?:Avg|평균)|\s+(?:To win|우승))/i);
     if (buyM) return buyM[1].trim();
   }
 
@@ -805,7 +832,9 @@ function readPolymarketSlip() {
       stake,
       payout: totalPayout,
       toWin: profit,
-      hint: `당첨금 $${toWinDisplay.toFixed(2)} ÷ 베팅 $${stake.toFixed(2)}`,
+      hint: predictionSiteId() === 'bcgame'
+        ? `우승 ${toWinDisplay.toLocaleString('en-US', { maximumFractionDigits: 2 })} USDT ÷ 금액 ${stake.toFixed(2)} USDT`
+        : `당첨금 $${toWinDisplay.toFixed(2)} ÷ 베팅 $${stake.toFixed(2)}`,
       marketKind: 'ml',
       period: 'ft',
       marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
@@ -822,7 +851,7 @@ function readPolymarketSlip() {
       needsStake: true,
       teamLabel: team,
       stake,
-      hint: 'To win 계산 대기 중...',
+      hint: predictionSiteId() === 'bcgame' ? '우승(당첨) 계산 대기 중...' : 'To win 계산 대기 중...',
       marketKind: 'ml'
     };
   }
@@ -934,7 +963,7 @@ function ensureBuyTabSelected(panel) {
   for (const btn of root.querySelectorAll('button, [role="button"], [role="tab"]')) {
     if (!visible(btn)) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (t !== 'Buy' && t !== '매수') continue;
+    if (t !== 'Buy' && t !== '매수' && t !== '구매') continue;
     const pressed = btn.getAttribute('aria-pressed') === 'true'
       || btn.getAttribute('aria-selected') === 'true'
       || btn.getAttribute('data-state') === 'active'
@@ -947,7 +976,7 @@ function ensureBuyTabSelected(panel) {
 
 function isBuyTabButton(btn) {
   const t = (btn?.textContent || '').replace(/\s+/g, ' ').trim();
-  if (t !== 'Buy' && t !== '매수' && t !== 'Sell' && t !== '매도') return false;
+  if (t !== 'Buy' && t !== '매수' && t !== 'Sell' && t !== '매도' && t !== '구매' && t !== '판매') return false;
   const parent = btn.parentElement;
   const pt = (parent?.textContent || '').replace(/\s+/g, ' ');
   return /\bBuy\b/.test(pt) && /\bSell\b/.test(pt) && pt.length < 50;
@@ -963,7 +992,7 @@ function findBuyTeamButton(panel) {
     if (isBuyTabButton(btn)) continue;
 
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!/^buy\s+/i.test(t) || t.length < 8) continue;
+    if (!/^(?:buy|구매)\s+/i.test(t) || t.length < 4) continue;
     if (/combo|terms|sell/i.test(t)) continue;
 
     const r = btn.getBoundingClientRect();
