@@ -101,8 +101,7 @@ function krwToUsd(krw, rate) {
 
 function resolveTotalPayout(stake, toWinDisplay) {
   if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
-  if (toWinDisplay >= stake) return toWinDisplay;
-  return stake + toWinDisplay;
+  return toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
 }
 
 function calcOddsFromStakeAndPayout(stake, toWinDisplay) {
