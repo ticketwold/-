@@ -23,6 +23,98 @@ let refreshQueued = false;
 let polyScriptReady = new Set();
 let btiScriptReady = new Set();
 let lastStatus = { bti: '', poly: '' };
+const HISTORY_KEY = 'calcHistory';
+const HISTORY_MAX = 100;
+let historyEntries = [];
+let lastHistoryKey = '';
+
+function formatPolyOddsForHistory(slip) {
+  if (!slip?.odds || slip.odds <= 1) return '-';
+  if (slip.priceCents != null) return `${slip.priceCents}¢ (${slip.odds.toFixed(3)})`;
+  return slip.odds.toFixed(3);
+}
+
+function formatHistoryLine(bti, poly, arbBti, profit) {
+  const polyO = poly?.odds > 1 ? poly.odds : null;
+  const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const team = poly?.teamLabel || formatBtiMeta(bti) || '경기';
+  const profitText = profit != null ? `${profit.toFixed(2)}%` : '-';
+  return `${team} · 텐텐뱃 ${btiO?.toFixed(3) || '-'} · 폴리 ${formatPolyOddsForHistory(poly)} · 수익률 ${profitText}`;
+}
+
+function buildHistoryKey(btiO, polyO, team) {
+  return `${team}|${btiO?.toFixed(4)}|${polyO?.toFixed(4)}`;
+}
+
+function renderHistory() {
+  const el = $('historyList');
+  if (!el) return;
+  if (!historyEntries.length) {
+    el.innerHTML = '<div class="hint">계산 시작 후 배당·수익률이 기록됩니다</div>';
+    return;
+  }
+  el.innerHTML = historyEntries.map((entry) => {
+    const t = new Date(entry.time).toLocaleTimeString();
+    const profitCls = entry.profit != null && entry.profit >= getMinProfit()
+      ? 'profit-pos'
+      : (entry.profit != null && entry.profit < 0 ? 'profit-neg' : '');
+    const parts = entry.text.split(' · 수익률 ');
+    const head = parts[0] || entry.text;
+    const tail = parts[1] || '';
+    const profitHtml = tail
+      ? ` · 수익률 <span class="${profitCls}">${tail}</span>`
+      : '';
+    return `<div class="history-item"><span class="history-time">${t}</span>${head}${profitHtml}</div>`;
+  }).join('');
+}
+
+async function loadHistory() {
+  try {
+    const data = await chrome.storage.local.get(HISTORY_KEY);
+    historyEntries = Array.isArray(data[HISTORY_KEY]) ? data[HISTORY_KEY] : [];
+  } catch (_) {
+    historyEntries = [];
+  }
+  renderHistory();
+}
+
+async function saveHistory() {
+  try {
+    await chrome.storage.local.set({ [HISTORY_KEY]: historyEntries.slice(0, HISTORY_MAX) });
+  } catch (_) {}
+}
+
+function maybeRecordHistory(bti, poly, arbBti) {
+  if (!calcRunning) return;
+  const polyO = poly?.odds > 1 ? poly.odds : null;
+  const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  if (!polyO || !btiO) return;
+
+  const profit = calcProfit(btiO, polyO);
+  if (profit == null) return;
+
+  const team = poly?.teamLabel || formatBtiMeta(bti) || '경기';
+  const key = buildHistoryKey(btiO, polyO, team);
+  if (key === lastHistoryKey) return;
+  lastHistoryKey = key;
+
+  const entry = {
+    time: Date.now(),
+    profit,
+    text: formatHistoryLine(bti, poly, arbBti, profit)
+  };
+  historyEntries.unshift(entry);
+  if (historyEntries.length > HISTORY_MAX) historyEntries.length = HISTORY_MAX;
+  saveHistory();
+  renderHistory();
+}
+
+function clearHistory() {
+  historyEntries = [];
+  lastHistoryKey = '';
+  saveHistory();
+  renderHistory();
+}
 
 function log(text, cls = '') {
   const el = document.getElementById('log');
@@ -228,6 +320,8 @@ function updateSlipUI(bti, poly, arbBti = null) {
       compareEl.className = 'payout-compare muted';
     }
   }
+
+  maybeRecordHistory(bti, poly, arbBti);
 }
 
 async function getAllFrames(tabId) {
@@ -960,7 +1054,8 @@ async function syncPolyAmount() {
       lastSyncedPolyAt = Date.now();
       updateSlipUI(cachedBti, cachedPoly, btiArb);
       if (changed) {
-        log(`Poly $${polyUsd.toFixed(2)} 자동 입력 (텐텐뱃 ${btiBet.toLocaleString()}원 · 배당 ${polyO.toFixed(3)})`, 'info');
+        const profit = calcProfit(btiOdds, polyO);
+        log(`배당 갱신 — 텐텐뱃 ${btiOdds.toFixed(3)} · 폴리 ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
       }
     } else if (res?.reason) {
       log(`Poly 금액 입력: ${res.reason}`, 'err');
@@ -995,9 +1090,10 @@ function startCalc() {
   calcRunning = true;
   lastSyncedPolyUsd = 0;
   lastSyncedPolyAt = 0;
+  lastHistoryKey = '';
   $('botStart').disabled = true;
   $('botStop').disabled = false;
-  log('계산 시작 — 텐텐뱃 금액 기준으로 Poly 자동 입력', 'info');
+  log('계산 시작 — 배당 변경 시 히스토리에 기록', 'info');
   refreshSlips().then(() => scheduleSyncPolyAmount());
   calcTimer = setInterval(calcPollLoop, 400);
 }
@@ -1070,6 +1166,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
 
 $('botStart')?.addEventListener('click', startCalc);
 $('botStop')?.addEventListener('click', stopCalc);
+$('clearHistoryBtn')?.addEventListener('click', clearHistory);
 $('searchStart')?.addEventListener('click', startSearch);
 $('searchStop')?.addEventListener('click', stopSearch);
 $('openPanelBtn')?.addEventListener('click', openPanel);
@@ -1096,7 +1193,7 @@ $('diagBtn')?.addEventListener('click', async () => {
     const probeIso = await sendPoly(found.polyTab.id, { type: 'PROBE_POLY' });
     if (probeIso?.probe) {
       const p = probeIso.probe;
-      log(`Poly UI: 패널${p.hasPanel ? 'O' : 'X'} $${p.stake || 0}`, p.hasPanel ? 'info' : 'err');
+      log(`Poly UI: 패널${p.hasPanel ? 'O' : 'X'}`, p.hasPanel ? 'info' : 'err');
     }
   }
   chrome.runtime.sendMessage({ type: 'DIAG_BTI' }, (r) => {
@@ -1117,5 +1214,6 @@ setInterval(() => {
     if (calcRunning) scheduleSyncPolyAmount();
   });
 }, FALLBACK_REFRESH_MS);
+loadHistory();
 refreshSlips();
-log(`v5.5.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.5.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
