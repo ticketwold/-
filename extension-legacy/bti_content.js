@@ -1789,7 +1789,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   document.addEventListener('input', (e) => {
     const t = e.target;
-    if (!t || t.id !== 'counter' && !/counter|Counter|베팅/i.test(String(t.className || '') + (t.placeholder || ''))) return;
+    if (!t) return;
+    const isStake = t.id === 'counter' || /counter|Counter|베팅/i.test(String(t.className || '') + (t.placeholder || ''));
+    if (!isStake) return;
     notifyStake();
   }, true);
   document.addEventListener('change', notifyStake, true);

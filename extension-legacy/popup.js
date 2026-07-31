@@ -149,23 +149,31 @@ function updateSlipUI(bti, poly, arbBti = null) {
   if (btiO && polyO) {
     const btiBet = getBtiBet();
     const rate = getUsdRate();
-    const polyStake = poly?.stake > 0 ? poly.stake : calcPolyBetUsd(btiBet, btiO, polyO, rate);
+    const polyStakeCalc = calcPolyBetUsd(btiBet, btiO, polyO, rate);
+    const polyStakePage = poly?.stake > 0 ? poly.stake : null;
+    const polyStake = polyStakeCalc;
     $('calcBti').textContent = `${btiBet.toLocaleString()}원`;
     $('calcPoly').textContent = `$${polyStake.toFixed(2)}`;
 
     const btiTotalKrw = calcBtiTotalPayoutKrw(btiBet, btiO);
-    const polyTotalUsd = calcPolyTotalPayoutUsd(polyStake, polyO);
+    const polyTotalUsd = (poly?.fromPayout && poly?.payout)
+      ? poly.payout
+      : calcPolyTotalPayoutUsd(polyStake, polyO);
     const polyTotalKrw = usdToKrw(polyTotalUsd, rate);
-    const polyStakeKrw = usdToKrw(polyStake, rate);
-    const btiRoi = calcRoiPercent(btiBet, btiTotalKrw);
-    const polyRoi = calcRoiPercent(polyStakeKrw, polyTotalKrw);
+    const totalInvest = calcTotalInvestKrw(btiBet, polyStake, rate);
+    const netBti = calcNetProfitIfBtiWins(btiBet, btiO, polyStake, rate);
+    const netPoly = calcNetProfitIfPolyWins(btiBet, polyStake, polyO, rate);
+    const netRoiBti = calcNetRoiPercent(netBti, totalInvest);
+    const netRoiPoly = calcNetRoiPercent(netPoly, totalInvest);
 
     if ($('payoutBti')) {
       $('payoutBti').textContent = btiTotalKrw ? `${btiTotalKrw.toLocaleString()}원` : '-';
       const btiPctEl = $('payoutBtiPct');
       if (btiPctEl) {
-        btiPctEl.textContent = btiRoi != null ? `수익 ${formatRoiPercent(btiRoi)}` : '-';
-        btiPctEl.className = `payout-pct${btiRoi != null && btiRoi < 0 ? ' negative' : ''}`;
+        btiPctEl.textContent = (netBti != null && netRoiBti != null)
+          ? `양방 순수익 ${formatKrwSigned(netBti)} (${formatRoiPercent(netRoiBti)})`
+          : '-';
+        btiPctEl.className = `payout-pct${netBti != null && netBti < 0 ? ' negative' : ''}`;
       }
 
       $('payoutPoly').textContent = polyTotalKrw ? `${polyTotalKrw.toLocaleString()}원` : '-';
@@ -177,20 +185,28 @@ function updateSlipUI(bti, poly, arbBti = null) {
       }
       const polyPctEl = $('payoutPolyPct');
       if (polyPctEl) {
-        polyPctEl.textContent = polyRoi != null ? `수익 ${formatRoiPercent(polyRoi)}` : '-';
-        polyPctEl.className = `payout-pct${polyRoi != null && polyRoi < 0 ? ' negative' : ''}`;
+        polyPctEl.textContent = (netPoly != null && netRoiPoly != null)
+          ? `양방 순수익 ${formatKrwSigned(netPoly)} (${formatRoiPercent(netRoiPoly)})`
+          : '-';
+        polyPctEl.className = `payout-pct${netPoly != null && netPoly < 0 ? ' negative' : ''}`;
       }
 
       const compareEl = $('payoutCompare');
       if (btiTotalKrw && polyTotalKrw) {
         const diffKrw = Math.abs(btiTotalKrw - polyTotalKrw);
+        let msg = '';
         if (diffKrw < Math.max(200, rate * 0.15)) {
-          compareEl.textContent = `✓ 당첨금 일치 (USDT 환율 ${rate.toLocaleString()}원 기준)`;
+          msg = `✓ 당첨금 일치 · 양방 순수익률 ${formatRoiPercent(netRoiBti)}`;
           compareEl.className = 'payout-compare ok';
         } else {
-          compareEl.textContent = `⚠ 당첨금 차이 ${diffKrw.toLocaleString()}원 — 배당/환율 확인`;
+          msg = `⚠ 당첨금 차이 ${diffKrw.toLocaleString()}원`;
           compareEl.className = 'payout-compare warn';
         }
+        if (polyStakePage && Math.abs(polyStakePage - polyStakeCalc) >= 0.05) {
+          msg += ` — Poly 페이지 $${polyStakePage.toFixed(2)} ≠ 계산 $${polyStakeCalc.toFixed(2)}`;
+          compareEl.className = 'payout-compare warn';
+        }
+        compareEl.textContent = msg;
       } else {
         compareEl.textContent = 'Polymarket 금액 입력 후 비교';
         compareEl.className = 'payout-compare muted';
@@ -1102,4 +1118,4 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.5.4 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.5.6 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

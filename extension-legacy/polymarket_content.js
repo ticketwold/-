@@ -277,9 +277,17 @@ function readCentsForBuyTeam(teamHint) {
   return candidates[0].cents;
 }
 
-function centsFromStakePayout(stake, payout) {
-  if (!stake || !payout || payout <= stake * 1.01) return null;
-  const cents = (stake / payout) * 100;
+function resolveTotalPayout(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
+  // Polymarket "To win" = 총 수령액(≥ stake) 또는 순이익(< stake)
+  if (toWinDisplay >= stake) return toWinDisplay;
+  return stake + toWinDisplay;
+}
+
+function centsFromStakePayout(stake, toWinDisplay) {
+  const total = resolveTotalPayout(stake, toWinDisplay);
+  if (!total || total <= stake * 1.001) return null;
+  const cents = (stake / total) * 100;
   if (!isValidPolyCents(cents)) return null;
   return Math.round(cents * 10) / 10;
 }
@@ -449,38 +457,42 @@ function readBuyButtonCents(panel) {
   return null;
 }
 
-function readLiveListedCents(panel, stake, payout) {
+function readLiveListedCents(panel, stake, toWinDisplay) {
   const panelEl = panel || findTradePanel();
   const team = readTeamLabel(panelEl);
   const candidates = [];
+  const hasSlip = stake > 0 && toWinDisplay > 0;
 
   function add(cents, score, src) {
     if (!isValidPolyCents(cents)) return;
     candidates.push({ cents, score, src });
   }
 
-  // 1) Buy {팀} 기준 — 선택 상태 없이도 홈/원정 즉시 반영
+  // 1) Amount + To win — Polymarket 패널 실제 수령액 기준 (가장 정확)
+  const implied = centsFromStakePayout(stake, toWinDisplay);
+  if (implied && hasSlip) add(implied, 820, 'implied');
+
+  // 2) Avg price — 금액 입력 시 보드보다 우선
+  const avg = readListedPriceCents(panelEl);
+  if (avg) add(avg, hasSlip ? 680 : 200, 'avg');
+
+  // 3) Buy {팀} / 보드 — 금액 없을 때만 높은 우선순위
+  const boardScore = hasSlip ? 280 : 620;
   if (team) {
     const buyTeam = readCentsForBuyTeam(team);
-    if (buyTeam) add(buyTeam, 620, 'buy-team');
+    if (buyTeam) add(buyTeam, boardScore, 'buy-team');
 
     const buyBtn = readBuyButtonCents(panelEl);
-    if (buyBtn) add(buyBtn, 580, 'buy-btn');
+    if (buyBtn) add(buyBtn, boardScore - 40, 'buy-btn');
 
     const selected = readSelectedOutcomeForTeam(team);
-    if (selected) add(selected, 500, 'selected');
+    if (selected) add(selected, boardScore - 80, 'selected');
 
     const teamBtn = readOutcomeButtonCents(team);
-    if (teamBtn) add(teamBtn, 450, 'team-btn');
+    if (teamBtn) add(teamBtn, boardScore - 120, 'team-btn');
   }
 
-  // 2) Avg price — 팀 전환 직후 stale 할 수 있어 낮은 우선순위
-  const avg = readListedPriceCents(panelEl);
-  if (avg) add(avg, 200, 'avg');
-
-  // 3) To win / Amount
-  const implied = centsFromStakePayout(stake, payout);
-  if (implied) add(implied, 100, 'implied');
+  if (!hasSlip && implied) add(implied, 100, 'implied-fallback');
 
   if (!candidates.length) {
     const page = readPageOutcomeCents(team);
@@ -492,9 +504,15 @@ function readLiveListedCents(panel, stake, payout) {
   if (!candidates.length) return null;
   candidates.sort((a, b) => b.score - a.score);
 
+  const slipPick = candidates.find((c) => c.src === 'implied');
+  if (slipPick) return slipPick.cents;
+
   const best = candidates[0];
-  // 팀 기준 값이 있으면 stale implied/avg 로 덮어쓰지 않음
-  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn' || best.src === 'page') return best.cents;
+  if (best.src === 'avg' && hasSlip) return best.cents;
+
+  if (best.src === 'buy-team' || best.src === 'buy-btn' || best.src === 'selected' || best.src === 'team-btn' || best.src === 'page') {
+    return best.cents;
+  }
 
   const teamPick = candidates.find((c) =>
     c.src === 'buy-team' || c.src === 'buy-btn' || c.src === 'selected' || c.src === 'team-btn' || c.src === 'page'
@@ -529,29 +547,30 @@ function oddsFromCents(cents) {
 function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readStake(panel);
-  const payout = readPayoutAmount(panel, stake);
+  const toWinDisplay = readPayoutAmount(panel, stake);
+  const totalPayout = resolveTotalPayout(stake, toWinDisplay);
   const team = readTeamLabel(panel);
-  const listedCents = readLiveListedCents(panel, stake, payout);
+  const listedCents = readLiveListedCents(panel, stake, toWinDisplay);
 
-  let odds = oddsFromCents(listedCents);
+  let odds = null;
   let fromPayout = false;
+  const implied = centsFromStakePayout(stake, toWinDisplay);
 
-  const implied = centsFromStakePayout(stake, payout);
-  if (!odds && implied) {
-    odds = oddsFromCents(implied);
-    fromPayout = true;
-  } else if (odds && implied) {
-    const impliedOdds = oddsFromCents(implied);
-    if (impliedOdds && Math.abs(implied - listedCents) <= 2) {
-      odds = impliedOdds;
-      fromPayout = true;
-    }
-  } else if (!odds && stake && payout) {
-    odds = calcOddsFromStakeAndPayout(stake, payout);
+  if (stake && totalPayout) {
+    odds = calcOddsFromStakeAndPayout(stake, totalPayout);
     fromPayout = !!(odds && odds > 1.001);
   }
 
-  odds = sanitizePolyOdds(odds, listedCents, stake, payout);
+  if (!odds || odds <= 1.001) {
+    odds = oddsFromCents(listedCents);
+  } else if (implied) {
+    const impliedOdds = oddsFromCents(implied);
+    if (impliedOdds && Math.abs(impliedOdds - odds) > 0.02) {
+      odds = impliedOdds;
+    }
+  }
+
+  odds = sanitizePolyOdds(odds, listedCents, stake, totalPayout);
 
   if (!odds || odds <= 1.001) {
     return {
@@ -565,7 +584,9 @@ function readPolymarketSlip() {
     };
   }
 
-  const priceCents = isValidPolyCents(listedCents) ? listedCents : (implied || decimalToCents(odds));
+  const priceCents = fromPayout && implied
+    ? implied
+    : (isValidPolyCents(listedCents) ? listedCents : (implied || decimalToCents(odds)));
   if (!isValidPolyCents(priceCents)) {
     return {
       source: 'polymarket',
@@ -577,7 +598,7 @@ function readPolymarketSlip() {
     };
   }
 
-  const profit = fromPayout && payout && stake && payout >= stake ? payout - stake : null;
+  const profit = fromPayout && totalPayout && stake ? totalPayout - stake : null;
   const centsLabel = formatCentsLabel(priceCents);
 
   return {
@@ -588,12 +609,14 @@ function readPolymarketSlip() {
     teamLabel: team,
     outcome: team,
     selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
-    displayLabel: `${centsLabel} (${odds.toFixed(3)})`,
+    displayLabel: fromPayout && stake && totalPayout
+      ? `${centsLabel} (${odds.toFixed(3)}) · To win $${toWinDisplay.toFixed(2)}`
+      : `${centsLabel} (${odds.toFixed(3)})`,
     stake: stake || null,
-    payout: fromPayout && payout ? payout : (stake ? stake * odds : null),
+    payout: fromPayout && totalPayout ? totalPayout : (stake ? stake * odds : null),
     toWin: profit,
-    hint: stake && payout
-      ? `베팅 $${stake} → 수령 $${payout.toFixed(2)}`
+    hint: stake && toWinDisplay
+      ? `베팅 $${stake} → To win $${toWinDisplay.toFixed(2)}`
       : (listedCents ? `실시간 ${formatCentsLabel(priceCents)}` : ''),
     marketKind: 'ml',
     period: 'ft',
@@ -603,10 +626,9 @@ function readPolymarketSlip() {
   };
 }
 
-function calcOddsFromStakeAndPayout(stake, payout) {
-  if (!stake || !payout) return null;
-  if (payout >= stake) return payout / stake;
-  return (stake + payout) / stake;
+function calcOddsFromStakeAndPayout(stake, totalPayout) {
+  if (!stake || !totalPayout || stake <= 0 || totalPayout <= 0) return null;
+  return totalPayout / stake;
 }
 
 function decimalToCents(decimal) {

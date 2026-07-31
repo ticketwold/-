@@ -87,14 +87,26 @@ function formatKrwSigned(amount) {
   return `${sign}${amount.toLocaleString()}원`;
 }
 
+function formatRoiPercent(pct) {
+  if (pct == null || !Number.isFinite(pct)) return '-';
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 function krwToUsd(krw, rate) {
   const r = rate || 1400;
   if (!krw || !r) return null;
   return Math.round((krw / r) * 100) / 100;
 }
 
-function calcOddsFromStakeAndPayout(stake, payout) {
-  if (!stake || !payout || stake <= 0 || payout <= 0) return null;
-  if (payout >= stake) return payout / stake;
-  return (stake + payout) / stake;
+function resolveTotalPayout(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
+  if (toWinDisplay >= stake) return toWinDisplay;
+  return stake + toWinDisplay;
+}
+
+function calcOddsFromStakeAndPayout(stake, toWinDisplay) {
+  const total = resolveTotalPayout(stake, toWinDisplay);
+  if (!total || stake <= 0) return null;
+  return total / stake;
 }
