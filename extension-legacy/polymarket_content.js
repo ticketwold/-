@@ -1313,13 +1313,129 @@ async function placePolymarketBet(amountUsd) {
   return result;
 }
 
+function centsToDecimal(cents) {
+  const c = parseFloat(cents);
+  if (!Number.isFinite(c) || c <= 0) return null;
+  if (c >= 100) return null;
+  if (c > 0 && c < 1) return 1 / c;
+  return 100 / c;
+}
+
+function parsePriceToken(text) {
+  const t = String(text || '').trim();
+  let m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (m) return parseFloat(m[1]);
+  m = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (m) {
+    const p = parseFloat(m[1]);
+    if (p > 0 && p < 100) return p;
+  }
+  return null;
+}
+
+function extractVsTeams(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  const patterns = [
+    /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i,
+    /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+대\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (!m) continue;
+    const home = m[1].replace(/\s+\d+\s*-\s*\d+.*$/, '').trim();
+    const away = m[2].replace(/\s+\d+\s*-\s*\d+.*$/, '').trim();
+    if (home.length >= 2 && away.length >= 2) return { home, away };
+  }
+  return null;
+}
+
+function pushMatchup(matchups, seen, home, away, homeCents, awayCents) {
+  const key = `${home}|${away}`.toLowerCase();
+  if (seen.has(key)) return;
+  const homeDec = centsToDecimal(homeCents);
+  const awayDec = centsToDecimal(awayCents);
+  if (!homeDec || !awayDec) return;
+  seen.add(key);
+  matchups.push({
+    id: key,
+    home,
+    away,
+    title: `${home} vs ${away}`,
+    league: '',
+    ml: [
+      { team: home, side: 'home', price: homeCents / 100, decimal: homeDec },
+      { team: away, side: 'away', price: awayCents / 100, decimal: awayDec }
+    ]
+  });
+}
+
+function scanPredictionsBoard() {
+  const matchups = [];
+  const seen = new Set();
+  const raw = (document.body?.innerText || '').replace(/\r/g, '');
+
+  const rowRe = /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+(\d+)\s*-\s*(\d+)\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+\d+\s*-\s*\d+\s+\2\s+([\d.]+)\s*(?:¢|%)[\s\S]{0,40}?\6\s+([\d.]+)\s*(?:¢|%)/g;
+  let m;
+  while ((m = rowRe.exec(raw)) !== null) {
+    pushMatchup(matchups, seen, m[1].trim(), m[5].trim(), parseFloat(m[7]), parseFloat(m[8]));
+  }
+
+  if (!matchups.length) {
+    for (const el of document.querySelectorAll('div, article, section, a, button, li')) {
+      if (!visible(el)) continue;
+      const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 20 || t.length > 600) continue;
+      if (!/(?:¢|%\s)/.test(t) && !/\d+\s*-\s*\d+/.test(t)) continue;
+
+      const teams = extractVsTeams(t);
+      if (teams) {
+        const cents = [...t.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)]
+          .map((x) => parseFloat(x[1]))
+          .filter((c) => c > 0 && c < 100);
+        if (cents.length >= 2) {
+          pushMatchup(matchups, seen, teams.home, teams.away, cents[0], cents[cents.length - 1]);
+          if (matchups.length >= 80) break;
+          continue;
+        }
+      }
+
+      const parts = t.split(/\s+\d+\s*-\s*\d+\s+/);
+      if (parts.length < 2) continue;
+      const homePart = parts[0].trim().split(/\s+/);
+      const awayPart = parts[1].trim().split(/\s+/);
+      const home = homePart.slice(0, -1).join(' ') || homePart[0];
+      const away = awayPart.slice(0, -1).join(' ') || awayPart[0];
+      if (!home || !away || home.length < 2) continue;
+      const cents = [...t.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)]
+        .map((x) => parseFloat(x[1]))
+        .filter((c) => c > 0 && c < 100);
+      if (cents.length < 2) continue;
+      pushMatchup(matchups, seen, home, away, cents[0], cents[cents.length - 1]);
+      if (matchups.length >= 80) break;
+    }
+  }
+
+  return {
+    ok: true,
+    site: predictionSiteId(),
+    url: location.href,
+    matchups,
+    hasCart: !!findTradePanel(),
+    cartSlip: readPolymarketSlip()
+  };
+}
+
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, site: predictionSiteId(), version: '5.2' });
+    sendResponse({ ok: true, site: predictionSiteId(), version: '5.3' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readPolymarketSlip() });
+    return false;
+  }
+  if (msg.type === 'SCAN_BOARD') {
+    sendResponse(scanPredictionsBoard());
     return false;
   }
   if (msg.type === 'PROBE_POLY') {

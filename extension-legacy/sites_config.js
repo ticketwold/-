@@ -57,6 +57,33 @@ function leg2SiteShort(url) {
   return '예측';
 }
 
+function leg2PrefLabel(pref) {
+  if (pref === 'polymarket') return 'Polymarket';
+  if (pref === 'bcgame') return 'BC.Game';
+  return '자동';
+}
+
+function urlMatchesLeg2Pref(url, pref) {
+  if (!url) return false;
+  if (pref === 'polymarket') return isPolymarketUrl(url);
+  if (pref === 'bcgame') return isBcGameUrl(url);
+  return isLeg2PredictionUrl(url);
+}
+
+function scoreLeg2Tab(url, activeId, tabId, pref) {
+  if (!urlMatchesLeg2Pref(url, pref)) return -1;
+  let score = 0;
+  if (isLeg2EventUrl(url)) score += 30;
+  if (pref === 'bcgame' || isBcGameUrl(url)) {
+    if (/\/predictions\/event\//i.test(url)) score += 35;
+    else if (/\/predictions/i.test(url)) score += 25;
+    else score += 8;
+  } else if (/predictions/i.test(url)) score += 5;
+  if (pref === 'polymarket' && isPolymarketUrl(url)) score += 10;
+  if (tabId === activeId) score += 15;
+  return score;
+}
+
 function getWrapperGamecode(url) {
   const m = String(url || '').match(/(?:[?&#]|^)gamecode=(\d+)/i);
   return m ? m[1] : null;

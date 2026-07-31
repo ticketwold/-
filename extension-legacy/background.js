@@ -1,4 +1,4 @@
-// background.js v5.7 — 텐텐뱃 (x10x10s) + Polymarket / BC.Game
+// background.js v5.8 — 텐텐뱃 (x10x10s) + Polymarket / BC.Game
 importScripts('sites_config.js', 'teams.js', 'odds.js', 'poly_api.js');
 
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0';
@@ -189,7 +189,7 @@ async function pickBtiTab() {
   return null;
 }
 
-async function findLeg2Tab() {
+async function findLeg2Tab(pref = 'auto') {
   const tabs = await chrome.tabs.query({});
   let best = null;
   let bestScore = -1;
@@ -197,12 +197,9 @@ async function findLeg2Tab() {
   const activeId = activeTabs[0]?.id;
 
   for (const tab of tabs) {
-    if (!tab.url || !isLeg2PredictionUrl(tab.url)) continue;
-    let score = 0;
-    if (isLeg2EventUrl(tab.url)) score += 20;
-    if (isBcGameUrl(tab.url) && /\/predictions/i.test(tab.url)) score += 18;
-    else if (/predictions/i.test(tab.url)) score += 5;
-    if (tab.id === activeId) score += 15;
+    if (!tab.url) continue;
+    const score = scoreLeg2Tab(tab.url, activeId, tab.id, pref);
+    if (score < 0) continue;
     if (score > bestScore) {
       bestScore = score;
       best = tab;
@@ -210,6 +207,107 @@ async function findLeg2Tab() {
   }
   if (!best) return null;
   return { id: best.id, url: best.url, site: leg2SiteKey(best.url) };
+}
+
+async function ensurePredictionScript(tabId, frameId = null) {
+  try {
+    const target = frameId != null
+      ? { tabId, frameIds: [frameId] }
+      : { tabId, allFrames: true };
+    await chrome.scripting.executeScript({
+      target,
+      files: ['polymarket_content.js']
+    });
+    return true;
+  } catch (_) {
+    if (frameId == null) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['polymarket_content.js']
+        });
+        return true;
+      } catch (_2) {}
+    }
+    return false;
+  }
+}
+
+async function scanLeg2TabBoard(tab) {
+  if (!tab?.id) return { matchups: [], cartFound: false };
+  await ensurePredictionScript(tab.id);
+
+  const frames = await getAllTabFrames(tab.id);
+  let best = { matchups: [], cartFound: false, cartSlip: null, source: '' };
+
+  for (const frame of frames) {
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_BOARD' }, { frameId: frame.frameId });
+      if (!res) continue;
+      const count = res.matchups?.length || 0;
+      const hasCart = !!res.hasCart || !!res.cartSlip?.odds;
+      if (count > best.matchups.length || (hasCart && !best.cartFound)) {
+        best = {
+          matchups: res.matchups || best.matchups,
+          cartFound: hasCart || best.cartFound,
+          cartSlip: res.cartSlip?.odds ? res.cartSlip : best.cartSlip,
+          source: res.site || best.source
+        };
+      }
+      if (hasCart && res.cartSlip?.odds) {
+        best.cartFound = true;
+        best.cartSlip = res.cartSlip;
+      }
+    } catch (_) {}
+  }
+
+  return best;
+}
+
+function mergeMatchupLists(primary, secondary) {
+  if (!secondary?.length) return primary || [];
+  if (!primary?.length) return secondary;
+  const out = [...primary];
+  const seen = new Set(primary.map((m) => `${m.home}|${m.away}`.toLowerCase()));
+  for (const row of secondary) {
+    const key = `${row.home}|${row.away}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+async function getPredictionMatchups(leg2Pref, leg2Tab) {
+  let list = [];
+  let apiError = '';
+  let source = 'Gamma API';
+
+  try {
+    list = await getPolymarketMatchups();
+    if (leg2Pref === 'polymarket') source = 'Polymarket API';
+    else if (leg2Pref === 'bcgame') source = 'BC.Game (Gamma API)';
+    else source = 'Gamma API';
+  } catch (e) {
+    apiError = e.message || 'API 실패';
+    console.warn('[Prediction API]', apiError);
+  }
+
+  let board = null;
+  let cartFound = false;
+
+  if (leg2Tab?.id) {
+    board = await scanLeg2TabBoard(leg2Tab);
+    cartFound = board.cartFound || !!board.cartSlip?.odds;
+    if (board.matchups?.length) {
+      list = mergeMatchupLists(list, board.matchups);
+      if (leg2Pref === 'bcgame' || isBcGameUrl(leg2Tab.url)) {
+        source = apiError ? 'BC.Game 페이지' : `${source} + 페이지`;
+      }
+    }
+  }
+
+  return { list, source, board, cartFound, apiError };
 }
 
 function parseBtiSelectionPrice(s) {
@@ -306,7 +404,7 @@ function findArbOpportunities(btiList, polyList) {
   return opps.sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
 }
 
-async function runSearchOnce() {
+async function runSearchOnce(leg1Site = 'bti', leg2Pref = 'auto') {
   const btiTab = await pickBtiTab();
   let btiAll = [];
   if (btiTab) {
@@ -314,20 +412,29 @@ async function runSearchOnce() {
       console.warn('[BTI]', e.message);
     }
   }
-  let polyAll = [];
-  try { polyAll = await getPolymarketMatchups(); } catch (e) {
-    console.warn('[Poly API]', e.message);
+
+  const leg2Tab = await findLeg2Tab(leg2Pref);
+  let pred = { list: [], source: '없음', board: null, cartFound: false };
+  try {
+    pred = await getPredictionMatchups(leg2Pref, leg2Tab);
+  } catch (e) {
+    console.warn('[Prediction]', e.message);
   }
-  const opps = findArbOpportunities(btiAll, polyAll);
-  const leg2Tab = await findLeg2Tab();
+
+  const opps = findArbOpportunities(btiAll, pred.list);
   return {
     opportunities: opps,
     stats: {
       btiTotal: btiAll.length,
       btiTabFound: !!btiTab,
-      polyTotal: polyAll.length,
+      polyTotal: pred.list.length,
       polyTabFound: !!leg2Tab,
-      leg2Site: leg2Tab ? leg2SiteLabel(leg2Tab.url) : '예측',
+      leg2Pref,
+      leg2Site: leg2Tab ? leg2SiteLabel(leg2Tab.url) : leg2PrefLabel(leg2Pref),
+      leg2Source: pred.source,
+      leg2ApiError: pred.apiError || '',
+      bcBoardCount: pred.board?.matchups?.length || 0,
+      bcCartFound: pred.cartFound || !!pred.board?.cartSlip?.odds,
       matched: opps.length
     }
   };
@@ -341,11 +448,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'START_SEARCH') {
     if (searchRunning) { sendResponse({ ok: true, msg: '이미 실행 중' }); return true; }
     searchRunning = true;
-    runSearchOnce().then((result) => {
+    const leg2Pref = msg.leg2Site || 'auto';
+    runSearchOnce(msg.leg1Site || 'bti', leg2Pref).then((result) => {
       sendResponse({ ok: true, result });
       if (searchRunning) {
         searchInterval = setInterval(() => {
-          runSearchOnce().then((r) => broadcast({ type: 'SEARCH_RESULT', ...r }));
+          runSearchOnce(msg.leg1Site || 'bti', leg2Pref).then((r) => broadcast({ type: 'SEARCH_RESULT', ...r }));
         }, 500);
       }
     }).catch((e) => sendResponse({ ok: false, error: e.message }));
@@ -360,7 +468,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'RUN_SEARCH_ONCE') {
-    runSearchOnce().then((r) => sendResponse({ ok: true, result: r }))
+    runSearchOnce(msg.leg1Site || 'bti', msg.leg2Site || 'auto').then((r) => sendResponse({ ok: true, result: r }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

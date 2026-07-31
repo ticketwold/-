@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "5.7.2",
+  "version": "5.8.1",
   "description": "텐텐뱃 (x10x10s) + Polymarket / BC.Game 양방 서치 및 슬립 비교 베팅",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows"],
   "host_permissions": [
@@ -32,7 +32,8 @@
         "*://*.bc.game/*"
       ],
       "js": ["polymarket_content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {

@@ -55,7 +55,16 @@ header .sub { font-size: 11px; color: #888; margin-top: 2px; }
   align-items: end;
 }
 .row-actions { display: flex; gap: 6px; padding-bottom: 1px; }
-.row label { display: block; font-size: 11px; color: #888; margin-bottom: 4px; }
+.site-pick select {
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 5px;
+  border: 1px solid #333;
+  background: #1e1e32;
+  color: #fff;
+  font-size: 13px;
+}
+.site-pick { margin-bottom: 8px; }
 .row input {
   width: 100%; padding: 7px 9px; border-radius: 5px;
   border: 1px solid #333; background: #1e1e32; color: #fff;

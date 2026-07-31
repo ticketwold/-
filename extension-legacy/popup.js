@@ -1,4 +1,4 @@
-// popup.js v5.7.2 — 텐텐뱃 + Polymarket / BC.Game
+// popup.js v5.8.0 — 텐텐뱃 + Polymarket / BC.Game
 
 'use strict';
 
@@ -35,6 +35,55 @@ function formatPolyOddsForHistory(slip) {
   return slip.odds.toFixed(3);
 }
 
+const SITE_PREF_KEY = 'sitePrefs';
+let leg2SitePref = 'auto';
+
+function getLeg2Pref() {
+  const slip = $('slipLeg2Site')?.value;
+  const search = $('searchLeg2Site')?.value;
+  return slip || search || leg2SitePref || 'auto';
+}
+
+function applyLeg2PrefToUi(pref) {
+  leg2SitePref = pref || 'auto';
+  for (const id of ['slipLeg2Site', 'searchLeg2Site']) {
+    const el = $(id);
+    if (el) el.value = leg2SitePref;
+  }
+  updateLeg2UiLabels();
+}
+
+async function loadSitePrefs() {
+  try {
+    const data = await chrome.storage.local.get(SITE_PREF_KEY);
+    const pref = data[SITE_PREF_KEY]?.leg2 || 'auto';
+    applyLeg2PrefToUi(pref);
+  } catch (_) {
+    applyLeg2PrefToUi('auto');
+  }
+}
+
+async function saveSitePrefs() {
+  const pref = getLeg2Pref();
+  leg2SitePref = pref;
+  try {
+    await chrome.storage.local.set({ [SITE_PREF_KEY]: { leg1: 'bti', leg2: pref } });
+  } catch (_) {}
+  applyLeg2PrefToUi(pref);
+}
+
+function bindSitePrefSelectors() {
+  for (const id of ['slipLeg2Site', 'searchLeg2Site']) {
+    $(id)?.addEventListener('change', () => {
+      const v = $(id)?.value || 'auto';
+      applyLeg2PrefToUi(v);
+      saveSitePrefs();
+      findTabs().then(() => refreshSlips());
+      log(`오른쪽(B) 사이트: ${leg2PrefLabel(v)}`, 'info');
+    });
+  }
+}
+
 let cachedLeg2Url = null;
 
 function leg2ShortLabel() {
@@ -42,7 +91,9 @@ function leg2ShortLabel() {
 }
 
 function leg2FullLabel() {
-  return leg2SiteLabel(cachedLeg2Url) || 'Polymarket';
+  const pref = getLeg2Pref();
+  if (pref !== 'auto') return leg2PrefLabel(pref);
+  return leg2SiteLabel(cachedLeg2Url) || 'Polymarket / BC.Game';
 }
 
 function isLeg2Source(source) {
@@ -374,9 +425,9 @@ function sendBti(tabId, frameId, msg) {
   });
 }
 
-function sendPoly(tabId, msg) {
+function sendPoly(tabId, msg, frameId = 0) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, msg, (res) => {
+    chrome.tabs.sendMessage(tabId, msg, { frameId: frameId || 0 }, (res) => {
       if (chrome.runtime.lastError) resolve(null);
       else resolve(res);
     });
@@ -395,15 +446,38 @@ async function ensureBtiScript(tabId, frameId) {
   } catch (_) {}
 }
 
-async function ensurePolyScript(tabId) {
-  if (polyScriptReady.has(tabId)) return;
+async function ensurePolyScript(tabId, frameId = 0) {
+  const key = frameId ? `${tabId}:${frameId}` : String(tabId);
+  if (polyScriptReady.has(key)) return;
   try {
+    const target = frameId ? { tabId, frameIds: [frameId] } : { tabId };
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target,
       files: ['polymarket_content.js']
     });
-    polyScriptReady.add(tabId);
+    polyScriptReady.add(key);
+    if (!frameId) polyScriptReady.add(String(tabId));
   } catch (_) {}
+}
+
+async function readPolySlipAllFrames(polyTab) {
+  const frames = await getAllFrames(polyTab.id);
+  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
+  const seen = new Set();
+  let best = null;
+
+  for (const frameId of order) {
+    if (seen.has(frameId)) continue;
+    seen.add(frameId);
+    await ensurePolyScript(polyTab.id, frameId);
+    const res = await sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId);
+    const slip = res?.slip;
+    if (slip?.fromPayout && slip.odds > 1) return slip;
+    if (slip?.odds > 1 || slip?.needsStake) {
+      if (!best || slip.fromPayout || (slip.odds > 1 && !best.odds)) best = slip;
+    }
+  }
+  return best;
 }
 
 async function injectReadBtiFrame(tabId, frameId) {
@@ -832,12 +906,13 @@ async function findBtiFrame(tabId) {
 
 async function findTabs() {
   const tabs = await chrome.tabs.query({});
+  const leg2Pref = getLeg2Pref();
   let btiTab = null;
   const leg2Tabs = [];
 
   for (const tab of tabs) {
     if (!tab.url) continue;
-    if (isLeg2PredictionUrl(tab.url)) leg2Tabs.push(tab);
+    if (urlMatchesLeg2Pref(tab.url, leg2Pref)) leg2Tabs.push(tab);
     if (isWrapperUrl(tab.url) && !btiTab) btiTab = tab;
   }
 
@@ -847,11 +922,7 @@ async function findTabs() {
   const activeId = activeTabs[0]?.id;
 
   for (const t of leg2Tabs) {
-    let score = 0;
-    if (isLeg2EventUrl(t.url)) score += 20;
-    if (isBcGameUrl(t.url) && /\/predictions/i.test(t.url || '')) score += 18;
-    else if (/predictions/i.test(t.url || '')) score += 5;
-    if (t.id === activeId) score += 15;
+    const score = scoreLeg2Tab(t.url, activeId, t.id, leg2Pref);
     if (score > bestScore) {
       bestScore = score;
       polyTab = t;
@@ -859,6 +930,7 @@ async function findTabs() {
   }
 
   if (polyTab?.url) cachedLeg2Url = polyTab.url;
+  else if (leg2Pref !== 'auto') cachedLeg2Url = null;
   updateLeg2UiLabels();
 
   if (btiTab) {
@@ -871,7 +943,8 @@ async function findTabs() {
 
   return {
     btiTab,
-    polyTab: polyTab ? { id: polyTab.id, url: polyTab.url } : null
+    polyTab: polyTab ? { id: polyTab.id, url: polyTab.url } : null,
+    leg2Pref
   };
 }
 
@@ -922,20 +995,18 @@ async function readPolySlipFromApi(polyTab) {
 }
 
 async function readPolySlip(polyTab) {
-  const leg2Label = leg2SiteLabel(polyTab?.url);
+  const leg2Pref = getLeg2Pref();
+  const leg2Label = leg2Pref === 'auto' ? leg2SiteLabel(polyTab?.url) : leg2PrefLabel(leg2Pref);
   if (!polyTab?.id) {
-    lastStatus.poly = `${leg2FullLabel()}: 탭 없음 — Polymarket 또는 BC.Game 예측 페이지 열기`;
+    const need = leg2Pref === 'auto' ? 'Polymarket 또는 BC.Game' : leg2PrefLabel(leg2Pref);
+    lastStatus.poly = `오른쪽(B) ${leg2PrefLabel(leg2Pref)}: 탭 없음 — ${need} 예측 페이지를 열어주세요`;
     return null;
   }
 
   cachedLeg2Url = polyTab.url;
   updateLeg2UiLabels();
 
-  await ensurePolyScript(polyTab.id);
-
-  let slip = null;
-  const res = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
-  if (res?.slip) slip = res.slip;
+  let slip = await readPolySlipAllFrames(polyTab);
 
   const siteKey = leg2SiteKey(polyTab.url) || 'polymarket';
   if (!slip?.fromPayout) {
@@ -949,22 +1020,22 @@ async function readPolySlip(polyTab) {
   }
 
   if (slip?.odds > 1) {
-    lastStatus.poly = slip.needsStake ? `${leg2Label}: Amount 입력 필요` : '';
+    lastStatus.poly = slip.needsStake ? `${leg2Label}: 금액(USDT) 입력 필요` : '';
     return slip;
   }
 
   const apiSlip = await readPolySlipFromApi(polyTab);
   if (apiSlip?.odds > 1 && !slip) {
-    lastStatus.poly = 'Amount 입력 시 당첨금 기준 배당으로 전환';
+    lastStatus.poly = '금액 입력 시 우승/당첨금 기준 배당으로 전환';
     return apiSlip;
   }
 
   if (slip?.needsStake) {
-    lastStatus.poly = `${leg2Label}: Amount + To win 입력 필요`;
+    lastStatus.poly = `${leg2Label}: 금액(USDT) + 우승(당첨) 확인 필요 — 마켓 클릭 후 금액 입력`;
     return slip;
   }
 
-  lastStatus.poly = `${leg2Label}: 이벤트 페이지에서 팀 선택 (/event/ 또는 /predictions/event/)`;
+  lastStatus.poly = `${leg2Label}: predictions 페이지에서 마켓 클릭 → 금액(USDT) 입력`;
   return slip || apiSlip || null;
 }
 
@@ -1210,14 +1281,29 @@ function renderSearchResults(data) {
   if (!data) return;
 
   const s = data.stats || {};
-  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · 예측 ${s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / ${s.leg2Site || '예측'} ${s.polyTabFound ? 'O' : 'X'})`;
+  const leg2Name = s.leg2Source || s.leg2Site || '예측';
+  const leg2Pref = s.leg2Pref || getLeg2Pref();
+  const btiOk = s.btiTabFound ? 'O' : 'X';
+  const leg2TabOk = s.polyTabFound ? 'O' : 'X';
+  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · ${leg2Name} ${s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (A:${btiOk} / B:${leg2TabOk})`;
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');
   const opps = (data.opportunities || []).filter((o) => parseFloat(o.profit) >= minP);
+  const leg2Short = leg2Pref === 'bcgame' ? 'BC' : (leg2Pref === 'polymarket' ? '폴리' : 'B');
 
   if (!opps.length) {
-    el.innerHTML = '<div class="hint" style="padding:12px">조건 충족 기회 없음 — 탭 열림/팀명 매칭 확인</div>';
+    let hint = '조건 충족 기회 없음 — 팀명 매칭/최소 수익률 확인';
+    if (!s.btiTabFound) {
+      hint = '왼쪽(A) 텐텐뱃: x10x10s.com 스포츠 탭을 열어주세요';
+    } else if (s.leg2ApiError) {
+      hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} API 오류: ${s.leg2ApiError}`;
+    } else if ((s.polyTotal || 0) === 0) {
+      hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} 경기 데이터 없음 — 확장 새로고침 후 재시도`;
+    } else if (!s.polyTabFound && (leg2Pref === 'bcgame' || leg2Pref === 'polymarket')) {
+      hint = `서치 데이터 ${s.polyTotal}경기 로드됨 (탭 없음) — 슬립 비교는 ${leg2PrefLabel(leg2Pref)} 탭 필요`;
+    }
+    el.innerHTML = `<div class="hint" style="padding:12px">${hint}</div>`;
     return;
   }
 
@@ -1225,14 +1311,15 @@ function renderSearchResults(data) {
     const div = document.createElement('div');
     div.className = 'opp';
     div.innerHTML = `<strong>${o.home} vs ${o.away}</strong><br>
-      Poly <b>${o.polyTeam}</b> ${o.polyOdds} · 텐텐뱃 ${o.btiSide} ${o.btiOdds}
+      ${leg2Short} <b>${o.polyTeam}</b> ${o.polyOdds} · 텐텐뱃 ${o.btiSide} ${o.btiOdds}
       <span class="profit-tag"> → ${o.profit}%</span>`;
     el.appendChild(div);
   }
 }
 
 function startSearch() {
-  chrome.runtime.sendMessage({ type: 'START_SEARCH' }, (res) => {
+  const leg2Pref = getLeg2Pref();
+  chrome.runtime.sendMessage({ type: 'START_SEARCH', leg1Site: 'bti', leg2Site: leg2Pref }, (res) => {
     if (res?.ok) {
       $('searchStart').disabled = true;
       $('searchStop').disabled = false;
@@ -1312,6 +1399,8 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 loadHistory();
+loadSitePrefs();
+bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.7.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.8.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
