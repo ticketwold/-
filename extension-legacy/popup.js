@@ -512,69 +512,79 @@ async function injectReadPoly(tabId) {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        function parseCents(txt) {
-          const m = String(txt || '').match(/(\d+(?:\.\d+)?)\s*¢/);
+        function vis(el) {
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        }
+        function parseMoney(t) {
+          const m = String(t || '').trim().match(/\$?\s*([\d,]+(?:\.\d+)?)/);
           if (!m) return null;
-          const c = parseFloat(m[1]);
-          return c >= 1 && c < 100 ? c : null;
+          const v = parseFloat(m[1].replace(/,/g, ''));
+          return Number.isFinite(v) && v > 0 ? v : null;
         }
-        function norm(s) {
-          return String(s || '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+        function findPanel() {
+          let best = null;
+          let bestScore = -1;
+          for (const el of document.querySelectorAll('div, section, aside, form')) {
+            if (!vis(el)) continue;
+            const t = el.innerText || '';
+            if (!el.querySelector('input, [contenteditable="true"]')) continue;
+            if (!/to\s*win/i.test(t) || !/\bamount\b/i.test(t)) continue;
+            let score = 0;
+            if (/\bamount\b/i.test(t)) score += 40;
+            if (/to\s*win/i.test(t)) score += 40;
+            if (score > bestScore) { bestScore = score; best = el; }
+          }
+          return best;
         }
-        function teamMatch(team, text) {
-          const nt = norm(team);
-          const bt = norm(text);
-          if (!nt || !bt) return false;
-          return bt.includes(nt) || nt.includes(bt);
+        function readStake(panel) {
+          if (!panel) return null;
+          for (const inp of panel.querySelectorAll('input, [contenteditable="true"]')) {
+            if (!vis(inp)) continue;
+            const v = parseMoney(inp.value || inp.textContent || inp.getAttribute('value'));
+            if (v) return v;
+          }
+          const m = (panel.innerText || '').match(/Amount\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
+          if (m) return parseFloat(m[1].replace(/,/g, '')) || null;
+          return null;
+        }
+        function readToWin(panel) {
+          if (!panel) return null;
+          const raw = panel.innerText || '';
+          const idx = raw.search(/to\s*win/i);
+          if (idx < 0) return null;
+          const section = raw.slice(idx, idx + 500);
+          const vals = [];
+          for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+            const ctx = section.slice(Math.max(0, m.index - 20), m.index + m[0].length + 20);
+            if (/avg\.?\s*price|¢/i.test(ctx)) continue;
+            const v = parseFloat(m[1].replace(/,/g, ''));
+            if (v >= 0.5) vals.push(v);
+          }
+          return vals.length ? Math.max(...vals) : null;
         }
 
-        let team = '';
-        for (const btn of document.querySelectorAll('button, [role="button"]')) {
-          const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-          const m = t.match(/^buy\s+(.+)$/i);
-          if (m) { team = m[1].trim(); break; }
-        }
-
-        const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ');
-        const avgM = bodyText.match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
-        if (avgM) {
-          const c = parseFloat(avgM[1]);
-          if (c >= 1 && c < 100) {
+        const panel = findPanel();
+        const stake = readStake(panel);
+        const toWin = readToWin(panel);
+        if (stake && toWin) {
+          const total = toWin >= stake ? toWin : stake + toWin;
+          const odds = total / stake;
+          if (odds > 1.001 && odds <= 100) {
             return {
               source: 'polymarket',
-              odds: 100 / c,
-              priceCents: c,
-              teamLabel: team,
-              marketKind: 'ml',
-              displayLabel: `${c}¢ (${(100 / c).toFixed(3)})`
+              odds,
+              priceCents: Math.round((stake / total) * 1000) / 10,
+              displayLabel: `${odds.toFixed(3)} · 당첨 $${toWin.toFixed(2)}`,
+              stake,
+              payout: total,
+              fromPayout: true,
+              marketKind: 'ml'
             };
           }
         }
-
-        const candidates = [];
-        for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
-          const r = btn.getBoundingClientRect();
-          if (!r.width || !r.height) continue;
-          const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-          const cents = parseCents(t);
-          if (!cents) continue;
-          let score = 0;
-          if (team && teamMatch(team, t)) score += 120;
-          if (btn.getAttribute('aria-pressed') === 'true') score += 80;
-          if (/^buy\s+/i.test(t)) score += 40;
-          candidates.push({ cents, score });
-        }
-        candidates.sort((a, b) => b.score - a.score);
-        const pick = candidates[0];
-        if (!pick) return null;
-        return {
-          source: 'polymarket',
-          odds: 100 / pick.cents,
-          priceCents: pick.cents,
-          teamLabel: team,
-          marketKind: 'ml',
-          displayLabel: `${pick.cents}¢ (${(100 / pick.cents).toFixed(3)})`
-        };
+        return null;
       }
     });
     return results?.[0]?.result || null;
@@ -828,45 +838,40 @@ async function readPolySlip(polyTab) {
     return null;
   }
 
-  const [res, injected, apiSlip] = await Promise.all([
-    sendPoly(polyTab.id, { type: 'READ_SLIP' }),
-    injectReadPoly(polyTab.id),
-    readPolySlipFromApi(polyTab)
-  ]);
+  await ensurePolyScript(polyTab.id);
 
-  if (res?.slip?.odds > 1) {
-    lastStatus.poly = '';
-    return res.slip;
+  let slip = null;
+  const res = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
+  if (res?.slip) slip = res.slip;
+
+  if (!slip?.fromPayout) {
+    const injected = await injectReadPoly(polyTab.id);
+    if (injected?.fromPayout) slip = { ...slip, ...injected };
   }
-  if (injected?.odds > 1) {
+
+  if (slip?.fromPayout) {
     lastStatus.poly = '';
-    return injected;
+    return slip;
   }
-  if (apiSlip?.odds > 1) {
-    lastStatus.poly = '';
+
+  if (slip?.odds > 1) {
+    lastStatus.poly = slip.needsStake ? 'Polymarket: Amount 입력 필요' : '';
+    return slip;
+  }
+
+  const apiSlip = await readPolySlipFromApi(polyTab);
+  if (apiSlip?.odds > 1 && !slip) {
+    lastStatus.poly = 'Amount 입력 시 당첨금 기준 배당으로 전환';
     return apiSlip;
   }
 
-  await ensurePolyScript(polyTab.id);
-  const res2 = await sendPoly(polyTab.id, { type: 'READ_SLIP' });
-  if (res2?.slip?.odds > 1) {
-    lastStatus.poly = '';
-    return res2.slip;
-  }
-
-  const apiSlip2 = await readPolySlipFromApi(polyTab);
-  if (apiSlip2?.odds > 1) {
-    lastStatus.poly = '';
-    return apiSlip2;
-  }
-
-  if (injected?.needsStake || res2?.slip?.needsStake) {
-    lastStatus.poly = 'Polymarket: 금액($) 입력 필요';
-    return injected || res2?.slip;
+  if (slip?.needsStake) {
+    lastStatus.poly = 'Polymarket: Amount + To win 입력 필요';
+    return slip;
   }
 
   lastStatus.poly = 'Polymarket: /event/ 페이지에서 팀 선택';
-  return injected || res2?.slip || apiSlip2 || null;
+  return slip || apiSlip || null;
 }
 
 function slipOdds(slip) {
@@ -877,18 +882,13 @@ function slipOdds(slip) {
 }
 
 function mergeSlipCached(cached, fresh) {
-  if (!fresh || !slipOdds(fresh)) return null;
+  if (!fresh || !slipOdds(fresh)) return cached?.fromPayout ? cached : null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
+  if (fresh.fromPayout && !cached.fromPayout) return { ...fresh, odds: freshOdds };
+  if (cached.fromPayout && !fresh.fromPayout) return { ...cached, odds: slipOdds(cached) };
   if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
     return { ...fresh, odds: freshOdds };
-  }
-  const cachedCents = cached.priceCents;
-  if (fresh.priceCents && fresh.priceCents !== cachedCents) {
-    return { ...cached, ...fresh, odds: freshOdds };
-  }
-  if (!cached.odds || Math.abs(freshOdds - cached.odds) > 0.0001) {
-    return { ...cached, ...fresh, odds: freshOdds };
   }
   return { ...cached, ...fresh, odds: freshOdds };
 }
@@ -1219,4 +1219,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.6.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.6.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

@@ -103,13 +103,35 @@ function readPanelStake(panel) {
   const panelEl = panel || findTradePanel();
   if (!panelEl) return readStake(null);
 
+  const inp = findAmountInput(panelEl);
+  if (inp) {
+    for (const raw of [
+      inp.value,
+      inp.getAttribute('value'),
+      inp.textContent,
+      inp.getAttribute('aria-valuenow'),
+      inp.getAttribute('data-value')
+    ]) {
+      const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+    const box = inp.closest('div') || inp.parentElement;
+    if (box) {
+      const bm = (box.textContent || '').match(/\$\s*([\d,]+(?:\.\d+)?)/);
+      if (bm) {
+        const v = parseFloat(bm[1].replace(/,/g, ''));
+        if (v > 0 && v < 100000) return v;
+      }
+    }
+  }
+
   const fromInput = readStake(panelEl);
   if (fromInput) return fromInput;
 
   const text = (panelEl.innerText || '').replace(/\s+/g, ' ');
   const patterns = [
-    /Amount\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
-    /\bamount\b[^$\d]{0,12}\$?\s*([\d,]+(?:\.\d+)?)/i
+    /Amount\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /\bamount\b[^$\d]{0,20}\$?\s*([\d,]+(?:\.\d+)?)/i
   ];
   for (const re of patterns) {
     const m = text.match(re);
@@ -118,13 +140,6 @@ function readPanelStake(panel) {
     if (v > 0 && v < 100000) return v;
   }
 
-  const inp = findAmountInput(panelEl);
-  if (inp) {
-    for (const raw of [inp.value, inp.getAttribute('value'), inp.textContent]) {
-      const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-  }
   return null;
 }
 
@@ -152,7 +167,66 @@ function isValidPayout(value, stake, ctx) {
   return false;
 }
 
+function readToWinFromPanel(panel) {
+  const panelEl = panel || findTradePanel();
+  const scopes = [panelEl, document.body].filter(Boolean);
+  const values = [];
+
+  for (const scope of scopes) {
+    const raw = scope.innerText || '';
+    for (const match of raw.matchAll(/to\s*win/gi)) {
+      const section = raw.slice(match.index, match.index + 500);
+      for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+        if (/avg\.?\s*price|¢|price\s*\d/i.test(ctx)) continue;
+        if (v >= 0.5) values.push({ v, score: 120 });
+      }
+      for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
+        const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+        if (/avg\.?\s*price|¢|amount/i.test(ctx)) continue;
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        if (v >= 0.5) values.push({ v, score: 100 });
+      }
+    }
+
+    for (const el of scope.querySelectorAll('*')) {
+      const own = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/^to\s*win$/i.test(own) && !/^to\s*win$/i.test(own.replace(/[^\w\s]/g, ' '))) continue;
+
+      let box = el.parentElement;
+      for (let d = 0; d < 6 && box; d++) {
+        for (const node of box.querySelectorAll('span, div, p, strong, h1, h2, h3')) {
+          if (node.children.length > 3) continue;
+          const t = (node.textContent || '').trim();
+          if (/avg\.?\s*price|¢/i.test(t)) continue;
+          let v = parseMoneyOnly(t);
+          if (!v) {
+            const m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
+            if (m) v = parseFloat(m[1].replace(/,/g, ''));
+          }
+          if (!v || v < 0.5) continue;
+          let score = 90 - d * 8;
+          try {
+            const fs = parseFloat(getComputedStyle(node).fontSize || '0');
+            if (fs >= 18) score += 40;
+          } catch (_) {}
+          values.push({ v, score });
+        }
+        box = box.parentElement;
+      }
+    }
+  }
+
+  if (!values.length) return null;
+  values.sort((a, b) => b.score - a.score || b.v - a.v);
+  return values[0].v;
+}
+
 function readPayoutAmount(panel, stake) {
+  const fromPanel = readToWinFromPanel(panel);
+  if (fromPanel) return fromPanel;
+
   const scopes = [panel, document.body].filter(Boolean);
   const values = [];
 
