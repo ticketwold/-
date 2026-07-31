@@ -129,11 +129,30 @@ function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
   for (const btn of allBtns) {
     const parsed = parseSelectionButton(btn);
     if (!parsed) continue;
+    const raw = parsed.rawText || '';
+    const isOu = /오버|언더|over|under/i.test(raw);
+    const hasHc = /[+-]\d/.test(parsed.pointsText || raw);
+    if (slipMktType === 'ml' && (isOu || hasHc)) continue;
+    if (slipMktType === 'ah' && isOu) continue;
+    if (slipMktType === 'ou' && !isOu) continue;
+
     const btnClean = (parsed.label || parsed.rawText || '').replace(/\s+/g, '').toLowerCase();
     if (teamClean.length > 1 && !btnClean.includes(teamClean) && !teamClean.includes(btnClean.slice(0, 6))) {
       continue;
     }
     if (slipLine !== null && parsed.line != null && Math.abs(parsed.line - slipLine) > 0.02) continue;
+
+    if (slipMktType === 'ou') {
+      const ouMatch = selectionText.match(/(오버|언더|over|under)\s*([\d.]+)/i);
+      if (ouMatch) {
+        const wantSide = (ouMatch[1].toLowerCase().includes('언더') || ouMatch[1].toLowerCase() === 'under') ? 'u' : 'o';
+        const wantLine = parseFloat(ouMatch[2]);
+        const btnSide = /언더|under/i.test(raw) ? 'u' : 'o';
+        if (btnSide !== wantSide) continue;
+        if (parsed.line != null && Math.abs(parsed.line - wantLine) > 0.02) continue;
+      }
+    }
+
     if (teamClean.length > 1 && btnClean.includes(teamClean)) return parsed.odds;
     if (!best) best = parsed.odds;
   }
@@ -187,15 +206,7 @@ function parseSlipFromCard(card) {
   const mktText = mktEl ? mktEl.textContent.trim() : marketTitleText;
 
   const allText = selectionText + ' ' + mktText + ' ' + marketTitleText;
-
-  const slipMktType = (function() {
-    const t = allText.toLowerCase();
-    if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
-    if ((t.includes('맵') || t.includes('map')) && (t.includes('우승') || t.includes('winner'))) return 'ml';
-    if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
-    if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
-    return 'ml';
-  })();
+  const slipMktType = detectMarketType(allText);
 
   // W1/W2 슬립 — 실시간 배당판만
   if (/^W[12]$/i.test(selectionText.trim())) {
@@ -586,7 +597,9 @@ function readActiveSlipDisplayOdds() {
       const eventText = eventEl?.textContent?.trim() || '';
       const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
 
-      if (!selectionText && !/W[12]/i.test(txt)) continue;
+      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
+      const mktType = detectMarketType(allText);
+      if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') continue;
 
       for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
         if (isStruckThrough(sp)) continue;
@@ -599,7 +612,7 @@ function readActiveSlipDisplayOdds() {
             mktText: marketTitleText,
             source: 'slip-display',
             fromSlip: false,
-            marketKind: 'ml'
+            marketKind: mktType
           });
         }
       }
@@ -615,7 +628,7 @@ function readActiveSlipDisplayOdds() {
             mktText: marketTitleText,
             source: 'slip-display',
             fromSlip: false,
-            marketKind: 'ml'
+            marketKind: mktType
           });
         }
       }
@@ -623,7 +636,7 @@ function readActiveSlipDisplayOdds() {
       const boardOdds = readOddsFromBoardForSelection(
         selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
         allText,
-        'ml'
+        mktType
       );
       if (boardOdds > 1.01) {
         return enrichBtiSlip({
@@ -633,7 +646,7 @@ function readActiveSlipDisplayOdds() {
           mktText: marketTitleText,
           source: 'board-live',
           fromSlip: false,
-          marketKind: 'ml'
+          marketKind: mktType
         });
       }
 
@@ -653,7 +666,7 @@ function readActiveSlipDisplayOdds() {
           mktText: marketTitleText,
           source: 'slip-display',
           fromSlip: false,
-          marketKind: 'ml'
+          marketKind: mktType
         });
       }
     }
@@ -1217,8 +1230,8 @@ function detectMarketType(text) {
   if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
   if (t.includes('승리팀') || t.includes('승리') || t.includes('winner') || t.includes('winning team')) return 'ml';
   if ((t.includes('맵') || t.includes('map')) && (t.includes('우승') || t.includes('winner'))) return 'ml';
-  if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
-  if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
+  if (t.includes('핸디') || t.includes('핸디캡') || t.includes('handicap') || t.includes('hdp') || t.includes('아시안') || t.includes('spread') || t.includes('run line')) return 'ah';
+  if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계') || t.includes('total') || t.includes('o/u') || t.includes('언오버') || t.includes('골합') || t.includes('득점')) return 'ou';
   return 'ml';
 }
 
@@ -1470,8 +1483,15 @@ function pickBoardSelection(pool, hint = {}) {
   return pool[0] || null;
 }
 
+function inferMarketKindFromSlip() {
+  const cards = getRealSlipCards();
+  if (!cards.length) return null;
+  const slip = parseSlipFromCard(cards[cards.length - 1]);
+  return slip?.marketKind || null;
+}
+
 function readBtiBoardOdds(hint = {}) {
-  const marketKind = hint.marketKind || hint.type || 'ml';
+  const marketKind = hint.marketKind || hint.type || inferMarketKindFromSlip() || 'ml';
   const period = hint.period || 'ft';
 
   const board = scrapeBoardSelections();
@@ -1567,14 +1587,15 @@ function readEmergencyBoardOdds(hint = {}) {
 
   const evText = findEventNameNearButton(pick.element) || '';
   const { home, away } = parseEventTeams(evText);
+  const mktKind = pick.marketKind || detectMarketType(pick.rawText || pick.label || '');
   return enrichBtiSlip({
     odds: pick.odds,
     eventId: (location.href.match(/\/(\d{10,20})/) || [])[1] || null,
-    marketKind: 'ml',
+    marketKind: mktKind,
     period: 'ft',
     side: pick === parsed[0] ? 'home' : 'away',
     line: pick.line ?? null,
-    marketKey: 'ft_ml_home',
+    marketKey: `ft_${mktKind}_${pick === parsed[0] ? 'home' : 'away'}`,
     selectionText: pick.label || pick.rawText || '',
     eventText: evText,
     homeTeam: home,
@@ -1586,6 +1607,12 @@ function readEmergencyBoardOdds(hint = {}) {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
+
+  // 슬립 카드(AH/OU/ML) 우선 — 배당판 ML만 읽던 문제 수정
+  if (getRealSlipCards().length > 0) {
+    const slipFromCard = readBtiSlip(hintObj);
+    if (slipFromCard?.odds > 1.01) return slipFromCard;
+  }
 
   const slipDisplay = readActiveSlipDisplayOdds();
   if (slipDisplay?.odds > 1.01) return slipDisplay;

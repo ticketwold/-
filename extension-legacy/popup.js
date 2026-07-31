@@ -209,10 +209,13 @@ function formatBtiMeta(slip) {
     if (slip.side === 'away' || slip.side === 'a') label = slip.awayTeam || team || '-';
     else label = slip.homeTeam || team || '-';
   } else label = team || '-';
+  const mkt = slip.marketKind === 'ah' ? '핸디' : slip.marketKind === 'ou' ? 'OU' : '';
+  const line = slip.line != null ? ` ${slip.line > 0 ? '+' : ''}${slip.line}` : '';
+  const prefix = mkt ? `${mkt}${line} · ` : '';
   if (slip.source === 'board-live' || slip.source === 'board' || slip.source === 'main-scrape' || slip.source === 'slip-display' || slip.source === 'merged') {
-    return `${label} · 실시간`;
+    return `${prefix}${label} · 실시간`;
   }
-  return label;
+  return `${prefix}${label}`;
 }
 
 function updateSlipUI(bti, poly, arbBti = null) {
@@ -421,13 +424,20 @@ async function injectReadBtiFrame(tabId, frameId) {
               if (!/W[12]|betInformation|우승|winner|맵|map/i.test(txt)) continue;
 
               const title = card.querySelector('[class*="betInformation__title"]');
-              const selectionText = title?.textContent?.trim() || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : '');
+              const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+              const selectionText = titleEls[0]?.textContent?.trim() || title?.textContent?.trim() || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : '');
+              const marketTitleText = titleEls[1]?.textContent?.trim() || '';
               const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
               const eventText = eventEl?.textContent?.trim() || '';
+              const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
+              let marketKind = 'ml';
+              const lt = allText.toLowerCase();
+              if (lt.includes('핸디') || lt.includes('handicap') || lt.includes('hdp') || lt.includes('spread')) marketKind = 'ah';
+              else if (lt.includes('오버') || lt.includes('언더') || lt.includes('over') || lt.includes('under') || lt.includes('총계') || lt.includes('total')) marketKind = 'ou';
 
               for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]')) {
                 const o = parseOdds(sp.textContent);
-                if (o) return { odds: o, selectionText, eventText, source: 'slip-display', hasInput: true };
+                if (o) return { odds: o, selectionText, eventText, mktText: marketTitleText, source: 'slip-display', hasInput: true, marketKind };
               }
               const nums = [];
               for (const sp of card.querySelectorAll('span, div, b, strong')) {
@@ -473,7 +483,7 @@ async function injectReadBtiFrame(tabId, frameId) {
         for (const btn of document.querySelectorAll('button')) {
           if (!vis(btn)) continue;
           const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-          if (!txt || /오버|언더|over|under/i.test(txt)) continue;
+          if (!txt) continue;
           let odds = null;
           const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
           if (oddsEl) odds = parseOdds(oddsEl.textContent);
@@ -482,9 +492,12 @@ async function injectReadBtiFrame(tabId, frameId) {
             if (m) odds = parseOdds(m[1]);
           }
           if (!odds) continue;
+          let marketKind = 'ml';
+          if (/오버|언더|over|under/i.test(txt)) marketKind = 'ou';
+          else if (/[+-]\d/.test(txt)) marketKind = 'ah';
           const selected = btn.getAttribute('aria-pressed') === 'true'
             || /selected|active|pressed|highlight/i.test(btn.className || '');
-          board.push({ odds, txt, selected });
+          board.push({ odds, txt, selected, marketKind });
         }
 
         if (!board.length) return null;
@@ -497,7 +510,7 @@ async function injectReadBtiFrame(tabId, frameId) {
           source: 'main-scrape',
           hasInput,
           buttonCount: board.length,
-          marketKind: 'ml'
+          marketKind: sel.marketKind || 'ml'
         };
       }
     });
@@ -1219,4 +1232,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.6.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.6.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
