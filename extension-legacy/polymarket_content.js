@@ -640,8 +640,9 @@ async function typeIntoField(el, text) {
 
   if (el.isContentEditable) {
     el.textContent = str;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertText' }));
-    await sleep(100);
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(50);
     return true;
   }
 
@@ -651,21 +652,15 @@ async function typeIntoField(el, text) {
   try {
     el.select?.();
     document.execCommand?.('selectAll', false, null);
-    document.execCommand?.('delete', false, null);
   } catch (_) {}
 
-  if (setter) setter.call(el, '');
-  for (const ch of str) {
-    if (setter) setter.call(el, (el.value || '') + ch);
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
-    await sleep(25);
-  }
+  if (setter) setter.call(el, str);
+  else el.value = str;
+
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
-  el.dispatchEvent(new Event('blur', { bubbles: true }));
-  await sleep(150);
+  el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  await sleep(80);
   return true;
 }
 
