@@ -45,6 +45,23 @@ function calcPolyProfitUsd(polyStakeUsd, polyOdds) {
   return Math.round((total - polyStakeUsd) * 100) / 100;
 }
 
+function usdToKrw(usd, rate) {
+  const r = rate || 1400;
+  if (!usd || !r) return null;
+  return Math.round(usd * r);
+}
+
+function calcRoiPercent(stake, payout) {
+  if (!stake || !payout || stake <= 0) return null;
+  return Math.round(((payout - stake) / stake) * 1000) / 10;
+}
+
+function formatRoiPercent(pct) {
+  if (pct == null || !Number.isFinite(pct)) return '-';
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 function krwToUsd(krw, rate) {
   const r = rate || 1400;
   if (!krw || !r) return null;

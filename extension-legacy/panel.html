@@ -70,7 +70,7 @@
     </div>
   </div>
   <div class="row">
-    <label>USD 환율 (원)</label>
+    <label>USDT 환율 (원)</label>
     <input type="number" id="usdRate" value="1400" min="1000" step="10">
   </div>
 
@@ -81,17 +81,21 @@
   </div>
 
   <div class="payout-box">
-    <div class="payout-title">이길 때 예상 총 수령 <span class="payout-note">(원금 포함 · 비교용)</span></div>
     <div class="payout-row">
-      <span>텐텐뱃</span>
-      <strong id="payoutBti">-</strong>
+      <span class="payout-label">텐텐뱃 당첨금</span>
+      <div class="payout-main">
+        <strong id="payoutBti">-</strong>
+        <span id="payoutBtiPct" class="payout-pct">-</span>
+      </div>
     </div>
-    <div class="payout-sub" id="payoutBtiSub">-</div>
     <div class="payout-row">
-      <span>Polymarket</span>
-      <strong id="payoutPoly">-</strong>
+      <span class="payout-label">폴리마켓 당첨금</span>
+      <div class="payout-main">
+        <strong id="payoutPoly">-</strong>
+        <span id="payoutPolyUsd" class="payout-usd">-</span>
+        <span id="payoutPolyPct" class="payout-pct">-</span>
+      </div>
     </div>
-    <div class="payout-sub" id="payoutPolySub">-</div>
     <div class="payout-compare" id="payoutCompare">-</div>
   </div>
 
