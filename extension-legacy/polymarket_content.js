@@ -99,6 +99,35 @@ function readStake(panel) {
   return readFieldValue(findAmountInput(panel));
 }
 
+function readPanelStake(panel) {
+  const panelEl = panel || findTradePanel();
+  if (!panelEl) return readStake(null);
+
+  const fromInput = readStake(panelEl);
+  if (fromInput) return fromInput;
+
+  const text = (panelEl.innerText || '').replace(/\s+/g, ' ');
+  const patterns = [
+    /Amount\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /\bamount\b[^$\d]{0,12}\$?\s*([\d,]+(?:\.\d+)?)/i
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v > 0 && v < 100000) return v;
+  }
+
+  const inp = findAmountInput(panelEl);
+  if (inp) {
+    for (const raw of [inp.value, inp.getAttribute('value'), inp.textContent]) {
+      const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+  }
+  return null;
+}
+
 function parseMoneyOnly(text) {
   const t = String(text || '').trim();
   const m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)$/);
@@ -330,15 +359,26 @@ function readCentsForBuyTeam(teamHint) {
   return candidates[0].cents;
 }
 
-function resolveTotalPayout(stake, toWinDisplay) {
+function resolveTotalPayout(stake, toWinDisplay, panel) {
   if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
-  // Polymarket "To win" = 총 수령액(≥ stake) 또는 순이익(< stake)
-  if (toWinDisplay >= stake) return toWinDisplay;
+  if (toWinDisplay < stake) return stake + toWinDisplay;
+
+  const avg = readListedPriceCents(panel || findTradePanel());
+  if (avg) {
+    const theoreticalTotal = stake / (avg / 100);
+    const theoreticalProfit = theoreticalTotal - stake;
+    const errTotal = Math.abs(toWinDisplay - theoreticalTotal);
+    const errProfit = Math.abs(toWinDisplay - theoreticalProfit);
+    if (errTotal <= errProfit) return toWinDisplay;
+    return stake + toWinDisplay;
+  }
+
+  if (toWinDisplay / stake >= 1.65) return toWinDisplay;
   return stake + toWinDisplay;
 }
 
-function centsFromStakePayout(stake, toWinDisplay) {
-  const total = resolveTotalPayout(stake, toWinDisplay);
+function centsFromStakePayout(stake, toWinDisplay, panel) {
+  const total = resolveTotalPayout(stake, toWinDisplay, panel);
   if (!total || total <= stake * 1.001) return null;
   const cents = (stake / total) * 100;
   if (!isValidPolyCents(cents)) return null;
@@ -536,8 +576,8 @@ function readLiveListedCents(panel, stake, toWinDisplay) {
     candidates.push({ cents, score, src });
   }
 
-  const implied = centsFromStakePayout(stake, toWinDisplay);
-  if (implied && hasSlip) add(implied, 900, 'implied');
+  const implied = centsFromStakePayout(stake, toWinDisplay, panelEl);
+  if (implied && hasSlip) add(implied, 950, 'implied');
 
   const selectedBoard = readSelectedBoardCents(team);
   if (selectedBoard) add(selectedBoard, hasSlip ? 880 : 920, 'selected-board');
@@ -595,31 +635,32 @@ function oddsFromCents(cents) {
 
 function readPolymarketSlip() {
   const panel = findTradePanel();
-  const stake = readStake(panel);
+  const stake = readPanelStake(panel);
   const toWinDisplay = readPayoutAmount(panel, stake);
-  const totalPayout = resolveTotalPayout(stake, toWinDisplay);
+  const totalPayout = resolveTotalPayout(stake, toWinDisplay, panel);
   const team = readTeamLabel(panel);
-  const listedCents = readLiveListedCents(panel, stake, toWinDisplay);
+  const hasSlip = stake > 0 && toWinDisplay > 0;
+  const implied = hasSlip ? centsFromStakePayout(stake, toWinDisplay, panel) : null;
 
   let odds = null;
   let fromPayout = false;
-  const implied = centsFromStakePayout(stake, toWinDisplay);
 
-  if (stake && totalPayout) {
-    odds = calcOddsFromStakeAndPayout(stake, totalPayout);
+  if (hasSlip && totalPayout) {
+    odds = totalPayout / stake;
     fromPayout = !!(odds && odds > 1.001);
   }
 
+  const listedCents = hasSlip && implied
+    ? implied
+    : readLiveListedCents(panel, stake, toWinDisplay);
+
   if (!odds || odds <= 1.001) {
     odds = oddsFromCents(listedCents);
-  } else if (implied) {
-    const impliedOdds = oddsFromCents(implied);
-    if (impliedOdds && Math.abs(impliedOdds - odds) > 0.02) {
-      odds = impliedOdds;
-    }
   }
 
-  odds = sanitizePolyOdds(odds, listedCents, stake, totalPayout);
+  if (!fromPayout) {
+    odds = sanitizePolyOdds(odds, listedCents, stake, totalPayout);
+  }
 
   if (!odds || odds <= 1.001) {
     return {
@@ -665,7 +706,9 @@ function readPolymarketSlip() {
     payout: fromPayout && totalPayout ? totalPayout : (stake ? stake * odds : null),
     toWin: profit,
     hint: stake && toWinDisplay
-      ? `베팅 $${stake} → To win $${toWinDisplay.toFixed(2)}`
+      ? (fromPayout
+        ? `실효 ${formatCentsLabel(priceCents)} (${odds.toFixed(3)}) · To win $${toWinDisplay.toFixed(2)}`
+        : `베팅 $${stake} → To win $${toWinDisplay.toFixed(2)}`)
       : (listedCents ? `실시간 ${formatCentsLabel(priceCents)}` : ''),
     marketKind: 'ml',
     period: 'ft',
@@ -888,15 +931,7 @@ async function clickAmountChips(panel, target) {
 }
 
 function readAmountFromPanel(panel) {
-  const stake = readStake(panel);
-  if (stake) return stake;
-  const t = (panel?.innerText || '').replace(/\s+/g, ' ');
-  const m = t.match(/Amount\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
-  if (m) {
-    const v = parseFloat(m[1].replace(/,/g, ''));
-    if (v > 0) return v;
-  }
-  return null;
+  return readPanelStake(panel);
 }
 
 async function setPolyTradeAmount(amountUsd, force = true) {

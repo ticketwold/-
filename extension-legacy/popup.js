@@ -1216,4 +1216,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.5.8 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.5.9 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
