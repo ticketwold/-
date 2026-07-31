@@ -30,6 +30,7 @@ let lastHistoryKey = '';
 
 function formatPolyOddsForHistory(slip) {
   if (!slip?.odds || slip.odds <= 1) return '-';
+  if (slip.fromPayout) return slip.odds.toFixed(3);
   if (slip.priceCents != null) return `${slip.priceCents}¢ (${slip.odds.toFixed(3)})`;
   return slip.odds.toFixed(3);
 }
@@ -185,9 +186,18 @@ function formatOdds(slip) {
     if (slip.needsStake) return '금액입력';
     return '-';
   }
+  if (slip.fromPayout) return slip.displayLabel || slip.odds.toFixed(3);
   if (slip.displayLabel) return slip.displayLabel;
   if (slip.priceCents != null) return `${slip.priceCents}¢ (${slip.odds.toFixed(3)})`;
   return slip.odds.toFixed(3);
+}
+
+function formatPolyMeta(slip) {
+  if (!slip) return '-';
+  const parts = [slip.teamLabel || slip.selectionText || ''];
+  if (slip.fromPayout) parts.push('당첨금 기준');
+  else if (slip.hint) parts.push(slip.hint);
+  return parts.filter(Boolean).join(' · ').slice(0, 100) || '-';
 }
 
 function formatBtiMeta(slip) {
@@ -203,13 +213,6 @@ function formatBtiMeta(slip) {
     return `${label} · 실시간`;
   }
   return label;
-}
-
-function formatPolyMeta(slip) {
-  if (!slip) return '-';
-  const parts = [slip.teamLabel || slip.selectionText || ''];
-  if (slip.hint) parts.push(slip.hint);
-  return parts.filter(Boolean).join(' · ').slice(0, 100) || '-';
 }
 
 function updateSlipUI(bti, poly, arbBti = null) {
@@ -232,8 +235,8 @@ function updateSlipUI(bti, poly, arbBti = null) {
 
   const hint = $('profitHint');
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
-  else if (!poly?.odds) hint.textContent = lastStatus.poly || 'Polymarket: 탭 열고 금액($) 입력';
-  else if (poly?.needsStake) hint.textContent = calcRunning ? 'Polymarket 금액 자동 입력 중...' : 'Polymarket 금액 입력 시 To win 배당 반영';
+  else if (!poly?.odds) hint.textContent = lastStatus.poly || 'Polymarket: Amount 입력 후 To win 확인';
+  else if (poly?.needsStake) hint.textContent = calcRunning ? 'Polymarket Amount 입력 대기...' : 'Amount 입력 시 당첨금 기준 배당';
   else if (profit !== null && profit >= getMinProfit()) hint.textContent = calcRunning ? `수익 구간 — Poly 금액 자동 갱신 (${profit.toFixed(2)}%)` : '수익 구간 충족';
   else if (profit !== null) hint.textContent = `수익 구간 밖 (최소 ${getMinProfit()}%)`;
   else hint.textContent = '배당 확인 중...';
@@ -1216,4 +1219,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.5.9 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.6.0 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

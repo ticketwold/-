@@ -359,30 +359,28 @@ function readCentsForBuyTeam(teamHint) {
   return candidates[0].cents;
 }
 
-function resolveTotalPayout(stake, toWinDisplay, panel) {
-  if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
-  if (toWinDisplay < stake) return stake + toWinDisplay;
-
-  const avg = readListedPriceCents(panel || findTradePanel());
-  if (avg) {
-    const theoreticalTotal = stake / (avg / 100);
-    const theoreticalProfit = theoreticalTotal - stake;
-    const errTotal = Math.abs(toWinDisplay - theoreticalTotal);
-    const errProfit = Math.abs(toWinDisplay - theoreticalProfit);
-    if (errTotal <= errProfit) return toWinDisplay;
-    return stake + toWinDisplay;
-  }
-
-  if (toWinDisplay / stake >= 1.65) return toWinDisplay;
-  return stake + toWinDisplay;
+// Amount + To win(당첨금)만으로 배당 계산 — Polymarket ¢/Avg Price 표시는 사용하지 않음
+function calcOddsFromToWin(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || stake <= 0 || toWinDisplay <= 0) return null;
+  const totalPayout = toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
+  const odds = totalPayout / stake;
+  if (!Number.isFinite(odds) || odds <= 1.001 || odds > 100) return null;
+  return {
+    odds,
+    totalPayout,
+    profit: totalPayout - stake,
+    priceCents: Math.round((stake / totalPayout) * 1000) / 10
+  };
 }
 
-function centsFromStakePayout(stake, toWinDisplay, panel) {
-  const total = resolveTotalPayout(stake, toWinDisplay, panel);
-  if (!total || total <= stake * 1.001) return null;
-  const cents = (stake / total) * 100;
-  if (!isValidPolyCents(cents)) return null;
-  return Math.round(cents * 10) / 10;
+function resolveTotalPayout(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
+  return toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
+}
+
+function centsFromStakePayout(stake, toWinDisplay) {
+  const slip = calcOddsFromToWin(stake, toWinDisplay);
+  return slip?.priceCents ?? null;
 }
 
 function readPageOutcomeCents(teamHint) {
@@ -576,7 +574,7 @@ function readLiveListedCents(panel, stake, toWinDisplay) {
     candidates.push({ cents, score, src });
   }
 
-  const implied = centsFromStakePayout(stake, toWinDisplay, panelEl);
+  const implied = centsFromStakePayout(stake, toWinDisplay);
   if (implied && hasSlip) add(implied, 950, 'implied');
 
   const selectedBoard = readSelectedBoardCents(team);
@@ -637,58 +635,52 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
   const toWinDisplay = readPayoutAmount(panel, stake);
-  const totalPayout = resolveTotalPayout(stake, toWinDisplay, panel);
   const team = readTeamLabel(panel);
-  const hasSlip = stake > 0 && toWinDisplay > 0;
-  const implied = hasSlip ? centsFromStakePayout(stake, toWinDisplay, panel) : null;
+  const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
 
-  let odds = null;
-  let fromPayout = false;
-
-  if (hasSlip && totalPayout) {
-    odds = totalPayout / stake;
-    fromPayout = !!(odds && odds > 1.001);
-  }
-
-  const listedCents = hasSlip && implied
-    ? implied
-    : readLiveListedCents(panel, stake, toWinDisplay);
-
-  if (!odds || odds <= 1.001) {
-    odds = oddsFromCents(listedCents);
-  }
-
-  if (!fromPayout) {
-    odds = sanitizePolyOdds(odds, listedCents, stake, totalPayout);
-  }
-
-  if (!odds || odds <= 1.001) {
+  // Amount + To win 있으면 당첨금만으로 배당 (¢ 표시 가격 무시)
+  if (slipOdds) {
+    const { odds, totalPayout, profit, priceCents } = slipOdds;
     return {
       source: 'polymarket',
-      odds: null,
-      needsStake: !listedCents,
+      odds,
+      priceCents,
+      price: priceCents / 100,
       teamLabel: team,
-      priceCents: isValidPolyCents(listedCents) ? listedCents : null,
-      hint: listedCents ? `${formatCentsLabel(listedCents)} 배당 읽는 중` : 'Polymarket 탭에서 outcome 선택',
-      marketKind: 'ml'
+      outcome: team,
+      selectionText: team || '',
+      displayLabel: `${odds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`,
+      stake,
+      payout: totalPayout,
+      toWin: profit,
+      hint: `당첨금 $${toWinDisplay.toFixed(2)} ÷ 베팅 $${stake.toFixed(2)}`,
+      marketKind: 'ml',
+      period: 'ft',
+      marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+      fromPayout: true,
+      liveCents: false
     };
   }
 
-  const priceCents = fromPayout && implied
-    ? implied
-    : (isValidPolyCents(listedCents) ? listedCents : (implied || decimalToCents(odds)));
-  if (!isValidPolyCents(priceCents)) {
+  // 금액 없을 때만 보드 ¢ 참고
+  const listedCents = readLiveListedCents(panel, 0, 0);
+  const odds = oddsFromCents(listedCents);
+
+  if (!odds || odds <= 1.001) {
     return {
       source: 'polymarket',
       odds: null,
       needsStake: true,
       teamLabel: team,
-      hint: '배당 읽기 실패 — outcome 다시 클릭',
+      priceCents: isValidPolyCents(listedCents) ? listedCents : null,
+      hint: listedCents
+        ? `${formatCentsLabel(listedCents)} — Amount 입력 시 당첨금 기준 배당`
+        : 'Polymarket Amount 입력 후 To win 확인',
       marketKind: 'ml'
     };
   }
 
-  const profit = fromPayout && totalPayout && stake ? totalPayout - stake : null;
+  const priceCents = listedCents || decimalToCents(odds);
   const centsLabel = formatCentsLabel(priceCents);
 
   return {
@@ -699,21 +691,15 @@ function readPolymarketSlip() {
     teamLabel: team,
     outcome: team,
     selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
-    displayLabel: fromPayout && stake && totalPayout
-      ? `${centsLabel} (${odds.toFixed(3)}) · To win $${toWinDisplay.toFixed(2)}`
-      : `${centsLabel} (${odds.toFixed(3)})`,
+    displayLabel: `${centsLabel} (${odds.toFixed(3)})`,
     stake: stake || null,
-    payout: fromPayout && totalPayout ? totalPayout : (stake ? stake * odds : null),
-    toWin: profit,
-    hint: stake && toWinDisplay
-      ? (fromPayout
-        ? `실효 ${formatCentsLabel(priceCents)} (${odds.toFixed(3)}) · To win $${toWinDisplay.toFixed(2)}`
-        : `베팅 $${stake} → To win $${toWinDisplay.toFixed(2)}`)
-      : (listedCents ? `실시간 ${formatCentsLabel(priceCents)}` : ''),
+    payout: null,
+    toWin: null,
+    hint: 'Amount 입력 시 To win 기준 배당으로 전환',
     marketKind: 'ml',
     period: 'ft',
     marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
-    fromPayout,
+    fromPayout: false,
     liveCents: !!listedCents
   };
 }
