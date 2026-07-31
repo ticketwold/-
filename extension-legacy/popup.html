@@ -9,7 +9,7 @@
   <div class="header-row">
     <div>
       <h1>⚡ 양방 베팅 봇</h1>
-      <div class="sub">텐텐뱃 + Polymarket · v5.5.2</div>
+      <div class="sub">텐텐뱃 + Polymarket · v5.5.3</div>
     </div>
     <button id="openPanelBtn" class="btn-icon" title="별도 창으로 열기">⬜</button>
   </div>
@@ -74,8 +74,24 @@
   </div>
 
   <div class="calc-box">
+    <div class="calc-title">베팅 금액</div>
     <div><span>텐텐뱃</span> <strong id="calcBti">-</strong></div>
     <div><span>Polymarket</span> <strong id="calcPoly">-</strong></div>
+  </div>
+
+  <div class="payout-box">
+    <div class="payout-title">이길 때 예상 총 수령 <span class="payout-note">(원금 포함 · 비교용)</span></div>
+    <div class="payout-row">
+      <span>텐텐뱃</span>
+      <strong id="payoutBti">-</strong>
+    </div>
+    <div class="payout-sub" id="payoutBtiSub">-</div>
+    <div class="payout-row">
+      <span>Polymarket</span>
+      <strong id="payoutPoly">-</strong>
+    </div>
+    <div class="payout-sub" id="payoutPolySub">-</div>
+    <div class="payout-compare" id="payoutCompare">-</div>
   </div>
 
   <div class="btn-row">

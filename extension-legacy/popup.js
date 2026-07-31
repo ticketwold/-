@@ -147,11 +147,53 @@ function updateSlipUI(bti, poly, arbBti = null) {
   else hint.textContent = '배당 확인 중...';
 
   if (btiO && polyO) {
-    $('calcBti').textContent = `${getBtiBet().toLocaleString()}원`;
-    $('calcPoly').textContent = `$${calcPolyBetUsd(getBtiBet(), btiO, polyO, getUsdRate()).toFixed(2)}`;
+    const btiBet = getBtiBet();
+    const rate = getUsdRate();
+    const polyStake = poly?.stake > 0 ? poly.stake : calcPolyBetUsd(btiBet, btiO, polyO, rate);
+    $('calcBti').textContent = `${btiBet.toLocaleString()}원`;
+    $('calcPoly').textContent = `$${polyStake.toFixed(2)}`;
+
+    const btiTotalKrw = calcBtiTotalPayoutKrw(btiBet, btiO);
+    const btiTotalUsd = krwToUsd(btiTotalKrw, rate);
+    const polyTotalUsd = calcPolyTotalPayoutUsd(polyStake, polyO);
+    const polyProfitUsd = calcPolyProfitUsd(polyStake, polyO);
+
+    if ($('payoutBti')) {
+      $('payoutBti').textContent = btiTotalKrw ? `${btiTotalKrw.toLocaleString()}원` : '-';
+      $('payoutBtiSub').textContent = btiTotalUsd ? `환산 ≈ $${btiTotalUsd.toFixed(2)}` : '-';
+
+      $('payoutPoly').textContent = polyTotalUsd ? `$${polyTotalUsd.toFixed(2)}` : '-';
+      $('payoutPolySub').textContent = polyProfitUsd != null
+        ? `베팅 $${polyStake.toFixed(2)} + 순이익(To win) $${polyProfitUsd.toFixed(2)}`
+        : '-';
+
+      const compareEl = $('payoutCompare');
+      if (btiTotalUsd && polyTotalUsd) {
+        const diff = Math.abs(btiTotalUsd - polyTotalUsd);
+        if (diff < 0.15) {
+          compareEl.textContent = `✓ 총 수령 일치 (환율 ${rate.toLocaleString()}원 기준)`;
+          compareEl.className = 'payout-compare ok';
+        } else {
+          compareEl.textContent = `⚠ 환산 차이 $${diff.toFixed(2)} — 배당/환율 확인`;
+          compareEl.className = 'payout-compare warn';
+        }
+      } else {
+        compareEl.textContent = 'Polymarket 금액 입력 후 비교';
+        compareEl.className = 'payout-compare muted';
+      }
+    }
   } else {
     $('calcBti').textContent = '-';
     $('calcPoly').textContent = '-';
+    ['payoutBti', 'payoutBtiSub', 'payoutPoly', 'payoutPolySub'].forEach((id) => {
+      const el = $(id);
+      if (el) el.textContent = '-';
+    });
+    const compareEl = $('payoutCompare');
+    if (compareEl) {
+      compareEl.textContent = '양쪽 배당 확인 후 표시';
+      compareEl.className = 'payout-compare muted';
+    }
   }
 }
 
@@ -1043,4 +1085,4 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 refreshSlips();
-log(`v5.5.2 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.5.3 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

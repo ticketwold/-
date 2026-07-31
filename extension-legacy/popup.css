@@ -96,7 +96,34 @@ body.panel-mode .slip-box .meta.team-name { font-size: 13px; }
 .calc-box {
   background: #1a1a2e; border-radius: 6px; padding: 10px; font-size: 13px; margin-bottom: 8px;
 }
+.calc-box .calc-title,
+.payout-box .payout-title {
+  font-size: 11px; color: #888; margin-bottom: 6px;
+}
 .calc-box div { display: flex; justify-content: space-between; margin: 3px 0; }
+.payout-box {
+  background: #16213a; border: 1px solid #2a3a5a; border-radius: 6px;
+  padding: 10px; margin-bottom: 8px;
+}
+.payout-box .payout-note { color: #666; font-weight: normal; }
+.payout-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 4px 0; font-size: 13px;
+}
+.payout-row strong { color: #fbbf24; font-size: 14px; }
+body.panel-mode .payout-row strong { font-size: 15px; }
+.payout-sub {
+  font-size: 10px; color: #7dd3fc; text-align: right; margin: -2px 0 6px;
+  line-height: 1.35;
+}
+body.panel-mode .payout-sub { font-size: 11px; }
+.payout-compare {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a3a5a;
+  font-size: 11px; text-align: center; line-height: 1.4;
+}
+.payout-compare.ok { color: #4ade80; }
+.payout-compare.warn { color: #fbbf24; }
+.payout-compare.muted { color: #666; }
 .results {
   max-height: 220px; overflow-y: auto; margin-top: 8px;
   border: 1px solid #2a2a4a; border-radius: 6px; padding: 4px;

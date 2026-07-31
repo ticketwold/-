@@ -29,6 +29,28 @@ function calcPolyBetUsd(btiBetKrw, btiOdds, polyOdds, rate) {
   return Math.round(((btiBetKrw * btiOdds) / (polyOdds * r)) * 100) / 100;
 }
 
+function calcBtiTotalPayoutKrw(btiBetKrw, btiOdds) {
+  if (!btiBetKrw || !btiOdds || btiOdds <= 1) return null;
+  return Math.round(btiBetKrw * btiOdds);
+}
+
+function calcPolyTotalPayoutUsd(polyStakeUsd, polyOdds) {
+  if (!polyStakeUsd || !polyOdds || polyOdds <= 1) return null;
+  return Math.round(polyStakeUsd * polyOdds * 100) / 100;
+}
+
+function calcPolyProfitUsd(polyStakeUsd, polyOdds) {
+  const total = calcPolyTotalPayoutUsd(polyStakeUsd, polyOdds);
+  if (!total || !polyStakeUsd) return null;
+  return Math.round((total - polyStakeUsd) * 100) / 100;
+}
+
+function krwToUsd(krw, rate) {
+  const r = rate || 1400;
+  if (!krw || !r) return null;
+  return Math.round((krw / r) * 100) / 100;
+}
+
 function calcOddsFromStakeAndPayout(stake, payout) {
   if (!stake || !payout || stake <= 0 || payout <= 0) return null;
   if (payout >= stake) return payout / stake;
