@@ -992,14 +992,15 @@ function findBuyTeamButton(panel) {
     if (isBuyTabButton(btn)) continue;
 
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!/^(?:buy|구매)\s+/i.test(t) || t.length < 4) continue;
-    if (/combo|terms|sell/i.test(t)) continue;
+    if (!/^buy\b/i.test(t) || t.length < 4) continue;
+    if (/combo|terms|sell|deposit|withdraw/i.test(t)) continue;
 
-    const r = btn.getBoundingClientRect();
     let score = 100 + t.length;
-    if (r.width >= 180 && r.height >= 38) score += 60;
+    if (btn.classList?.contains('trading-button')) score += 500;
+    if (btn.querySelector?.('.trading-button-text')) score += 300;
+    const r = btn.getBoundingClientRect();
+    if (r.width >= 120 && r.height >= 32) score += 60;
     if (panel && panel.contains(btn)) score += 40;
-    if (/gaming|yes|no/i.test(t)) score += 10;
 
     if (score > bestScore) {
       bestScore = score;

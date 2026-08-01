@@ -315,10 +315,16 @@ async function placePolyBet(polyTab, amountUsd) {
       },
       args: [amountUsd]
     });
-    return results?.[0]?.result || { success: false, reason: 'MAIN 응답 없음' };
+    const mainRes = results?.[0]?.result;
+    if (mainRes?.success) return mainRes;
   } catch (e) {
-    return { success: false, reason: e.message };
+    /* fallback below */
   }
+
+  await ensurePolyScript(polyTab.id);
+  const fallback = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd });
+  if (fallback?.success) return fallback;
+  return fallback || { success: false, reason: 'Poly 배팅 실패' };
 }
 
 async function prewarmTabs(btiTab, polyTab, hint) {
@@ -380,8 +386,11 @@ async function strikeBothSides(ctx) {
   const { found, btiO, polyO, polyUsd, hint, btiBetKrw } = ctx;
   const t0 = performance.now();
 
+  await ensureBtiSlip(found.btiTab, hint);
+
+  const btiHint = { ...hint, skipEnsure: true };
   const [btiRes, polyRes] = await Promise.all([
-    placeBtiBet(found.btiTab, btiBetKrw, btiO, hint),
+    placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint),
     placePolyBet(found.polyTab, polyUsd)
   ]);
 

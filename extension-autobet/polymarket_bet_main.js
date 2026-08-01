@@ -1,4 +1,4 @@
-// Polymarket 베팅 — MAIN world 전용 (React 클릭 반영)
+// Polymarket 베팅 — MAIN world (trading-button UI 지원)
 (function () {
   if (window.__polyMainPlaceBet) return;
 
@@ -8,6 +8,10 @@
     if (!el) return false;
     const r = el.getBoundingClientRect();
     return r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < window.innerHeight;
+  }
+
+  function btnText(btn) {
+    return (btn?.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   function buttons() {
@@ -30,14 +34,49 @@
   }
 
   function isBuySellTab(btn) {
-    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const t = btnText(btn);
     if (t !== 'Buy' && t !== 'Sell' && t !== '매수' && t !== '매도') return false;
     const parentText = (btn.parentElement?.textContent || '').replace(/\s+/g, ' ');
     return parentText.includes('Buy') && parentText.includes('Sell') && parentText.length < 60;
   }
 
+  function isTradingBuyButton(btn) {
+    if (!btn || btn.disabled || !visible(btn)) return false;
+    if (isBuySellTab(btn)) return false;
+    const t = btnText(btn);
+    if (!/^buy\b/i.test(t) || t.length < 4) return false;
+    if (/combo|terms|sell|deposit|withdraw/i.test(t)) return false;
+    if (btn.classList?.contains('trading-button')) return true;
+    if (btn.querySelector?.('.trading-button-text')) return true;
+    return t.length >= 6;
+  }
+
+  function findBuyTeamButton() {
+    let best = null;
+    let bestScore = -1;
+
+    for (const btn of buttons()) {
+      if (!isTradingBuyButton(btn)) continue;
+      const t = btnText(btn);
+      let score = 200;
+      if (btn.classList.contains('trading-button')) score += 500;
+      if (btn.querySelector('.trading-button-text')) score += 300;
+      const r = btn.getBoundingClientRect();
+      if (r.width >= 120 && r.height >= 32) score += 80;
+      score += Math.min(t.length, 40);
+      if (score > bestScore) { bestScore = score; best = btn; }
+    }
+
+    if (best) return best;
+
+    const direct = document.querySelector('button.trading-button[type="button"]');
+    if (direct && isTradingBuyButton(direct)) return direct;
+
+    return null;
+  }
+
   function hasDialog() {
-    return !!document.querySelector('[role="dialog"], [role="alertdialog"], [class*="modal" i], [class*="Modal"], [class*="dialog" i], [class*="Dialog"], [data-state="open"]');
+    return !!document.querySelector('[role="dialog"], [role="alertdialog"], [class*="modal" i], [class*="Modal"], [data-state="open"]');
   }
 
   function isConfirmText(t, aria) {
@@ -57,7 +96,7 @@
     for (const scope of scopes) {
       for (const btn of scope.querySelectorAll('button, [role="button"]')) {
         if (!visible(btn) || btn.disabled || seen.has(btn)) continue;
-        const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        const t = btnText(btn);
         const aria = (btn.getAttribute('aria-label') || '').trim();
         if (isBuySellTab(btn)) continue;
         if (t === 'Buy' && !hasDialog()) continue;
@@ -65,7 +104,6 @@
         seen.add(btn);
         let score = 50;
         if (/confirm/i.test(t) || /confirm/i.test(aria)) score += 80;
-        if (/place order|submit/i.test(t)) score += 70;
         if (scope.matches('[role="dialog"], [role="alertdialog"], [data-state="open"]')) score += 40;
         found.push({ btn, score });
       }
@@ -77,22 +115,21 @@
   function acceptRiskCheckboxes() {
     for (const el of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
       if (!visible(el)) continue;
-      const ctx = (el.closest('[role="dialog"], [role="alertdialog"], label, div')?.textContent || '').slice(0, 200);
+      const ctx = (el.closest('[role="dialog"], label, div')?.textContent || '').slice(0, 200);
       if (!/risk|understand|agree|accept|terms|18\+|confirm/i.test(ctx)) continue;
       if (el.checked || el.getAttribute('aria-checked') === 'true') continue;
       robustClick(el);
     }
   }
 
-  async function autoConfirmBurst(maxMs = 2400) {
+  async function autoConfirmBurst(maxMs = 3000) {
     const start = Date.now();
     let clicks = 0;
     while (Date.now() - start < maxMs) {
       if (pageBetSuccess()) return { ok: true, clicks, via: 'success-during-confirm' };
       if (pageBetError()) return { ok: false, clicks, via: 'error-during-confirm' };
       acceptRiskCheckboxes();
-      const confirms = findConfirmButtons();
-      for (const btn of confirms) {
+      for (const btn of findConfirmButtons()) {
         robustClick(btn);
         clicks++;
       }
@@ -101,30 +138,10 @@
     return { ok: !pageBetError(), clicks, via: 'burst-done' };
   }
 
-  function findBuyTeamButton() {
-    let best = null;
-    let bestScore = -1;
-    for (const btn of buttons()) {
-      if (btn.disabled || isBuySellTab(btn)) continue;
-      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!/^buy\s+/i.test(t) || t.length < 8) continue;
-      if (/combo|terms|sell|deposit|withdraw/i.test(t)) continue;
-      const r = btn.getBoundingClientRect();
-      let score = t.length;
-      if (r.width >= 160 && r.height >= 36) score += 100;
-      if (/gaming|yes|no/i.test(t)) score += 20;
-      if (score > bestScore) {
-        bestScore = score;
-        best = btn;
-      }
-    }
-    return best;
-  }
-
   async function clickBuyTab() {
     for (const btn of buttons()) {
-      const t = (btn.textContent || '').trim();
-      if (t === 'Buy' || t === '매수') {
+      const t = btnText(btn);
+      if (t === 'Buy' || t === '매수' || t === '구매') {
         robustClick(btn);
         return true;
       }
@@ -132,23 +149,64 @@
     return false;
   }
 
-  async function fillAmountWithChips(target) {
-    let left = Math.max(1, Math.round(target));
+  function findAmountInput() {
+    const candidates = [];
+    for (const inp of document.querySelectorAll('input, textarea, [contenteditable="true"]')) {
+      if (!visible(inp)) continue;
+      const ph = (inp.placeholder || '').toLowerCase();
+      const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+      const id = (inp.id || '').toLowerCase();
+      if (/search|검색/.test(ph) || /search|검색/.test(aria)) continue;
+      let score = 0;
+      if (/amount|금액|usdt|\$/.test(`${ph} ${aria} ${id} ${inp.className}`)) score += 100;
+      if (inp.type === 'number' || inp.inputMode === 'decimal') score += 50;
+      const near = inp.closest('[class*="trading"], [class*="Trade"], form, aside') || inp.parentElement;
+      if (near?.querySelector?.('button.trading-button')) score += 200;
+      if (score > 0) candidates.push({ inp, score });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0]?.inp || null;
+  }
+
+  async function fillAmountExact(target) {
+    const amount = Math.max(1, Math.round(target * 100) / 100);
+    const str = String(amount);
+    const input = findAmountInput();
+
+    if (input) {
+      input.focus();
+      try { input.click(); } catch (_) {}
+      if (input.isContentEditable) {
+        input.textContent = str;
+      } else {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+          || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        try { input.select?.(); } catch (_) {}
+        if (setter) setter.call(input, str);
+        else input.value = str;
+      }
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(200);
+      return { ok: true, method: 'type', amount };
+    }
+
     let clicks = 0;
+    let left = Math.round(amount);
     for (const n of [100, 10, 5, 1]) {
       while (left >= n) {
         const chip = buttons().find((b) => {
-          const t = (b.textContent || '').trim();
+          const t = btnText(b);
           return t === `+$${n}` || t === `$${n}`;
         });
         if (!chip) break;
         robustClick(chip);
         clicks++;
         left -= n;
-        await sleep(120);
+        await sleep(100);
       }
     }
-    return clicks;
+    return { ok: clicks > 0, method: 'chips', amount, chipClicks: clicks };
   }
 
   function pageBetSuccess() {
@@ -162,12 +220,12 @@
   }
 
   async function waitBetResult() {
-    const burst = await autoConfirmBurst(3000);
+    const burst = await autoConfirmBurst(3500);
     if (burst.ok && pageBetSuccess()) return { confirmed: true, via: 'page-success', confirmClicks: burst.clicks };
     if (pageBetError()) return { confirmed: false, via: 'page-error', confirmClicks: burst.clicks };
 
-    for (let i = 0; i < 10; i++) {
-      await sleep(150);
+    for (let i = 0; i < 12; i++) {
+      await sleep(120);
       if (pageBetSuccess()) return { confirmed: true, via: 'page-success-late', confirmClicks: burst.clicks };
       if (pageBetError()) return { confirmed: false, via: 'page-error-late', confirmClicks: burst.clicks };
       const confirms = findConfirmButtons();
@@ -183,11 +241,12 @@
     const confirms = findConfirmButtons();
     return {
       hasBuyBtn: !!buyBtn,
-      btnText: buyBtn ? buyBtn.textContent.trim().slice(0, 80) : '',
+      btnText: buyBtn ? btnText(buyBtn).slice(0, 80) : '',
+      btnClass: buyBtn?.className || '',
       btnDisabled: buyBtn ? buyBtn.disabled : null,
+      hasTradingButton: !!document.querySelector('button.trading-button'),
       hasConfirmBtn: confirms.length > 0,
-      confirmText: confirms[0] ? confirms[0].textContent.trim().slice(0, 60) : '',
-      hasDialog: hasDialog(),
+      hasAmountInput: !!findAmountInput(),
       url: location.href,
       world: 'MAIN'
     };
@@ -196,34 +255,40 @@
   window.__polyMainPlaceBet = async function (amountUsd) {
     try {
       await clickBuyTab();
-      await sleep(150);
+      await sleep(120);
 
-      const amount = Math.max(1, Math.round(amountUsd * 100) / 100);
-      const chipClicks = await fillAmountWithChips(amount);
-      await sleep(200);
+      const fill = await fillAmountExact(amountUsd);
+      await sleep(250);
 
-      const buyBtn = findBuyTeamButton();
+      let buyBtn = null;
+      for (let i = 0; i < 20; i++) {
+        buyBtn = findBuyTeamButton();
+        if (buyBtn && !buyBtn.disabled) break;
+        await sleep(80);
+        buyBtn = null;
+      }
+
       if (!buyBtn) {
         return {
           success: false,
-          reason: 'Buy {팀명} 버튼 없음 — outcome 선택 확인',
+          reason: 'Buy 버튼 없음 (trading-button) — outcome 선택 확인',
           probe: window.__polyMainProbe(),
-          chipClicks
+          fill
         };
       }
 
-      const btnText = buyBtn.textContent.trim();
+      const label = btnText(buyBtn);
       robustClick(buyBtn);
-      await sleep(80);
+      await sleep(100);
+      robustClick(buyBtn);
 
       const result = await waitBetResult();
       if (!result.confirmed) {
         return {
           success: false,
           reason: '베팅 실패 — 잔액/금액 확인',
-          btnText,
-          chipClicks,
-          amount,
+          btnText: label,
+          fill,
           confirmClicks: result.confirmClicks,
           method: 'main-world'
         };
@@ -232,14 +297,11 @@
       return {
         success: true,
         confirmed: true,
-        pendingWallet: false,
-        btnText,
-        chipClicks,
-        amount,
+        btnText: label,
+        fill,
         confirmClicks: result.confirmClicks,
         via: result.via,
-        method: 'main-world',
-        reason: result.confirmClicks ? '구매+확인 자동 완료' : '즉시 구매 완료'
+        method: 'main-world'
       };
     } catch (e) {
       return { success: false, reason: e.message, method: 'main-world' };
