@@ -1131,7 +1131,7 @@ function applySlipUpdate(source, slip) {
     cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
   }
   if (isLeg2Source(source)) {
-    const merged = slipOdds(slip) || slip?.pendingToWin ? mergeSlipCached(cachedPoly, slip) : null;
+    const merged = (slipOdds(slip) || slip?.pendingToWin) ? mergeSlipCached(cachedPoly, slip) : null;
     if (merged) cachedPoly = merged;
     else if (!slip?.pendingToWin) cachedPoly = null;
   }
@@ -1519,9 +1519,8 @@ async function checkProfitZoneAndBet() {
   const minP = getMinProfit();
   const betHint = $('betHint');
 
-  if (!btiO || !polyO || profit == null) {
-    profitZoneSince = 0;
-    if (betHint) betHint.textContent = '배당 모니터링 중…';
+  if (cachedPoly?.pendingToWin) {
+    if (betHint) betHint.textContent = 'Poly 금액 동기화 중 — 배당 안정화 대기';
     return;
   }
 
