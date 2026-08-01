@@ -344,4 +344,4 @@ chrome.storage.local.get('autoBetLog', (data) => {
 setInterval(() => liveAmountSync(false), SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.0.7 — 별도 창 패널 (확장 아이콘으로 다시 열기)', 'info');
+logLine('v1.0.8 — 홈/원정 전환 시 슬립 배당 읽기 수정', 'info');

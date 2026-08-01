@@ -72,7 +72,40 @@ function readOddsFromSlipCard(card) {
   return null;
 }
 
+function readOddsFromSelectedBoardButton(selectionText, slipMktType) {
+  const selected = [];
+  for (const btn of queryBoardButtons()) {
+    if (!isElementVisible(btn)) continue;
+    if (!isBoardButtonSelected(btn)) continue;
+    const parsed = parseSelectionButton(btn);
+    if (!parsed?.odds || parsed.odds <= 1.01) continue;
+    const raw = (parsed.rawText || '').toLowerCase();
+    const isOu = /오버|언더|over|under/i.test(raw);
+    const hasHc = /[+-]\d/.test(parsed.pointsText || raw);
+    if (slipMktType === 'ml' && (isOu || hasHc)) continue;
+    if (slipMktType === 'ah' && isOu) continue;
+    if (slipMktType === 'ou' && !isOu) continue;
+    selected.push(parsed);
+  }
+  if (!selected.length) return null;
+
+  const sel = String(selectionText || '').trim();
+  if (/^W1$/i.test(sel)) return selected[0]?.odds || null;
+  if (/^W2$/i.test(sel)) return (selected.length > 1 ? selected[selected.length - 1] : selected[0])?.odds || null;
+
+  if (sel.length > 1) {
+    for (const p of selected) {
+      const label = p.label || p.rawText || '';
+      if (teamNamesMatch(label, sel) || teamNamesMatch(p.pointsText, sel)) return p.odds;
+    }
+  }
+  return selected[0].odds;
+}
+
 function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
+  const fromSelected = readOddsFromSelectedBoardButton(selectionText, slipMktType);
+  if (fromSelected > 1.01) return fromSelected;
+
   const allBtns = queryBoardButtons();
   if (!selectionText) return null;
 
@@ -173,18 +206,21 @@ function readBtiSlip(hint) {
   const realCards = getRealSlipCards();
   if (!realCards.length) return null;
 
+  const preferActive = hint?.preferActiveSlip || hint?.forArbPick === false;
   let best = null;
   for (let i = realCards.length - 1; i >= 0; i--) {
     const slip = parseSlipFromCard(realCards[i]);
     if (!slip?.odds || slip.odds <= 1.01) continue;
-    if (hint?.excludeTeam || hint?.polyTeam) {
+    if (!preferActive && (hint?.excludeTeam || hint?.polyTeam)) {
       const oppose = hint.excludeTeam || hint.polyTeam;
-      const sel = slip.selectionText || '';
+      const sel = slip.selectionText || slip.teamLabel || '';
       if (teamNamesMatch(sel, oppose)) continue;
+      if (teamNamesMatch(slip.homeTeam, oppose) && (slip.side === 'home' || slip.side === 'h')) continue;
+      if (teamNamesMatch(slip.awayTeam, oppose) && (slip.side === 'away' || slip.side === 'a')) continue;
     }
-    if (hint?.side === 'away' && slip.side === 'home' && /^W1$/i.test(slip.selectionText || '')) continue;
-    if (hint?.side === 'home' && slip.side === 'away' && /^W2$/i.test(slip.selectionText || '')) continue;
-    if (!best || slip.odds > best.odds) best = slip;
+    if (!preferActive && hint?.side === 'away' && slip.side === 'home' && /^W1$/i.test(slip.selectionText || '')) continue;
+    if (!preferActive && hint?.side === 'home' && slip.side === 'away' && /^W2$/i.test(slip.selectionText || '')) continue;
+    if (!best || slip.odds > best.odds) best = enrichBtiSlip(slip);
   }
   return best;
 }
@@ -208,9 +244,10 @@ function parseSlipFromCard(card) {
   const allText = selectionText + ' ' + mktText + ' ' + marketTitleText;
   const slipMktType = detectMarketType(allText);
 
-  // W1/W2 슬립 — 실시간 배당판만
+  // W1/W2 슬립 — 선택된 배당판 버튼 우선
   if (/^W[12]$/i.test(selectionText.trim())) {
-    let boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+    let boardOdds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
+    if (!boardOdds) boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
     if (!boardOdds) {
       const teams = parseEventTeams(eventText);
       const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
@@ -1631,21 +1668,26 @@ function readEmergencyBoardOdds(hint = {}) {
 function readBtiOdds(hint) {
   const hintObj = hint || {};
 
-  // 슬립 카드(AH/OU/ML) 우선 — 배당판 ML만 읽던 문제 수정
+  // 1) 사용자 슬립 선택 — Poly 힌트 무시 (홈↔원정 전환 시에도 읽기)
   if (getRealSlipCards().length > 0) {
-    const slipFromCard = readBtiSlip(hintObj);
+    const slipFromCard = readBtiSlip({ preferActiveSlip: true });
     if (slipFromCard?.odds > 1.01) return slipFromCard;
   }
 
   const slipDisplay = readActiveSlipDisplayOdds();
   if (slipDisplay?.odds > 1.01) return slipDisplay;
 
+  // 2) Poly 반대편 힌트로 보드 탐색 (자동 매칭)
+  if (hintObj.excludeTeam || hintObj.polyTeam) {
+    const arbSlip = readBtiSlip({ ...hintObj, forArbPick: true });
+    if (arbSlip?.odds > 1.01) return arbSlip;
+  }
+
   const board = readBtiBoardOdds(hintObj);
   if (board?.odds > 1.01) {
     return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
   }
 
-  // hint에 excludeTeam 있으면 반대편 못 찾을 때 전체 보드로 재시도
   if (hintObj.excludeTeam || hintObj.polyTeam) {
     const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
     if (plain?.odds > 1.01) {
@@ -1655,7 +1697,7 @@ function readBtiOdds(hint) {
 
   const hasCards = getRealSlipCards().length > 0;
   if (hasCards) {
-    const slip = readBtiSlip({ ...hintObj, excludeTeam: null, polyTeam: null });
+    const slip = readBtiSlip({ preferActiveSlip: true });
     if (slip?.selectionText) {
       const live = readLiveBoardOddsForSlip(slip);
       if (live?.odds > 1.01) return live;
@@ -1675,7 +1717,8 @@ function readBtiOdds(hint) {
 
 async function ensureSlipFromBoard(hint = {}) {
   const cards = getRealSlipCards();
-  const existing = readBtiSlip(hint);
+  const arbHint = { ...hint, forArbPick: true };
+  const existing = readBtiSlip(arbHint);
   const oppose = hint.excludeTeam || hint.polyTeam;
 
   if (cards.length > 0 && existing?.odds > 1.01) {
@@ -1718,7 +1761,7 @@ async function ensureSlipFromBoard(hint = {}) {
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 100));
     if (getRealSlipCards().length > 0) {
-      const slip = readBtiSlip(hint);
+      const slip = readBtiSlip(arbHint);
       if (slip?.odds > 1.01) {
         const stable = await waitSlipStable(board.odds || slip.odds, 2000);
         return {
