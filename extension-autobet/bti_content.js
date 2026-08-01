@@ -764,7 +764,59 @@ function getRealSlipCards() {
     }
   }
 
+  if (cards.length > 1) {
+    return cards.filter((c) => !cards.some((other) => other !== c && c.contains(other)));
+  }
   return cards;
+}
+
+function findBtiClearAllButton() {
+  for (const btn of document.querySelectorAll('button, [role="button"]')) {
+    const cn = String(btn.className || '');
+    if (cn.includes('clearAll') || cn.includes('ClearAll')) return btn;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/전체\s*삭제|모두\s*삭제|clear\s*all|delete\s*all|슬립\s*비우|베팅\s*정리/i.test(t)) return btn;
+  }
+  return null;
+}
+
+function clickBtiSlipRemoveButtons() {
+  let clicked = 0;
+  const slipRoot = document.querySelector('[class*="betslip_fe"], [class*="Betslip"]');
+  if (!slipRoot) return 0;
+  for (const btn of slipRoot.querySelectorAll('button, [role="button"]')) {
+    const cn = String(btn.className || '');
+    const t = (btn.textContent || '').trim();
+    const aria = btn.getAttribute('aria-label') || '';
+    if (cn.includes('clearAll') || cn.includes('PlaceBetBlock')) continue;
+    if (cn.includes('remove') || cn.includes('Remove') || cn.includes('delete') || cn.includes('Delete')
+      || /^[x×✕✖]$/i.test(t) || /remove|delete|삭제|제거|close/i.test(`${aria} ${t}`)) {
+      try { btn.click(); clicked++; } catch (_) {}
+    }
+  }
+  return clicked;
+}
+
+async function clearAllBtiSlips() {
+  if (!isActiveBetslipOpen() && !hasVisibleBetslipCards()) {
+    return { ok: true, cleared: 0, alreadyEmpty: true };
+  }
+  const before = getRealSlipCards().length;
+  if (!before) return { ok: true, cleared: 0, alreadyEmpty: true };
+
+  for (let round = 0; round < 8; round++) {
+    const clearBtn = findBtiClearAllButton();
+    if (clearBtn) {
+      try { clearBtn.click(); } catch (_) {}
+      await new Promise((r) => setTimeout(r, 220));
+    }
+    clickBtiSlipRemoveButtons();
+    await new Promise((r) => setTimeout(r, 280));
+    const left = getRealSlipCards().length;
+    if (!left) return { ok: true, cleared: before, rounds: round + 1 };
+  }
+  const left = getRealSlipCards().length;
+  return { ok: left === 0, cleared: Math.max(0, before - left), slipLeft: left };
 }
 
 function readSlipOddsFromDom() {
@@ -898,9 +950,28 @@ function findBtiBetButton() {
   return null;
 }
 
+function findBtiConfirmButton() {
+  const allBtns = Array.from(document.querySelectorAll('button, [role="button"]'));
+  for (const b of allBtns) {
+    if (b.disabled) continue;
+    const t = (b.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/^(승인|확인|OK|Confirm|Accept|Approve)$/i.test(t)) return b;
+    if (/베팅\s*승인|베팅\s*확인|place\s*bet|submit\s*bet|confirm\s*bet/i.test(t)) return b;
+  }
+  const modals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="overlay"], [class*="Overlay"], [class*="popup"], [class*="Popup"]');
+  for (const modal of modals) {
+    for (const b of modal.querySelectorAll('button, [role="button"]')) {
+      if (b.disabled) continue;
+      const t = (b.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/승인|확인|Confirm|Accept|Approve|Place Bet/i.test(t)) return b;
+    }
+  }
+  return null;
+}
+
 function confirmBtiBet() {
   return new Promise((resolve) => {
-    const MAX_WAIT = 5000;
+    const MAX_WAIT = 8000;
     const INTERVAL = 150;
     let elapsed = 0;
     function slipRemaining() {
@@ -908,30 +979,14 @@ function confirmBtiBet() {
     }
     function findConfirm() {
       try {
-        const allBtns = Array.from(document.querySelectorAll('button'));
-        let confirmBtn = null;
-        for (const b of allBtns) {
-          if (b.disabled) continue;
-          const t = b.textContent.trim();
-          if (t === '승인' || t === '확인' || t === 'OK' || t === 'Confirm' ||
-              t === '베팅 승인' || t === '베팅확인' || t === 'Accept' ||
-              t === '베팅 확인' || t === 'Approve') {
-            confirmBtn = b; break;
-          }
+        const acceptBtn = findAcceptOddsButton();
+        if (acceptBtn) {
+          acceptBtn.click();
+          elapsed += INTERVAL;
+          setTimeout(findConfirm, 120);
+          return;
         }
-        if (!confirmBtn) {
-          const modals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="overlay"], [class*="Overlay"]');
-          for (const modal of modals) {
-            for (const b of modal.querySelectorAll('button')) {
-              if (b.disabled) continue;
-              const t = b.textContent.trim();
-              if (t.includes('승인') || t.includes('확인') || t.includes('Confirm') || t.includes('Accept')) {
-                confirmBtn = b; break;
-              }
-            }
-            if (confirmBtn) break;
-          }
-        }
+        const confirmBtn = findBtiConfirmButton();
         if (confirmBtn) {
           confirmBtn.click();
           setTimeout(() => {
@@ -1029,12 +1084,26 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     const wrongSlip = oppose && existing && (
       teamNamesMatch(existing.selectionText, oppose) || teamNamesMatch(existing.teamLabel, oppose)
     );
+    const multiSlip = realCards.length > 1;
+    const mustPrepare = multiSlip || wrongSlip || !realCards.length;
 
-    if (!hint.skipEnsure && (!realCards.length || wrongSlip)) {
-      const ensured = await ensureSlipFromBoard(hint);
-      if (!ensured.ok) return { success: false, reason: ensured.reason || '슬립 카드 없음' };
-      realCards = getRealSlipCards();
-      if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
+    if (mustPrepare || !hint.skipEnsure) {
+      if (multiSlip || wrongSlip || hint.clearSlips) {
+        const cleared = await clearAllBtiSlips();
+        if (cleared.slipLeft > 0 && multiSlip) {
+          return { success: false, reason: `슬립 ${cleared.slipLeft}건 — 전체삭제 후 재시도`, slipLeft: cleared.slipLeft };
+        }
+        realCards = getRealSlipCards();
+      }
+      if (!realCards.length || wrongSlip || multiSlip) {
+        const ensured = await ensureSlipFromBoard({ ...hint, clearSlips: true });
+        if (!ensured.ok) return { success: false, reason: ensured.reason || '슬립 준비 실패' };
+        realCards = getRealSlipCards();
+        if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
+        if (realCards.length > 1) {
+          return { success: false, reason: `슬립 ${realCards.length}건 — 수동 전체삭제 필요`, slipLeft: realCards.length };
+        }
+      }
     } else if (!realCards.length && !force) {
       return { success: false, reason: '슬립 카드 없음 — 베팅슬립 열기' };
     }
@@ -1716,22 +1785,30 @@ function readBtiOdds(hint) {
 }
 
 async function ensureSlipFromBoard(hint = {}) {
-  const cards = getRealSlipCards();
+  let cards = getRealSlipCards();
   const arbHint = { ...hint, forArbPick: true };
   const existing = readBtiSlip(arbHint);
   const oppose = hint.excludeTeam || hint.polyTeam;
 
-  if (cards.length > 0 && existing?.odds > 1.01) {
-    const wrongTeam = oppose && (
-      teamNamesMatch(existing.selectionText, oppose) ||
-      teamNamesMatch(existing.teamLabel, oppose) ||
-      teamNamesMatch(existing.homeTeam, oppose) && (existing.side === 'home' || existing.side === 'h') ||
-      teamNamesMatch(existing.awayTeam, oppose) && (existing.side === 'away' || existing.side === 'a')
-    );
-    if (!wrongTeam) {
-      const stable = await waitSlipStable(existing.odds, 2500);
-      return { ok: true, slip: existing, alreadyHad: true, stable: stable.ready };
+  const wrongTeam = oppose && existing && (
+    teamNamesMatch(existing.selectionText, oppose) ||
+    teamNamesMatch(existing.teamLabel, oppose) ||
+    teamNamesMatch(existing.homeTeam, oppose) && (existing.side === 'home' || existing.side === 'h') ||
+    teamNamesMatch(existing.awayTeam, oppose) && (existing.side === 'away' || existing.side === 'a')
+  );
+  const multiSlip = cards.length > 1;
+
+  if (multiSlip || wrongTeam || hint.clearSlips) {
+    const cleared = await clearAllBtiSlips();
+    cards = getRealSlipCards();
+    if (cleared.slipLeft > 0 && multiSlip) {
+      return { ok: false, reason: `슬립 ${cleared.slipLeft}건 정리 실패 — 전체삭제 클릭` };
     }
+  }
+
+  if (cards.length === 1 && existing?.odds > 1.01 && !wrongTeam) {
+    const stable = await waitSlipStable(existing.odds, 2500);
+    return { ok: true, slip: existing, alreadyHad: true, stable: stable.ready };
   }
 
   const board = readBtiBoardOdds(hint);
@@ -1828,6 +1905,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'READ_BTI_STAKE') {
     sendResponse({ stake: readBtiStake() });
     return false;
+  }
+  if (msg.type === 'CLEAR_BTI_SLIPS') {
+    clearAllBtiSlips().then(sendResponse);
+    return true;
   }
   if (msg.type === 'ENSURE_BTI_SLIP') {
     ensureSlipFromBoard(msg.hint || {}).then(sendResponse);

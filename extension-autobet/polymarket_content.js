@@ -1385,8 +1385,68 @@ function clickBuyButton(btn) {
   return true;
 }
 
+function findOutcomeButtonForTeam(teamHint) {
+  if (!teamHint) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 140) continue;
+    const cents = parseCentsFromText(t);
+    let matched = teamMatchesButton(teamHint, t);
+    if (!matched) {
+      const row = btn.closest('[class*="outcome"], [class*="Outcome"], li, div');
+      const ctx = (row?.textContent || btn.parentElement?.textContent || '').replace(/\s+/g, ' ').trim();
+      matched = teamMatchesButton(teamHint, ctx);
+    }
+    if (!matched && !cents) continue;
+    let score = selectionScore(btn);
+    if (matched) score += 120;
+    if (cents) score += 30;
+    if (score > bestScore) {
+      bestScore = score;
+      best = btn;
+    }
+  }
+  return best;
+}
+
+async function ensurePolyTradePanel(teamHint) {
+  if (findTradePanel()) return { ok: true, alreadyOpen: true };
+
+  let btn = teamHint ? findOutcomeButtonForTeam(teamHint) : null;
+  if (!btn) {
+    const active = readActiveMoneylineOutcome();
+    if (active?.team) btn = findOutcomeButtonForTeam(active.team);
+  }
+  if (!btn) {
+    for (const candidate of document.querySelectorAll('button, [role="button"]')) {
+      if (!visible(candidate) || isBuySellTab(candidate)) continue;
+      if (parseCentsFromText(candidate.textContent || '')) {
+        btn = candidate;
+        break;
+      }
+    }
+  }
+  if (btn) {
+    clickBuyButton(btn);
+    await sleep(350);
+  }
+
+  for (let i = 0; i < 20; i++) {
+    if (findTradePanel()) return { ok: true, clicked: !!btn };
+    await sleep(100);
+  }
+  return { ok: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
+}
+
 async function placePolymarketBet(amountUsd, opts = {}) {
   const skipFill = !!opts.skipFill;
+  const panelReady = await ensurePolyTradePanel(opts.teamHint || '');
+  if (!panelReady.ok) {
+    return { success: false, reason: panelReady.reason || '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: panelReady.probe || probePolyBetUi() };
+  }
   const panel = findTradePanel();
   if (!panel) {
     return { success: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
@@ -1578,8 +1638,12 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     setPolyTradeAmount(msg.amount, msg.force !== false).then(sendResponse);
     return true;
   }
+  if (msg.type === 'ENSURE_POLY_PANEL') {
+    ensurePolyTradePanel(msg.team || '').then(sendResponse);
+    return true;
+  }
   if (msg.type === 'PLACE_BET') {
-    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill }).then(sendResponse);
+    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill, teamHint: msg.teamHint || msg.team || '' }).then(sendResponse);
     return true;
   }
 });

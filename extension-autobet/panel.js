@@ -334,6 +334,7 @@ async function executeStrike(snap, cfg, label) {
         polyO: snap.polyO,
         polyUsd: snap.polyUsd,
         hint: snap.hint || {},
+        poly: snap.poly,
         btiBetKrw: cfg.btiBetKrw,
         polyPreSynced
       }),
