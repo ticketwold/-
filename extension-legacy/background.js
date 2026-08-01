@@ -554,13 +554,14 @@ function findArbOpportunities(btiList, polyList) {
         };
         if (!best || profitVal > parseFloat(best.profit)) best = row;
       }
-      if (best && parseFloat(best.profit) >= 0) opps.push(best);
+      if (best) opps.push(best);
     }
   }
 
   return {
     opportunities: opps.sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit)),
-    pairsMatched
+    pairsMatched,
+    profitable: opps.filter((o) => parseFloat(o.profit) >= 0).length
   };
 }
 
@@ -602,7 +603,8 @@ async function runSearchOnce(leg1Site = 'bti', leg2Pref = 'auto') {
       bcBoardCount: pred.board?.matchups?.length || 0,
       bcCartFound: pred.cartFound || !!pred.board?.cartSlip?.odds,
       pairsMatched: arb.pairsMatched,
-      matched: arb.opportunities.length
+      matched: arb.profitable,
+      allMatched: arb.opportunities.length
     }
   };
 }
@@ -621,7 +623,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (searchRunning) {
         searchInterval = setInterval(() => {
           runSearchOnce(msg.leg1Site || 'bti', leg2Pref).then((r) => broadcast({ type: 'SEARCH_RESULT', ...r }));
-        }, 500);
+        }, 300);
       }
     }).catch((e) => {
       searchRunning = false;

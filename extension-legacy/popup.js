@@ -3,7 +3,9 @@
 'use strict';
 
 const POLL_MS = 16;
-const FALLBACK_REFRESH_MS = 800;
+const FALLBACK_REFRESH_MS = 500;
+const AMOUNT_SYNC_MS = 200;
+const CALC_POLL_MS = 250;
 const BTI_FULL_SCAN_MS = 2500;
 const BTI_MAX_FRAMES = 16;
 const IS_PANEL = document.body.classList.contains('panel-mode');
@@ -11,8 +13,10 @@ let calcRunning = false;
 let calcTimer = null;
 let syncPolyTimer = null;
 let syncPolyPending = false;
+let amountSyncTimer = null;
 let lastSyncedPolyUsd = 0;
 let lastSyncedPolyAt = 0;
+let lastSyncedOddsKey = '';
 let cachedBti = null;
 let cachedPoly = null;
 let lastBtiFrame = null;
@@ -356,7 +360,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   $('polyMeta').textContent = formatPolyMeta(poly);
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = (calcRunning && arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = arbBti?.odds > 1 ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
   if (profitEl) {
@@ -1199,12 +1203,13 @@ function applySlipUpdate(source, slip) {
 
 async function refreshSlipUiWithArb() {
   let arbBti = null;
-  if (calcRunning && cachedPoly?.teamLabel) {
+  if (cachedPoly?.teamLabel) {
     const found = await findTabs();
     if (found.btiTab) arbBti = await readBtiArbOdds(found.btiTab, cachedPoly);
   }
   updateSlipUI(cachedBti, cachedPoly, arbBti);
   if (calcRunning) scheduleAutoBetCheck();
+  scheduleSyncPolyAmount();
 }
 
 async function refreshSlips() {
@@ -1230,7 +1235,7 @@ async function refreshSlips() {
     }
 
     let arbBti = null;
-    if (calcRunning && cachedPoly?.teamLabel && found.btiTab) {
+    if (cachedPoly?.teamLabel && found.btiTab) {
       arbBti = await readBtiArbOdds(found.btiTab, cachedPoly);
     }
 
@@ -1742,7 +1747,32 @@ function scheduleSyncPolyAmount() {
   syncPolyTimer = setTimeout(() => {
     syncPolyTimer = null;
     syncPolyAmount();
-  }, 80);
+  }, 40);
+}
+
+function oddsSyncKey(btiOdds, polyOdds, btiBet) {
+  return `${Number(btiOdds || 0).toFixed(4)}|${Number(polyOdds || 0).toFixed(4)}|${btiBet || 0}`;
+}
+
+function shouldSyncPolyAmount(polyUsd, oddsKey, teamChanged) {
+  if (teamChanged) return true;
+  if (oddsKey !== lastSyncedOddsKey) return true;
+  if (Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.01) return true;
+  return Date.now() - lastSyncedPolyAt > 1200;
+}
+
+function startAmountSyncLoop() {
+  if (amountSyncTimer) return;
+  amountSyncTimer = setInterval(() => {
+    if (!cachedPoly?.odds || cachedPoly.odds <= 1) return;
+    scheduleSyncPolyAmount();
+  }, AMOUNT_SYNC_MS);
+}
+
+function stopAmountSyncLoop() {
+  if (!amountSyncTimer) return;
+  clearInterval(amountSyncTimer);
+  amountSyncTimer = null;
 }
 
 async function syncPolyAmount() {
@@ -1762,26 +1792,29 @@ async function syncPolyAmount() {
   if (!btiBet) return;
 
   const polyUsd = Math.max(1, calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate()));
-  const teamChanged = cachedPoly?.teamSwitched;
-  const stale = teamChanged || Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02 || Date.now() - lastSyncedPolyAt > 2500;
-  if (!stale) {
+  const teamChanged = !!cachedPoly?.teamSwitched;
+  const oddsKey = oddsSyncKey(btiOdds, polyO, btiBet);
+  if (!shouldSyncPolyAmount(polyUsd, oddsKey, teamChanged)) {
     updateSlipUI(cachedBti, cachedPoly, btiArb);
     return;
   }
 
   syncPolyPending = true;
-  polySyncGraceUntil = Date.now() + 1800;
+  polySyncGraceUntil = Date.now() + 1200;
   try {
     const res = await setPolyAmount(found.polyTab, polyUsd);
     if (res?.ok) {
-      const changed = teamChanged || Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02;
+      const changed = teamChanged
+        || oddsKey !== lastSyncedOddsKey
+        || Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.01;
       lastSyncedPolyUsd = polyUsd;
       lastSyncedPolyAt = Date.now();
+      lastSyncedOddsKey = oddsKey;
       if (cachedPoly?.teamSwitched) delete cachedPoly.teamSwitched;
       updateSlipUI(cachedBti, cachedPoly, btiArb);
       if (changed) {
         const profit = calcProfit(btiOdds, polyO);
-        log(`배당 갱신 — 텐텐뱃 ${btiOdds.toFixed(3)} · ${leg2ShortLabel()} ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
+        log(`금액 갱신 $${polyUsd.toFixed(2)} — 텐텐뱃 ${btiOdds.toFixed(3)} · ${leg2ShortLabel()} ${formatPolyOddsForHistory(cachedPoly)} · ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
       }
     } else if (res?.reason) {
       log(`${leg2FullLabel()} 금액 입력: ${res.reason}`, 'err');
@@ -1817,20 +1850,22 @@ function startCalc() {
   calcRunning = true;
   lastSyncedPolyUsd = 0;
   lastSyncedPolyAt = 0;
+  lastSyncedOddsKey = '';
   lastHistoryKey = '';
   profitZoneSince = 0;
   if ($('autoBet')) $('autoBet').checked = true;
   $('botStart').disabled = true;
   $('botStop').disabled = false;
   const betHint = $('betHint');
-  if (betHint) betHint.textContent = '배당 모니터링 중 — 수익 구간 시 자동 배팅';
-  log('모니터링·자동배팅 시작 — 수익 구간 감지 시 배팅', 'strike');
+  if (betHint) betHint.textContent = '배당·금액 실시간 동기화 — 수익 구간 시 자동 배팅';
+  log('모니터링·자동배팅 시작 — 배당 변동 시 금액 자동 갱신', 'strike');
   saveBetPrefs();
   refreshSlips().then(() => {
     scheduleSyncPolyAmount();
     scheduleAutoBetCheck();
   });
-  calcTimer = setInterval(calcPollLoop, 400);
+  startAmountSyncLoop();
+  calcTimer = setInterval(calcPollLoop, CALC_POLL_MS);
 }
 
 function stopCalc() {
@@ -1861,7 +1896,9 @@ function renderSearchResults(data) {
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');
-  const opps = (data.opportunities || []).filter((o) => parseFloat(o.profit) >= minP);
+  const allOpps = (data.opportunities || []).slice().sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
+  const opps = allOpps.filter((o) => parseFloat(o.profit) >= minP);
+  const nearOpps = allOpps.filter((o) => parseFloat(o.profit) < minP && parseFloat(o.profit) >= -3);
   const leg2Short = leg2Pref === 'bcgame' ? 'BC' : (leg2Pref === 'polymarket' ? '폴리' : 'B');
 
   if (!opps.length) {
@@ -1874,6 +1911,8 @@ function renderSearchResults(data) {
       hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} API 오류: ${s.leg2ApiError}`;
     } else if ((s.polyTotal || 0) === 0) {
       hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} 경기 데이터 없음 — 확장 새로고침 후 재시도`;
+    } else if (nearOpps.length) {
+      hint = `수익 ${minP}% 미달 — 근접 ${nearOpps.length}건 (최고 ${nearOpps[0].profit}%) · 최소 수익률 낮춰보기`;
     } else if ((s.pairsMatched || 0) > 0) {
       hint = `팀 매칭 ${s.pairsMatched}건 있으나 수익 ${minP}% 이상 없음 — 최소 수익률을 낮춰보세요`;
     } else if (!s.polyTabFound && (leg2Pref === 'bcgame' || leg2Pref === 'polymarket')) {
@@ -1882,6 +1921,16 @@ function renderSearchResults(data) {
       hint = `텐텐뱃 ${s.btiTotal}경기 · ${leg2Name} ${s.polyTotal}경기 — 팀명 매칭 실패 (종목/팀명 확인)`;
     }
     el.innerHTML = `<div class="hint" style="padding:12px">${hint}</div>`;
+    if (nearOpps.length) {
+      for (const o of nearOpps.slice(0, IS_PANEL ? 20 : 10)) {
+        const div = document.createElement('div');
+        div.className = 'opp near';
+        div.innerHTML = `<strong>${o.home} vs ${o.away}</strong><br>
+          ${leg2Short} <b>${o.polyTeam}</b> ${o.polyOdds} · 텐텐뱃 ${o.btiSide} ${o.btiOdds}
+          <span class="profit-tag muted"> → ${o.profit}%</span>`;
+        el.appendChild(div);
+      }
+    }
     return;
   }
 
@@ -1981,7 +2030,7 @@ function bindUi() {
 
   setInterval(() => {
     refreshSlips().then(() => {
-      if (calcRunning) scheduleSyncPolyAmount();
+      scheduleSyncPolyAmount();
     });
   }, FALLBACK_REFRESH_MS);
 }
@@ -1992,7 +2041,8 @@ async function bootApp() {
   bindSitePrefSelectors();
   updateLeg2UiLabels();
   await refreshSlips();
-  log(`v6.2.0 ${IS_PANEL ? '패널' : '팝업'} — 배당서치 강화`, 'info');
+  startAmountSyncLoop();
+  log(`v6.3.0 ${IS_PANEL ? '패널' : '팝업'} — 서치·금액 실시간`, 'info');
 }
 
 if (document.readyState === 'loading') {

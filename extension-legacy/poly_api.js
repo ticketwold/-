@@ -247,7 +247,7 @@ async function getPolymarketMatchups(limitPerSeries = 35, maxSports = 28) {
   }
 
   try {
-    addEvents(await fetchPolyEventsByTag(tagId, 150));
+    addEvents(await fetchPolyEventsByTag(tagId, 200));
   } catch (e) {
     console.warn('[Poly] tag fetch:', e.message);
   }
