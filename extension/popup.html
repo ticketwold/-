@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>양방배팅</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>양방배팅</h1>
+    <p class="sub">Pinnacle API + BTI(pbc00) 확장</p>
+  </header>
+
+  <section class="card">
+    <label>종목</label>
+    <select id="sport">
+      <option value="football">축구</option>
+      <option value="baseball">야구</option>
+      <option value="basketball">농구</option>
+      <option value="esports">e스포츠</option>
+      <option value="tennis">테니스</option>
+    </select>
+
+    <label>팀명 검색 (비우면 전체)</label>
+    <input id="query" type="text" placeholder="예: 삼성 라이온스" />
+
+    <div class="row">
+      <label>최소 수익률 %</label>
+      <input id="minProfit" type="number" value="0.5" step="0.1" min="0" />
+    </div>
+    <div class="row">
+      <label>총 배팅금</label>
+      <input id="totalStake" type="number" value="100000" step="10000" min="1000" />
+    </div>
+  </section>
+
+  <section class="card actions">
+    <button id="btnOpen" class="secondary">① pbc00 열기</button>
+    <button id="btnScan" class="primary">② 양방 스캔</button>
+    <div class="row-btns">
+      <button id="btnPinnacle">Pinnacle</button>
+      <button id="btnBti">BTI 검색</button>
+      <button id="btnSlip">BTI 슬립</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div id="status" class="status">pbc00 로그인 후 양방 스캔을 누르세요</div>
+    <div id="results"></div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

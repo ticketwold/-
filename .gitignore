@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+config/settings.yaml
+config/pbc00_session.json
+config/pbc00_debug.png
+config/pbc00_login_failed.png
+config/pbc00_elements.json
+config/pbc00_after_tenbet_manual.png
+config/pbc00_api_urls.json
+config/pbc00_no_odds.png
+.venv/
+venv/
+scripts/*.png
+extension-installed/
+extension-backup-*/
