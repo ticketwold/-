@@ -403,8 +403,24 @@ async function sendBtiToFrames(tabId, frameIds, msg) {
 
 async function ensureBtiSlip(btiTab, hint = {}) {
   const frameIds = await resolveBtiBetFrameIds(btiTab.id);
-  const { res } = await sendBtiToFrames(btiTab.id, frameIds, { type: 'ENSURE_BTI_SLIP', hint });
-  return res || { ok: false, reason: '응답 없음' };
+  let best = null;
+
+  for (const frameId of frameIds) {
+    await ensureBtiScript(btiTab.id, frameId);
+    const res = await sendBti(btiTab.id, frameId, { type: 'ENSURE_BTI_SLIP', hint });
+    if (!res?.ok) continue;
+    const probe = await sendBti(btiTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+    const score = (probe?.hasInput ? 700 : 0) + (probe?.hasSlip ? 350 : 0) + (probe?.hasBtn ? 250 : 0)
+      + (probe?.slipOdds > 1 ? Math.min(probe.slipOdds, 80) : 0);
+    if (!best || score > best.score) best = { res, frameId, score };
+  }
+
+  if (best?.frameId != null) {
+    lastBtiSlipFrame = { tabId: btiTab.id, frameId: best.frameId };
+    lastBtiFrame = { tabId: btiTab.id, frameId: best.frameId };
+    return best.res;
+  }
+  return { ok: false, reason: '슬립 준비 실패 — 베팅슬립 열기' };
 }
 
 async function resolveBtiBetFrameIds(tabId) {
@@ -486,14 +502,22 @@ async function checkBtiSlipUi(btiTab) {
 }
 
 async function placeBtiBet(btiTab, amount, targetOdds, hint = {}) {
-  const frameIds = await resolveBtiBetFrameIds(btiTab.id);
+  const baseIds = await resolveBtiBetFrameIds(btiTab.id);
+  const frameIds = [];
+  if (lastBtiSlipFrame?.tabId === btiTab.id) frameIds.push(lastBtiSlipFrame.frameId);
+  for (const id of baseIds) if (!frameIds.includes(id)) frameIds.push(id);
+
   const msg = { type: 'PLACE_BET', amount, targetOdds, hint };
   let lastRes = null;
   for (const frameId of frameIds) {
+    await ensureBtiScript(btiTab.id, frameId);
     const res = await sendBti(btiTab.id, frameId, msg);
     if (!res) continue;
     lastRes = res;
-    if (res.success) return { ...res, frameId };
+    if (res.success) {
+      lastBtiSlipFrame = { tabId: btiTab.id, frameId };
+      return { ...res, frameId };
+    }
   }
   return lastRes || { success: false, reason: '텐텐뱃 응답 없음 — 슬립/iframe 확인' };
 }
@@ -662,12 +686,20 @@ async function strikeBothSides(ctx) {
     console.warn('[strike] ensurePolyPanel:', e.message);
   }
 
-  const btiHint = { ...strikeHint, skipEnsure: true, forceBet: true };
-  const btiRes = await withTimeout(
+  const btiHint = { ...strikeHint, forceBet: true };
+  let btiRes = await withTimeout(
     placeBtiBet(found.btiTab, btiBetKrw, btiO || null, btiHint),
     25000,
     '텐텐뱃 배팅'
   ).catch((e) => ({ success: false, reason: e.message }));
+
+  if (!btiRes?.success) {
+    btiRes = await withTimeout(
+      placeBtiBet(found.btiTab, btiBetKrw, btiO || null, { ...btiHint, skipEnsure: false }),
+      25000,
+      '텐텐뱃 재시도'
+    ).catch((e) => ({ success: false, reason: e.message }));
+  }
 
   let polyRes = { success: false, reason: '텐텐뱃 실패로 예측 스킵' };
   if (btiRes?.success) {

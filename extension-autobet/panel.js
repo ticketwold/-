@@ -367,10 +367,23 @@ async function executeStrike(snap, cfg, label) {
     else logLine('이미 배팅 진행 중', 'err');
     return;
   }
-  if (btiSlipPaused) {
-    logLine('텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개', 'info');
-    return;
+
+  if (snap.found?.btiTab) {
+    try {
+      const ui = await checkBtiSlipUi(snap.found.btiTab);
+      if (ui.open) {
+        btiSlipPaused = false;
+        btiSlipEverOpen = true;
+      } else if (btiSlipEverOpen) {
+        logLine('텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개', 'info');
+        return;
+      } else {
+        logLine('텐텐뱃 슬립 준비 중…', 'info');
+        await ensureBtiSlip(snap.found.btiTab, { ...(snap.hint || {}), forArbPick: true });
+      }
+    } catch (_) {}
   }
+
   strikeLock = true;
   setTestBtnBusy(true);
   lastStrikeAt = Date.now();
@@ -464,7 +477,7 @@ function arm(armed) {
         haltAutoBet = false;
         btiSlipPaused = false;
         btiSlipEverOpen = false;
-        lastStrikeAt = Date.now();
+        lastStrikeAt = 0;
       }
       setArmedUi(res.armed);
       logLine(armed ? '무장 — 수익 구간 시 1회 배팅 후 자동 해제' : '해제', armed ? 'strike' : 'info');
@@ -583,7 +596,8 @@ $('testBetBtn')?.addEventListener('click', async () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'AUTOBET_ARMED') {
     setArmedUi(msg.armed);
-    if (!msg.armed) haltAutoBet = true;
+    haltAutoBet = !msg.armed;
+    if (msg.armed) lastStrikeAt = 0;
   }
   if (msg.type === 'AUTOBET_LOG' && msg.entry) logLine(msg.entry.text, msg.entry.level);
   if (msg.type === 'ODDS_CHANGED') {
@@ -620,4 +634,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.6 — tabCache·텐텐뱃 배당판 스캔 수정', 'info');
+logLine('v1.2.7 — 배팅 슬립 준비·iframe·무장 즉시 실행', 'info');

@@ -1094,9 +1094,10 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       teamNamesMatch(existing.selectionText, oppose) || teamNamesMatch(existing.teamLabel, oppose)
     );
     const multiSlip = realCards.length > 1;
-    const mustPrepare = multiSlip || wrongSlip || !realCards.length;
+    const hasInput = !!findBtiBetInput();
+    const mustPrepare = multiSlip || wrongSlip || !realCards.length || !hasInput;
 
-    if (mustPrepare || !hint.skipEnsure) {
+    if (mustPrepare || !hint.skipEnsure || (force && !hasInput)) {
       if (multiSlip || wrongSlip) {
         const cleared = await clearAllBtiSlips();
         if (cleared.slipLeft > 0 && multiSlip) {
