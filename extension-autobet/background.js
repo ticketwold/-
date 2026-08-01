@@ -205,18 +205,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-chrome.action.onClicked.addListener(() => openPanel());
-chrome.windows.onRemoved.addListener((id) => { if (id === panelWindowId) panelWindowId = null; });
-
-loadConfig().then(() => {
-  armed = !!config.armed;
-  console.log('[양방 자동배팅] background loaded, armed=', armed);
-});
-
-// ODDS_CHANGED(16ms) + 패널 폴링 + 고속 루프
-setInterval(() => {
-  if (armed && !betInFlight) evaluateAndStrike('fast');
-}, 16);
+let panelWindowId = null;
 
 async function openPanel() {
   if (panelWindowId != null) {
@@ -239,7 +228,9 @@ async function openPanel() {
   return panelWindowId;
 }
 
-chrome.action.onClicked.addListener(() => openPanel());
+chrome.action.onClicked.addListener(() => {
+  openPanel().catch((e) => console.error('[자동배팅] 패널 열기 실패:', e));
+});
 chrome.windows.onRemoved.addListener((id) => { if (id === panelWindowId) panelWindowId = null; });
 
 loadConfig().then(() => {
@@ -247,7 +238,7 @@ loadConfig().then(() => {
   console.log('[양방 자동배팅] background loaded, armed=', armed);
 });
 
-// 고속 폴링: armed 시 16ms 간격 (service worker는 sleep 불가 — ODDS_CHANGED + alarm + panel poll)
+// ODDS_CHANGED(16ms) + 패널 폴링 + 고속 루프
 setInterval(() => {
   if (armed && !betInFlight) evaluateAndStrike('fast');
 }, 16);
