@@ -596,8 +596,6 @@ function readActiveSlipDisplayOdds() {
       const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
       const eventText = eventEl?.textContent?.trim() || '';
       const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
-
-      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
       const mktType = detectMarketType(allText);
       if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') continue;
 
@@ -965,10 +963,27 @@ async function waitSlipStable(targetOdds, maxWaitMs = 5000) {
 }
 
 // ── BTI 베팅 실행 ──
+function findAcceptOddsButton() {
+  for (const btn of document.querySelectorAll('button')) {
+    if (btn.disabled) continue;
+    const t = (btn.textContent || '').trim();
+    if (/배당\s*수락|배당수락|accept.*odds|odds.*accept/i.test(t)) return btn;
+  }
+  return null;
+}
+
 async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint = {}) {
   try {
-    if (document.querySelector('[class*="UpdateNotification"]')) {
-      return { success: false, reason: '배당 업데이트 중 — 잠시 후 재시도' };
+    const force = !!hint.forceBet;
+
+    if (!force && document.querySelector('[class*="UpdateNotification"]')) {
+      const acceptBtn = findAcceptOddsButton();
+      if (acceptBtn) {
+        acceptBtn.click();
+        await new Promise((r) => setTimeout(r, 120));
+      } else {
+        return { success: false, reason: '배당 업데이트 중 — 배당 수락 필요' };
+      }
     }
 
     const oppose = hint.excludeTeam || hint.polyTeam;
@@ -983,13 +998,17 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       if (!ensured.ok) return { success: false, reason: ensured.reason || '슬립 카드 없음' };
       realCards = getRealSlipCards();
       if (!realCards.length) return { success: false, reason: '슬립 카드 없음' };
-    } else if (!realCards.length) {
-      return { success: false, reason: '슬립 카드 없음 — 준비 단계 실패' };
+    } else if (!realCards.length && !force) {
+      return { success: false, reason: '슬립 카드 없음 — 베팅슬립 열기' };
     }
 
-    const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 1500 : 3000);
-    if (!stable.ready && targetOdds && !hint.skipEnsure) {
-      return { success: false, reason: stable.reason || '슬립 배당 미확정' };
+    if (!force) {
+      const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 800 : 2500);
+      if (!stable.ready && targetOdds && !hint.skipEnsure) {
+        return { success: false, reason: stable.reason || '슬립 배당 미확정' };
+      }
+    } else {
+      await waitSlipStable(targetOdds, 400);
     }
 
     // ── 기준점 검증 (위치 변경 버그 방어) ──
@@ -1017,17 +1036,21 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     }
 
     const input = findBtiBetInput();
-    if (!input) return { success: false, reason: '금액 입력 필드 없음' };
+    if (!input) return { success: false, reason: '금액 입력 필드 없음 — 베팅슬립 열기' };
 
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    nativeSetter.call(input, String(amount));
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    const want = Math.max(1000, Math.round(Number(amount) || 0));
+    const curStake = readBtiStake();
+    if (!curStake || Math.abs(curStake - want) > 50) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeSetter.call(input, String(want));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    }
 
     let betBtn = null;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < (force ? 12 : 30); i++) {
+      await new Promise((r) => setTimeout(r, force ? 30 : 50));
       betBtn = findBtiBetButton();
       if (betBtn && !betBtn.disabled) break;
     }
@@ -1732,8 +1755,25 @@ function searchBtiOdds(query) {
   return { ...board, query, hits, hitCount: hits.length, slip: readBtiOdds() };
 }
 
+function setBtiStakeAmount(amount) {
+  const input = findBtiBetInput();
+  if (!input) return { ok: false, reason: '입력 필드 없음' };
+  const want = Math.max(1000, Math.round(Number(amount) || 0));
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  nativeSetter.call(input, String(want));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  const stake = readBtiStake();
+  return stake > 0 ? { ok: true, stake } : { ok: false, reason: '금액 반영 실패' };
+}
+
 // popup / background 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'SET_BTI_AMOUNT') {
+    sendResponse(setBtiStakeAmount(msg.amount));
+    return false;
+  }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;

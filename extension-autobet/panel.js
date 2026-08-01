@@ -1,12 +1,17 @@
 'use strict';
 
 const SNAP_TIMEOUT_MS = 20000;
+const SYNC_INTERVAL_MS = 250;
 
 const $ = (id) => document.getElementById(id);
 
 let armedLocal = false;
 let strikeLock = false;
 let lastStrikeAt = 0;
+let syncLock = false;
+let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
+let polyPreSynced = false;
+let tabCache = null;
 
 function logLine(text, cls = '') {
   const el = $('log');
@@ -83,7 +88,11 @@ function updateStatusFromSnap(snap, cfg) {
   if (snap.btiO != null || snap.polyO != null) {
     $('oddsVal').textContent = `${snap.btiO?.toFixed(3) || '-'} / ${snap.polyO?.toFixed(3) || '-'}`;
   }
-  if (snap.reason) $('statusHint').textContent = snap.reason;
+  const hint = $('statusHint');
+  if (snap.reason && !polyPreSynced) hint.textContent = snap.reason;
+  else if (polyPreSynced && snap.polyUsd > 0) {
+    hint.textContent = `실시간 동기화 — Poly $${snap.polyUsd.toFixed(2)} · BTI ${cfg.btiBetKrw.toLocaleString()}원`;
+  }
 }
 
 async function getSnap(cfg, progressLabel) {
@@ -93,6 +102,7 @@ async function getSnap(cfg, progressLabel) {
     SNAP_TIMEOUT_MS,
     '배당 읽기'
   );
+  if (snap.found) tabCache = snap.found;
   if (cfg.useArbBotBridge && snap.found) {
     const bridge = await readArbBotBridgeState(snap.found.btiTab, snap.found.polyTab);
     if (bridge && Date.now() - (bridge.ts || 0) < 5000) {
@@ -113,6 +123,60 @@ async function getSnap(cfg, progressLabel) {
   return snap;
 }
 
+function needsAmountResync(snap, cfg) {
+  if (!snap?.polyUsd || !snap.btiO || !snap.polyO) return false;
+  if (Math.abs(snap.polyUsd - lastSynced.polyUsd) >= 0.05) return true;
+  if (cfg.btiBetKrw !== lastSynced.btiKrw) return true;
+  if (Math.abs((snap.btiO || 0) - lastSynced.btiO) > 0.02) return true;
+  if (Math.abs((snap.polyO || 0) - lastSynced.polyO) > 0.02) return true;
+  return false;
+}
+
+async function liveAmountSync(force) {
+  if (syncLock || strikeLock) return;
+  const cfg = getConfig();
+  if (!cfg.preSyncAmount && !armedLocal && !force) return;
+
+  syncLock = true;
+  try {
+    const snap = await getSnap(cfg);
+    if (!snap.ok || !snap.found?.btiTab || !snap.found?.polyTab) {
+      polyPreSynced = false;
+      if (snap.reason) $('statusHint').textContent = snap.reason;
+      return;
+    }
+    updateStatusFromSnap(snap, cfg);
+
+    if (!snap.btiO || !snap.polyO || !snap.polyUsd) {
+      polyPreSynced = false;
+      return;
+    }
+
+    if (!force && !needsAmountResync(snap, cfg)) return;
+
+    const [btiRes, polyRes] = await Promise.all([
+      setBtiAmount(snap.found.btiTab, cfg.btiBetKrw),
+      setPolyAmount(snap.found.polyTab, snap.polyUsd)
+    ]);
+
+    lastSynced = {
+      polyUsd: snap.polyUsd,
+      btiKrw: cfg.btiBetKrw,
+      btiO: snap.btiO,
+      polyO: snap.polyO,
+      at: Date.now()
+    };
+    polyPreSynced = !!(polyRes?.ok && btiRes?.ok);
+    if (polyPreSynced) {
+      $('statusHint').textContent = `동기화 OK — Poly $${snap.polyUsd.toFixed(2)} · BTI ${cfg.btiBetKrw.toLocaleString()}원`;
+    }
+  } catch (e) {
+    polyPreSynced = false;
+  } finally {
+    syncLock = false;
+  }
+}
+
 async function executeStrike(snap, cfg, label) {
   if (strikeLock) {
     logLine('이미 배팅 진행 중', 'err');
@@ -125,17 +189,12 @@ async function executeStrike(snap, cfg, label) {
   logLine(`⚡ ${profitText} — 동시 배팅 (${label})`, 'strike');
 
   try {
-    if (cfg.preSyncAmount && snap.polyUsd > 0) {
-      logLine('Polymarket 금액 입력 중…', 'info');
-      const sync = await withTimeout(
-        setPolyAmount(snap.found.polyTab, snap.polyUsd),
-        10000,
-        'Poly 금액 입력'
-      );
-      if (!sync?.ok) logLine(`Poly 금액 입력: ${sync?.reason || '실패'}`, 'err');
+    if (cfg.preSyncAmount && !polyPreSynced && snap.polyUsd > 0) {
+      logLine('금액 동기화 중…', 'info');
+      await liveAmountSync(true);
     }
 
-    logLine('양쪽 배팅 실행 중…', 'info');
+    logLine(polyPreSynced ? '즉시 배팅 (금액 사전입력됨)' : '양쪽 배팅 실행 중…', 'info');
     const result = await withTimeout(
       strikeBothSides({
         found: snap.found,
@@ -143,7 +202,8 @@ async function executeStrike(snap, cfg, label) {
         polyO: snap.polyO,
         polyUsd: snap.polyUsd,
         hint: snap.hint || {},
-        btiBetKrw: cfg.btiBetKrw
+        btiBetKrw: cfg.btiBetKrw,
+        polyPreSynced
       }),
       90000,
       '배팅'
@@ -152,14 +212,17 @@ async function executeStrike(snap, cfg, label) {
     if (result.ok) {
       logLine(`✓ 배팅 성공 ${result.elapsedMs}ms`, 'ok');
       logLine(`  BTI: ${result.btiRes?.btnText || result.btiRes?.reason || 'OK'}`, 'ok');
-      logLine(`  Poly: ${result.polyRes?.btnText || result.polyRes?.reason || 'OK'}`, 'ok');
+      logLine(`  Poly: ${result.polyRes?.btnText || result.polyRes?.method || result.polyRes?.reason || 'OK'}`, 'ok');
       setArmedUi(false);
       chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed: false });
     } else {
       logLine(`✗ 텐텐뱃: ${result.btiRes?.reason || '실패'}`, 'err');
       logLine(`✗ Polymarket: ${result.polyRes?.reason || '실패'}`, 'err');
+      if (result.btiRes?.frameId != null) {
+        logLine(`  BTI frame: ${result.btiRes.frameId}`, 'err');
+      }
       if (result.polyRes?.probe) {
-        logLine(`  Poly probe: Buy=${result.polyRes.probe.hasBuyBtn} trading=${result.polyRes.probe.hasTradingButton}`, 'err');
+        logLine(`  Poly probe: Buy=${result.polyRes.probe.hasBuyBtn}`, 'err');
       }
     }
     chrome.runtime.sendMessage({ type: 'AUTOBET_STRIKE_RESULT', result, profit: snap.profit });
@@ -168,6 +231,7 @@ async function executeStrike(snap, cfg, label) {
   } finally {
     strikeLock = false;
     setTestBtnBusy(false);
+    polyPreSynced = false;
   }
 }
 
@@ -203,7 +267,8 @@ function arm(armed) {
   chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed }, (res) => {
     if (res?.ok) {
       setArmedUi(res.armed);
-      logLine(armed ? '무장 — 패널에서 배팅 실행 (이 창 유지)' : '해제', armed ? 'strike' : 'info');
+      logLine(armed ? '무장 — 실시간 금액 동기화 시작' : '해제', armed ? 'strike' : 'info');
+      if (armed) liveAmountSync(true);
     }
   });
 }
@@ -222,14 +287,15 @@ $('testBetBtn')?.addEventListener('click', async () => {
   logLine('테스트 배팅 — 수익률 무시', 'info');
 
   try {
-    logLine('탭·배당 읽는 중… (최대 20초)', 'info');
+    logLine('탭·배당 읽는 중…', 'info');
+    await liveAmountSync(true);
     const snap = await getSnap(cfg);
     if (!snap.ok || !snap.found?.btiTab || !snap.found?.polyTab) {
       logLine(snap.reason || '탭/배당 없음', 'err');
       return;
     }
     logLine(
-      `탭 확인 A:${snap.found.btiTab.id} B:${snap.found.polyTab.id} | 배당 ${snap.btiO || '-'} / ${snap.polyO || '-'}`,
+      `탭 A:${snap.found.btiTab.id} B:${snap.found.polyTab.id} | ${snap.btiO || '-'} / ${snap.polyO || '-'} | Poly $${snap.polyUsd || '-'}`,
       'info'
     );
     if (!snap.btiO || !snap.polyO) {
@@ -249,23 +315,33 @@ $('testBetBtn')?.addEventListener('click', async () => {
 });
 
 ['minProfit', 'btiBet', 'usdRate', 'leg2Site', 'cooldownMs', 'useBridge', 'preSync'].forEach((id) => {
-  $(id)?.addEventListener('change', saveConfig);
+  $(id)?.addEventListener('change', () => {
+    saveConfig();
+    lastSynced.at = 0;
+    liveAmountSync(true);
+  });
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'AUTOBET_ARMED') setArmedUi(msg.armed);
   if (msg.type === 'AUTOBET_LOG' && msg.entry) logLine(msg.entry.text, msg.entry.level);
+  if (msg.type === 'ODDS_CHANGED' || msg.type === 'BTI_STAKE_CHANGED') {
+    lastSynced.at = 0;
+    liveAmountSync(false);
+  }
 });
 
 chrome.runtime.sendMessage({ type: 'AUTOBET_GET_STATE' }, (res) => {
   if (res?.config) applyConfig({ ...res.config, armed: res.armed });
   else if (res?.armed != null) setArmedUi(res.armed);
+  if (res?.armed) liveAmountSync(true);
 });
 
 chrome.storage.local.get('autoBetLog', (data) => {
   (data.autoBetLog || []).slice(0, 15).reverse().forEach((e) => logLine(e.text, e.level));
 });
 
+setInterval(() => liveAmountSync(false), SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.0.5 — 타임아웃·진행 로그 추가 (창 닫지 마세요)', 'info');
+logLine('v1.0.6 — 실시간 금액 동기화 + 텐텐뱃 iframe 배팅 수정', 'info');
