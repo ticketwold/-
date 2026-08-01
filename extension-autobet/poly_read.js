@@ -226,7 +226,7 @@ function cachePolyOdds(tabId, slip) {
   polyOddsCache.set(tabId, { slip: { ...slip }, at: Date.now() });
 }
 
-function getCachedPolyOdds(tabId, maxAgeMs = 60000) {
+function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
   const hit = polyOddsCache.get(tabId);
   if (!hit || Date.now() - hit.at > maxAgeMs) return null;
   return hit.slip;
@@ -237,14 +237,26 @@ function mergePolySlipWithCache(tabId, slip) {
     cachePolyOdds(tabId, slip);
     return slip;
   }
+  const pending = slip?.pendingToWin || slip?.needsStake;
+  if (!pending) return slip;
   const cached = getCachedPolyOdds(tabId);
   if (!cached) return slip;
   return {
     ...cached,
     stake: slip?.stake > 0 ? slip.stake : cached.stake,
-    pendingToWin: slip?.pendingToWin || slip?.needsStake || false,
+    pendingToWin: true,
     hint: slip?.hint || cached.hint
   };
+}
+
+function scorePolySlip(slip) {
+  if (!(slip?.odds > 1)) return -1;
+  let score = slip.odds;
+  if (slip.fromPayout && !slip.pendingToWin) score += 200;
+  else if (slip.liveCents) score += 150;
+  if (slip.stake > 0) score += 30;
+  if (slip.pendingToWin) score -= 40;
+  return score;
 }
 
 async function readPolySlipFromApi(polyTab) {
@@ -287,11 +299,13 @@ async function readPolyOddsOnce(polyTab) {
 
   for (const slip of slips) {
     if (!slip) continue;
-    if (slip.fromPayout && slip.odds > 1) return mergePolySlipWithCache(polyTab.id, slip);
-    if (slip.odds > 1) {
-      if (!best || slip.fromPayout || (slip.liveCents && !best.liveCents)) best = slip;
-    } else if (slip.needsStake && !best) {
+    const s = scorePolySlip(slip);
+    if (s > (best?._score ?? -1)) {
       best = slip;
+      best._score = s;
+    } else if (!best && slip.needsStake) {
+      best = slip;
+      best._score = 0;
     }
   }
   if (best?.odds > 1) return mergePolySlipWithCache(polyTab.id, best);

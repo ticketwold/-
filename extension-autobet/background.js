@@ -74,6 +74,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
+  if (msg.type === 'ODDS_CHANGED' || msg.type === 'BTI_STAKE_CHANGED') {
+    broadcast(msg);
+    return false;
+  }
+
   if (msg.type === 'OPEN_AUTOBET_PANEL') {
     openPanel().then((id) => sendResponse({ ok: true, windowId: id })).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

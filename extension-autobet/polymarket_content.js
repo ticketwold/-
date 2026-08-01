@@ -1521,7 +1521,8 @@ try {
   function slipKey(slip) {
     if (!slip) return '';
     const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
-    return `${slip.priceCents || 'c'}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}`;
+    const c = slip.priceCents > 0 ? slip.priceCents.toFixed(2) : 'c';
+    return `${c}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}_${slip.pendingToWin ? 'p' : ''}`;
   }
 
   function tick() {
