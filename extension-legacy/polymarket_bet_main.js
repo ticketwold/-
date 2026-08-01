@@ -252,19 +252,41 @@
     };
   };
 
-  window.__polyMainPlaceBet = async function (amountUsd) {
-    try {
-      await clickBuyTab();
-      await sleep(120);
+  function readCurrentAmount() {
+    const input = findAmountInput();
+    if (!input) return 0;
+    const raw = input.isContentEditable ? input.textContent : input.value;
+    const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+    return Number.isFinite(v) ? v : 0;
+  }
 
-      const fill = await fillAmountExact(amountUsd);
-      await sleep(250);
+  window.__polyMainPlaceBet = async function (amountUsd, opts = {}) {
+    const skipFill = !!opts.skipFill;
+    let fill = { ok: true, method: skipFill ? 'presynced' : 'pending', amount: amountUsd };
+    try {
+      if (!skipFill) {
+        await clickBuyTab();
+        await sleep(120);
+        fill = await fillAmountExact(amountUsd);
+        await sleep(250);
+        if (!fill.ok && fill.method === 'chips' && !fill.chipClicks) {
+          return { success: false, reason: '금액 입력 실패', probe: window.__polyMainProbe(), fill };
+        }
+      } else {
+        const cur = readCurrentAmount();
+        const target = Math.max(1, Math.round(amountUsd * 100) / 100);
+        if (Math.abs(cur - target) > 0.2) {
+          await clickBuyTab();
+          await fillAmountExact(target);
+          await sleep(60);
+        }
+      }
 
       let buyBtn = null;
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < (skipFill ? 8 : 20); i++) {
         buyBtn = findBuyTeamButton();
         if (buyBtn && !buyBtn.disabled) break;
-        await sleep(80);
+        await sleep(skipFill ? 25 : 80);
         buyBtn = null;
       }
 
@@ -279,8 +301,10 @@
 
       const label = btnText(buyBtn);
       robustClick(buyBtn);
-      await sleep(100);
-      robustClick(buyBtn);
+      if (!skipFill) {
+        await sleep(100);
+        robustClick(buyBtn);
+      }
 
       const result = await waitBetResult();
       if (!result.confirmed) {
@@ -298,10 +322,10 @@
         success: true,
         confirmed: true,
         btnText: label,
-        fill,
+        fill: skipFill ? { ok: true, method: 'presynced', amount: amountUsd } : fill,
         confirmClicks: result.confirmClicks,
         via: result.via,
-        method: 'main-world'
+        method: skipFill ? 'main-fast' : 'main-world'
       };
     } catch (e) {
       return { success: false, reason: e.message, method: 'main-world' };

@@ -1004,7 +1004,7 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       }
     }
 
-    if (targetOdds !== undefined && targetOdds !== null) {
+    if (!hint.forceBet && targetOdds !== undefined && targetOdds !== null) {
       const oddsTol = hint.skipEnsure ? 0.15 : 0.06;
       const oddsValidation = validateBtiOdds(targetOdds, oddsTol);
       if (!oddsValidation.valid) {

@@ -27,6 +27,9 @@ const HISTORY_KEY = 'calcHistory';
 const HISTORY_MAX = 100;
 let historyEntries = [];
 let lastHistoryKey = '';
+let betLock = false;
+let lastBetAt = 0;
+const BET_PREF_KEY = 'betPrefs';
 
 function formatPolyOddsForHistory(slip) {
   if (!slip?.odds || slip.odds <= 1) return '-';
@@ -436,6 +439,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   }
 
   maybeRecordHistory(bti, poly, arbBti);
+  maybeAutoBet(btiO, polyO, profit);
 }
 
 async function getAllFrames(tabId) {
@@ -1180,8 +1184,9 @@ async function probePolyMain(tabId) {
   }
 }
 
-async function placePolyBet(polyTab, amountUsd) {
+async function placePolyBet(polyTab, amountUsd, opts = {}) {
   if (!polyTab?.id) return { success: false, reason: 'Polymarket 탭 없음' };
+  const skipFill = !!opts.skipFill;
 
   await injectPolyMain(polyTab.id);
 
@@ -1189,21 +1194,185 @@ async function placePolyBet(polyTab, amountUsd) {
     const results = await chrome.scripting.executeScript({
       target: { tabId: polyTab.id },
       world: 'MAIN',
-      func: async (amount) => {
+      func: async (amount, fast) => {
         if (typeof window.__polyMainPlaceBet === 'function') {
-          return await window.__polyMainPlaceBet(amount);
+          return await window.__polyMainPlaceBet(amount, { skipFill: fast });
         }
         return { success: false, reason: 'MAIN 베팅 스크립트 로드 실패 — 탭 새로고침' };
       },
-      args: [amountUsd]
+      args: [amountUsd, skipFill]
     });
     const res = results?.[0]?.result;
-    if (res) return res;
+    if (res?.success) return res;
+    if (res && !res.success && !skipFill) return res;
   } catch (e) {
-    return { success: false, reason: `MAIN 베팅 실패: ${e.message}` };
+    if (!skipFill) return { success: false, reason: `MAIN 베팅 실패: ${e.message}` };
   }
 
-  return { success: false, reason: 'Polymarket MAIN 응답 없음' };
+  await ensurePolyScript(polyTab.id);
+  const fallback = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd, skipFill });
+  if (fallback?.success) return fallback;
+  return fallback || { success: false, reason: 'Polymarket MAIN 응답 없음' };
+}
+
+function getBetCooldownMs() {
+  const sec = parseInt($('betCooldown')?.value || '8', 10);
+  return (Number.isFinite(sec) && sec >= 3 ? sec : 8) * 1000;
+}
+
+function setBetUiBusy(busy) {
+  const btn = $('betNowBtn');
+  if (btn) btn.disabled = !!busy;
+}
+
+async function getStrikeContext() {
+  await refreshSlips();
+  const found = await findTabs();
+  if (!found.btiTab || !found.polyTab) {
+    return { ok: false, reason: '텐텐뱃 + 예측 탭을 열어주세요' };
+  }
+
+  let arbBti = null;
+  if (cachedPoly?.teamLabel) {
+    arbBti = await readBtiArbOdds(found.btiTab, cachedPoly);
+  }
+  const polyO = cachedPoly?.odds > 1 ? cachedPoly.odds : null;
+  const btiO = arbBti?.odds > 1 ? arbBti.odds : (cachedBti?.odds > 1 ? cachedBti.odds : null);
+  if (!btiO || !polyO) {
+    return {
+      ok: false,
+      reason: `배당 확인 — 텐텐뱃 ${btiO?.toFixed(3) || '-'} / ${leg2ShortLabel()} ${formatPolyOddsForHistory(cachedPoly)}`
+    };
+  }
+
+  const btiBetKrw = await getBtiBetAmount(found.btiTab);
+  const polyUsd = calcPolyBetUsd(btiBetKrw, btiO, polyO, getUsdRate());
+  const profit = calcProfit(btiO, polyO);
+  const hint = btiHintFromPoly(cachedPoly);
+  const polyPreSynced = calcRunning
+    && Math.abs(lastSyncedPolyUsd - polyUsd) < 0.08
+    && Date.now() - lastSyncedPolyAt < 8000;
+
+  return {
+    ok: true,
+    found,
+    btiO,
+    polyO,
+    polyUsd,
+    btiBetKrw,
+    profit,
+    hint,
+    polyPreSynced
+  };
+}
+
+async function strikeBothSides(ctx) {
+  const { found, btiO, polyUsd, btiBetKrw, hint, polyPreSynced } = ctx;
+
+  if (!polyPreSynced) {
+    try {
+      await ensureBtiSlip(found.btiTab, hint);
+    } catch (_) {}
+  }
+
+  const btiHint = { ...hint, skipEnsure: !!polyPreSynced, forceBet: true };
+  const t0 = performance.now();
+  const [btiRes, polyRes] = await Promise.all([
+    placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint),
+    placePolyBet(found.polyTab, polyUsd, { skipFill: polyPreSynced })
+  ]);
+
+  return {
+    ok: !!(btiRes?.success && polyRes?.success),
+    btiRes,
+    polyRes,
+    elapsedMs: Math.round(performance.now() - t0)
+  };
+}
+
+async function executeBet(label, options = {}) {
+  const { ignoreProfit = false } = options;
+  if (betLock) {
+    log('이미 배팅 진행 중', 'err');
+    return;
+  }
+  const now = Date.now();
+  if (now - lastBetAt < getBetCooldownMs()) {
+    log('배팅 쿨다운 중', 'info');
+    return;
+  }
+
+  betLock = true;
+  setBetUiBusy(true);
+  log(`⚡ ${label} 배팅 준비…`, 'info');
+
+  try {
+    const ctx = await getStrikeContext();
+    if (!ctx.ok) {
+      log(ctx.reason, 'err');
+      const hint = $('betHint');
+      if (hint) hint.textContent = ctx.reason;
+      return;
+    }
+
+    if (!ignoreProfit && ctx.profit != null && ctx.profit < getMinProfit()) {
+      log(`수익률 ${ctx.profit.toFixed(2)}% — 최소 ${getMinProfit()}% 미달`, 'err');
+      return;
+    }
+
+    log(
+      `BTI ${ctx.btiO.toFixed(3)} · ${leg2ShortLabel()} ${ctx.polyO.toFixed(3)} · Poly $${ctx.polyUsd.toFixed(2)}`,
+      'info'
+    );
+    const result = await strikeBothSides(ctx);
+    lastBetAt = Date.now();
+
+    const hint = $('betHint');
+    if (result.ok) {
+      log(`✓ 배팅 성공 ${result.elapsedMs}ms`, 'ok');
+      log(`  BTI: ${result.btiRes?.btnText || 'OK'}`, 'ok');
+      log(`  ${leg2FullLabel()}: ${result.polyRes?.btnText || result.polyRes?.method || 'OK'}`, 'ok');
+      if (hint) hint.textContent = '배팅 완료';
+      if ($('autoBet')?.checked) $('autoBet').checked = false;
+      saveBetPrefs();
+    } else {
+      log(`✗ 텐텐뱃: ${result.btiRes?.reason || '실패'}`, 'err');
+      log(`✗ ${leg2FullLabel()}: ${result.polyRes?.reason || '실패'}`, 'err');
+      if (hint) hint.textContent = '배팅 실패 — 로그 확인';
+    }
+  } catch (e) {
+    log(`배팅 오류: ${e.message}`, 'err');
+  } finally {
+    betLock = false;
+    setBetUiBusy(false);
+  }
+}
+
+function maybeAutoBet(btiO, polyO, profit) {
+  if (!calcRunning || betLock || !$('autoBet')?.checked) return;
+  if (!btiO || !polyO || profit == null || profit < getMinProfit()) return;
+  if (Date.now() - lastBetAt < getBetCooldownMs()) return;
+  executeBet('자동');
+}
+
+async function loadBetPrefs() {
+  try {
+    const data = await chrome.storage.local.get(BET_PREF_KEY);
+    const prefs = data[BET_PREF_KEY] || {};
+    if ($('autoBet')) $('autoBet').checked = !!prefs.autoBet;
+    if (prefs.cooldownSec != null && $('betCooldown')) $('betCooldown').value = String(prefs.cooldownSec);
+  } catch (_) {}
+}
+
+function saveBetPrefs() {
+  try {
+    chrome.storage.local.set({
+      [BET_PREF_KEY]: {
+        autoBet: !!$('autoBet')?.checked,
+        cooldownSec: parseInt($('betCooldown')?.value || '8', 10) || 8
+      }
+    });
+  } catch (_) {}
 }
 
 async function setPolyAmount(polyTab, amountUsd) {
@@ -1381,6 +1550,9 @@ document.querySelectorAll('.tab').forEach((btn) => {
 
 $('botStart')?.addEventListener('click', startCalc);
 $('botStop')?.addEventListener('click', stopCalc);
+$('betNowBtn')?.addEventListener('click', () => executeBet('수동', { ignoreProfit: true }));
+$('autoBet')?.addEventListener('change', saveBetPrefs);
+$('betCooldown')?.addEventListener('change', saveBetPrefs);
 $('clearHistoryBtn')?.addEventListener('click', clearHistory);
 $('searchStart')?.addEventListener('click', startSearch);
 $('searchStop')?.addEventListener('click', stopSearch);
@@ -1431,7 +1603,8 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 loadSitePrefs();
+loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.8.1 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.9.0 ${IS_PANEL ? '패널' : '팝업'} — 슬립 기반 배팅`, 'info');
