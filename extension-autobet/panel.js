@@ -368,7 +368,7 @@ async function executeStrike(snap, cfg, label) {
     return;
   }
 
-  if (snap.found?.btiTab) {
+  if (!polyPreSynced && snap.found?.btiTab) {
     try {
       const ui = await checkBtiSlipUi(snap.found.btiTab);
       if (ui.open) {
@@ -382,6 +382,9 @@ async function executeStrike(snap, cfg, label) {
         await ensureBtiSlip(snap.found.btiTab, { ...(snap.hint || {}), forArbPick: true });
       }
     } catch (_) {}
+  } else if (snap.found?.btiTab) {
+    btiSlipPaused = false;
+    btiSlipEverOpen = true;
   }
 
   strikeLock = true;
@@ -460,6 +463,10 @@ async function panelLoop() {
     if (snap.profit < cfg.minProfit) return;
 
     if (btiSlipPaused) return;
+
+    if (cfg.preSyncAmount && !polyPreSynced && snap.polyUsd > 0) {
+      await liveAmountSync(true);
+    }
 
     if (!armedLocal || haltAutoBet || strikeLock) return;
 
@@ -634,4 +641,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.7 — 배팅 슬립 준비·iframe·무장 즉시 실행', 'info');
+logLine('v1.2.8 — 동시 배팅 복구·즉시 실행(fastStrike)', 'info');

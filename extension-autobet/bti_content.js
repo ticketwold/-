@@ -972,10 +972,10 @@ function findBtiConfirmButton() {
   return null;
 }
 
-function confirmBtiBet() {
+function confirmBtiBet(fast = false) {
   return new Promise((resolve) => {
-    const MAX_WAIT = 8000;
-    const INTERVAL = 150;
+    const MAX_WAIT = fast ? 3500 : 8000;
+    const INTERVAL = fast ? 80 : 150;
     let elapsed = 0;
     function slipRemaining() {
       return getRealSlipCards().length;
@@ -1097,7 +1097,7 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     const hasInput = !!findBtiBetInput();
     const mustPrepare = multiSlip || wrongSlip || !realCards.length || !hasInput;
 
-    if (mustPrepare || !hint.skipEnsure || (force && !hasInput)) {
+    if (mustPrepare || (!hint.skipEnsure && !force) || (force && (!hasInput || !realCards.length))) {
       if (multiSlip || wrongSlip) {
         const cleared = await clearAllBtiSlips();
         if (cleared.slipLeft > 0 && multiSlip) {
@@ -1118,13 +1118,15 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       return { success: false, reason: '슬립 카드 없음 — 베팅슬립 열기' };
     }
 
-    if (!force) {
+    if (hint.fastStrike) {
+      /* 슬립·금액 사전동기화됨 — 대기 생략 */
+    } else if (!force) {
       const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 800 : 2500);
       if (!stable.ready && targetOdds && !hint.skipEnsure) {
         return { success: false, reason: stable.reason || '슬립 배당 미확정' };
       }
     } else {
-      await waitSlipStable(targetOdds, 400);
+      await waitSlipStable(targetOdds, 150);
     }
 
     // ── 기준점 검증 (위치 변경 버그 방어) ──
@@ -1165,8 +1167,10 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     }
 
     let betBtn = null;
-    for (let i = 0; i < (force ? 12 : 30); i++) {
-      await new Promise((r) => setTimeout(r, force ? 30 : 50));
+    const btnTries = hint.fastStrike ? 3 : (force ? 8 : 30);
+    const btnDelay = hint.fastStrike ? 10 : (force ? 25 : 50);
+    for (let i = 0; i < btnTries; i++) {
+      await new Promise((r) => setTimeout(r, btnDelay));
       betBtn = findBtiBetButton();
       if (betBtn && !betBtn.disabled) break;
     }
@@ -1180,7 +1184,7 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     betBtn.dispatchEvent(new MouseEvent('mouseup', opts));
     betBtn.dispatchEvent(new MouseEvent('click', opts));
     betBtn.click();
-    const confirm = await confirmBtiBet();
+    const confirm = await confirmBtiBet(!!hint.fastStrike);
     if (!confirm.confirmed) {
       return {
         success: false,

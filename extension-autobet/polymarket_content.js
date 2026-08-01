@@ -1443,17 +1443,21 @@ async function ensurePolyTradePanel(teamHint) {
 
 async function placePolymarketBet(amountUsd, opts = {}) {
   const skipFill = !!opts.skipFill;
-  const panelReady = await ensurePolyTradePanel(opts.teamHint || '');
-  if (!panelReady.ok) {
-    return { success: false, reason: panelReady.reason || '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: panelReady.probe || probePolyBetUi() };
+  const fastStrike = !!opts.fastStrike;
+  let panel = findTradePanel();
+  if (!panel) {
+    const panelReady = await ensurePolyTradePanel(opts.teamHint || '');
+    if (!panelReady.ok) {
+      return { success: false, reason: panelReady.reason || '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: panelReady.probe || probePolyBetUi() };
+    }
+    panel = findTradePanel();
   }
-  const panel = findTradePanel();
   if (!panel) {
     return { success: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
   }
 
   ensureBuyTabSelected(panel);
-  if (!skipFill) await sleep(120);
+  if (!skipFill && !fastStrike) await sleep(120);
 
   const amount = Math.max(1, Math.round(amountUsd * 100) / 100);
   let fill = { ok: true, method: 'presynced', stake: readAmountFromPanel(panel) };
@@ -1469,9 +1473,9 @@ async function placePolymarketBet(amountUsd, opts = {}) {
 
   let btn = null;
   let btnText = '';
-  const tries = skipFill ? 10 : 25;
+  const tries = (skipFill || fastStrike) ? 5 : 25;
   for (let i = 0; i < tries; i++) {
-    await sleep(skipFill ? 40 : 100);
+    await sleep((skipFill || fastStrike) ? 20 : 100);
     btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
     if (btn) {
       btnText = (btn.textContent || '').trim();
@@ -1494,7 +1498,7 @@ async function placePolymarketBet(amountUsd, opts = {}) {
   }
 
   clickBuyButton(btn);
-  await sleep(400);
+  await sleep(fastStrike ? 150 : 400);
   const modalBtn = findModalActionButton();
   if (modalBtn) clickBuyButton(modalBtn);
 
@@ -1643,7 +1647,11 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return true;
   }
   if (msg.type === 'PLACE_BET') {
-    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill, teamHint: msg.teamHint || msg.team || '' }).then(sendResponse);
+    placePolymarketBet(msg.amount, {
+      skipFill: !!msg.skipFill,
+      fastStrike: !!msg.fastStrike,
+      teamHint: msg.teamHint || msg.team || ''
+    }).then(sendResponse);
     return true;
   }
 });

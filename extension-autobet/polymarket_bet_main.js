@@ -264,9 +264,11 @@
 
   window.__polyMainPlaceBet = async function (amountUsd, opts = {}) {
     const skipFill = !!opts.skipFill;
-    let fill = { ok: true, method: skipFill ? 'presynced' : 'pending', amount: amountUsd };
+    const fastStrike = !!opts.fastStrike;
+    const fast = skipFill || fastStrike;
+    let fill = { ok: true, method: fast ? 'presynced' : 'pending', amount: amountUsd };
     try {
-      if (!skipFill) {
+      if (!fast) {
         await clickBuyTab();
         await sleep(60);
         const fillResult = await fillAmountExact(amountUsd);
@@ -281,15 +283,17 @@
         if (Math.abs(cur - target) > 0.2) {
           await clickBuyTab();
           await fillAmountExact(target);
-          await sleep(60);
+          await sleep(fastStrike ? 30 : 60);
         }
       }
 
       let buyBtn = null;
-      for (let i = 0; i < (skipFill ? 8 : 20); i++) {
+      const tries = fastStrike ? 5 : (skipFill ? 8 : 20);
+      const delay = fastStrike ? 15 : (skipFill ? 25 : 80);
+      for (let i = 0; i < tries; i++) {
         buyBtn = findBuyTeamButton();
         if (buyBtn && !buyBtn.disabled) break;
-        await sleep(skipFill ? 25 : 80);
+        await sleep(delay);
         buyBtn = null;
       }
 
@@ -304,7 +308,7 @@
 
       const label = btnText(buyBtn);
       robustClick(buyBtn);
-      if (!skipFill) {
+      if (!fast) {
         await sleep(100);
         robustClick(buyBtn);
       }
