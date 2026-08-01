@@ -1,9 +1,6 @@
 // engine.js — 탭 탐색, 슬립 읽기, 동시 배팅
 'use strict';
 
-const BTI_HOST_HINTS = ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'];
-const INJECTABLE_SUFFIXES = ['bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com'];
-
 let lastBtiFrame = null;
 let lastBtiSlipFrame = null;
 let lastBtiBoardFrame = null;
@@ -69,9 +66,15 @@ function btiBoardFrameId(tabId) {
   return 0;
 }
 
+async function ensureAllBtiScripts(tabId) {
+  const frames = await getAllFrames(tabId);
+  await Promise.all(frames.map((f) => ensureBtiScript(tabId, f.frameId)));
+}
+
 async function findTabs(leg2Pref = 'auto') {
   const tabs = await chrome.tabs.query({});
   let btiTab = null;
+  let btiBestScore = -1;
   const leg2Tabs = [];
   const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const activeId = activeTabs[0]?.id;
@@ -79,7 +82,14 @@ async function findTabs(leg2Pref = 'auto') {
   for (const tab of tabs) {
     if (!tab.url) continue;
     if (urlMatchesLeg2Pref(tab.url, leg2Pref)) leg2Tabs.push(tab);
-    if (isWrapperUrl(tab.url) && !btiTab) btiTab = tab;
+    if (isWrapperUrl(tab.url)) {
+      let score = scoreWrapperBtiTab(tab.url);
+      if (tab.id === activeId) score += 5;
+      if (score > btiBestScore) {
+        btiBestScore = score;
+        btiTab = tab;
+      }
+    }
   }
 
   let polyTab = null;
@@ -93,6 +103,117 @@ async function findTabs(leg2Pref = 'auto') {
     btiTab: btiTab ? { id: btiTab.id, url: btiTab.url } : null,
     polyTab: polyTab ? { id: polyTab.id, url: polyTab.url } : null
   };
+}
+
+function scoreBtiProbe(ping, slip) {
+  let score = 0;
+  if (slip?.odds > 1.01) score += 1000 + slip.odds;
+  if (slip?.source === 'slip-display') score += 400;
+  if (slip?.source === 'merged') score += 350;
+  if (ping?.hasInput || slip?.hasInput) score += 500;
+  if (ping?.slipCount > 0) score += 300;
+  if (ping?.slipOdds > 1) score += 250;
+  if (ping?.buttonCount > 0) score += Math.min(ping.buttonCount, 100);
+  if (slip?.buttonCount > 0) score += Math.min(slip.buttonCount, 80);
+  return score;
+}
+
+async function probeBtiFrame(tabId, frameId, hint = {}) {
+  let ping = await sendBti(tabId, frameId, { type: 'PING' });
+  if (!ping?.ok) {
+    await ensureBtiScript(tabId, frameId);
+    ping = await sendBti(tabId, frameId, { type: 'PING' });
+  }
+
+  const contentPromise = ping?.ok
+    ? sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint }).then((res) => res?.slip || null)
+    : Promise.resolve(null);
+  const scrapePromise = injectReadBtiFrame(tabId, frameId);
+
+  let [contentSlip, scraped] = await Promise.all([contentPromise, scrapePromise]);
+  let slip = (contentSlip?.odds > 1.01) ? contentSlip : scraped;
+
+  if (!(slip?.odds > 1.01) && contentSlip?.odds > 1.01) slip = contentSlip;
+  if (!(slip?.odds > 1.01) && scraped?.odds > 1.01) slip = scraped;
+
+  if (!(slip?.odds > 1.01) && ping?.ok && (hint.excludeTeam || hint.polyTeam)) {
+    const res2 = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: {} });
+    if (res2?.slip?.odds > 1.01) slip = res2.slip;
+    else {
+      const scraped2 = await injectReadBtiFrame(tabId, frameId);
+      if (scraped2?.odds > 1.01) slip = scraped2;
+    }
+  }
+
+  return {
+    frameId,
+    ping,
+    slip,
+    score: scoreBtiProbe(ping, slip),
+    hasInput: !!(ping?.hasInput || slip?.hasInput),
+    hasBoard: !!((ping?.buttonCount || 0) > 0 || (slip?.buttonCount || 0) > 0)
+  };
+}
+
+function updateBtiFrameRoles(tabId, results) {
+  let slipFrame = null;
+  let slipScore = -1;
+  let boardFrame = null;
+  let boardScore = -1;
+  for (const r of results) {
+    if (r.hasInput) {
+      const s = (r.slip?.odds > 1.01 ? 1000 : 0) + (r.ping?.hasInput ? 500 : 0);
+      if (s > slipScore) { slipScore = s; slipFrame = r.frameId; }
+    }
+    if (r.hasBoard) {
+      const s = (r.ping?.buttonCount || r.slip?.buttonCount || 0) + (r.slip?.odds > 1.01 ? 100 : 0);
+      if (s > boardScore) { boardScore = s; boardFrame = r.frameId; }
+    }
+  }
+  if (slipFrame != null) lastBtiSlipFrame = { tabId, frameId: slipFrame };
+  if (boardFrame != null) lastBtiBoardFrame = { tabId, frameId: boardFrame };
+}
+
+function mergeBtiFrameResults(results) {
+  if (!results.length) return { slip: null, frameId: 0 };
+  const sorted = [...results].sort((a, b) => b.score - a.score);
+  const slipPanel = sorted.find((r) => r.slip?.source === 'slip-display' && r.slip?.odds > 1.01);
+  const boardHit = sorted.find((r) => r.slip?.odds > 1.01 && (r.slip?.buttonCount > 0 || r.ping?.buttonCount > 0));
+  if (slipPanel?.slip && boardHit?.slip && slipPanel.frameId !== boardHit.frameId) {
+    return {
+      slip: {
+        ...slipPanel.slip,
+        odds: boardHit.slip.odds,
+        source: 'merged',
+        buttonCount: boardHit.slip.buttonCount || boardHit.ping?.buttonCount || 0
+      },
+      frameId: boardHit.frameId
+    };
+  }
+  const pick = sorted.find((r) => r.slip?.odds > 1.01) || sorted[0];
+  return { slip: pick?.slip || null, frameId: pick?.frameId ?? 0 };
+}
+
+async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
+  await ensureAllBtiScripts(tabId);
+  const frames = await getAllFrames(tabId);
+  const order = [];
+  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
+  for (const f of frames) if (!order.includes(f.frameId)) order.push(f.frameId);
+
+  if (!forceFull && lastBtiFrame?.tabId === tabId) {
+    const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint);
+    if (fast.slip?.odds > 1.01) {
+      lastBtiFrame = { tabId, frameId: fast.frameId };
+      return { slip: fast.slip, frameId: fast.frameId };
+    }
+  }
+
+  const results = await Promise.all(order.map((fid) => probeBtiFrame(tabId, fid, hint)));
+  updateBtiFrameRoles(tabId, results);
+  const merged = mergeBtiFrameResults(results);
+  if (merged.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: merged.frameId };
+  return merged;
 }
 
 function btiHintFromPoly(poly) {
@@ -119,50 +240,15 @@ async function readPolySlipAllFrames(polyTab) {
   return best;
 }
 
-async function probeBtiFrame(tabId, frameId, hint = {}) {
-  await ensureBtiScript(tabId, frameId);
-  const ping = await sendBti(tabId, frameId, { type: 'PING' });
-  if (!ping?.ok) return { frameId, slip: null, score: 0 };
-  const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint });
-  const slip = res?.slip;
-  let score = 0;
-  if (slip?.odds > 1.01) score += 1000;
-  if (ping?.hasInput) score += 500;
-  if (ping?.buttonCount) score += Math.min(ping.buttonCount, 100);
-  return { frameId, slip, score, hasInput: !!ping?.hasInput, hasBoard: (ping?.buttonCount || 0) > 0 };
-}
-
-async function readBtiFromAllFrames(tabId, hint = {}) {
-  const frames = await getAllFrames(tabId);
-  const order = [];
-  if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
-  for (const f of frames) if (!order.includes(f.frameId)) order.push(f.frameId);
-
-  const results = await Promise.all(order.map((fid) => probeBtiFrame(tabId, fid, hint)));
-  let slipFrame = null;
-  let boardFrame = null;
-  for (const r of results) {
-    if (r.hasInput) slipFrame = r.frameId;
-    if (r.hasBoard) boardFrame = r.frameId;
-  }
-  if (slipFrame != null) lastBtiSlipFrame = { tabId, frameId: slipFrame };
-  if (boardFrame != null) lastBtiBoardFrame = { tabId, frameId: boardFrame };
-
-  const sorted = [...results].sort((a, b) => b.score - a.score);
-  const best = sorted.find((r) => r.slip?.odds > 1.01) || sorted[0];
-  if (best?.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: best.frameId };
-  return { slip: best?.slip || null, frameId: best?.frameId ?? 0 };
-}
-
 async function readBtiArbOdds(btiTab, poly) {
   if (!btiTab?.id) return null;
-  const merged = await readBtiFromAllFrames(btiTab.id, btiHintFromPoly(poly));
+  const merged = await readBtiFromAllFrames(btiTab.id, btiHintFromPoly(poly), true);
   return merged.slip?.odds > 1.01 ? merged.slip : null;
 }
 
 async function readBtiSlip(btiTab) {
   if (!btiTab?.id) return null;
-  const merged = await readBtiFromAllFrames(btiTab.id, {});
+  const merged = await readBtiFromAllFrames(btiTab.id, {}, true);
   return merged.slip?.odds > 1 ? merged.slip : null;
 }
 
@@ -250,20 +336,30 @@ async function prewarmTabs(btiTab, polyTab, hint) {
 
 async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
   const found = await findTabs(leg2Pref);
-  if (!found.btiTab || !found.polyTab) {
-    return { ok: false, reason: '탭 없음', found };
+  if (!found.btiTab && !found.polyTab) {
+    return { ok: false, reason: 'x10x10s + 예측 탭을 열어주세요', found };
+  }
+  if (!found.btiTab) {
+    return { ok: false, reason: '텐텐뱃: x10x10s.com 스포츠 탭 없음', found };
+  }
+  if (!found.polyTab) {
+    return { ok: false, reason: '예측: Polymarket/BC.Game 탭 없음', found };
   }
 
-  const [poly, bti, arbBti] = await Promise.all([
-    readPolySlipAllFrames(found.polyTab),
+  const poly = await readPolySlipAllFrames(found.polyTab);
+  const [bti, arbBti] = await Promise.all([
     readBtiSlip(found.btiTab),
-    readPolySlipAllFrames(found.polyTab).then((p) => readBtiArbOdds(found.btiTab, p))
+    readBtiArbOdds(found.btiTab, poly)
   ]);
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
   const btiO = arbBti?.odds > 1 ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
+
+  let reason = '';
+  if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 배당판/슬립 확인';
+  else if (btiO && !polyO) reason = '예측 배당 없음 — 금액(USDT) 입력';
 
   return {
     ok: true,
@@ -275,6 +371,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
     btiO,
     profit,
     polyUsd,
+    reason,
     hint: btiHintFromPoly(poly)
   };
 }

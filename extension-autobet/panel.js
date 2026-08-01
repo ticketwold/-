@@ -70,7 +70,9 @@ function updateStatus(msg) {
   if (msg.btiO != null || msg.polyO != null) {
     $('oddsVal').textContent = `${msg.btiO?.toFixed(3) || '-'} / ${msg.polyO?.toFixed(3) || '-'}`;
   }
-  if (msg.source === 'arb-bot') {
+  if (msg.reason) {
+    $('statusHint').textContent = msg.reason;
+  } else if (msg.source === 'arb-bot') {
     $('statusHint').textContent = '양방배팅봇 신호 연동 중';
   } else if (msg.reason) {
     $('statusHint').textContent = msg.reason;

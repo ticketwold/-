@@ -1,5 +1,5 @@
 // background.js — 수익 구간 즉시 동시 배팅 오케스트레이터
-importScripts('sites_config.js', 'odds.js', 'engine.js');
+importScripts('sites_config.js', 'odds.js', 'bti_read.js', 'engine.js');
 
 const STORAGE_KEY = 'autoBetConfig';
 const LOG_KEY = 'autoBetLog';
@@ -70,17 +70,24 @@ async function evaluateAndStrike(source = 'poll') {
   if (config.useArbBotBridge) {
     const found = await findTabs(config.leg2);
     bridge = await readArbBotBridgeState(found.btiTab, found.polyTab);
-    if (bridge?.profit != null && bridge.btiOdds > 1 && bridge.polyOdds > 1) {
-      snap = {
-        ok: true,
-        found,
-        polyO: bridge.polyOdds,
-        btiO: bridge.btiOdds,
-        profit: bridge.profit,
-        polyUsd: calcPolyBetUsd(config.btiBetKrw, bridge.btiOdds, bridge.polyOdds, config.usdRate),
-        hint: bridge.hint || {},
-        fromBridge: true
-      };
+    if (bridge && Date.now() - (bridge.ts || 0) < 5000) {
+      const direct = await readSnapshot(config.leg2, config.btiBetKrw, config.usdRate);
+      const polyO = bridge.polyOdds > 1 ? bridge.polyOdds : direct.polyO;
+      const btiO = bridge.btiOdds > 1 ? bridge.btiOdds : direct.btiO;
+      if (polyO > 1 && btiO > 1) {
+        snap = {
+          ok: true,
+          found: direct.found || found,
+          polyO,
+          btiO,
+          profit: bridge.profit != null ? bridge.profit : calcProfit(btiO, polyO),
+          polyUsd: calcPolyBetUsd(config.btiBetKrw, btiO, polyO, config.usdRate),
+          hint: bridge.hint || direct.hint || {},
+          fromBridge: true
+        };
+      } else if (direct.ok) {
+        snap = { ...direct, fromBridge: false };
+      }
     }
   }
 
@@ -96,7 +103,14 @@ async function evaluateAndStrike(source = 'poll') {
   const { profit, btiO, polyO, polyUsd, found, hint } = snap;
 
   if (profit == null || btiO == null || polyO == null) {
-    broadcast({ type: 'AUTOBET_STATUS', armed, profit: null, btiO, polyO });
+    broadcast({
+      type: 'AUTOBET_STATUS',
+      armed,
+      profit: null,
+      btiO,
+      polyO,
+      reason: snap.reason || (!btiO ? '텐텐뱃 배당 없음' : '예측 배당 없음')
+    });
     prewarmDone = false;
     return;
   }
