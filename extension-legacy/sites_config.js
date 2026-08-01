@@ -4,6 +4,8 @@ const SITE_CONFIG = {
   POLYMARKET_HOSTS: ['polymarket.com'],
   BCGAME_HOSTS: ['bc.game'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
+  BTI_HOST_HINTS: ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'],
+  BTI_INJECTABLE_HOSTS: ['bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com'],
   GAMMA_API: 'https://gamma-api.polymarket.com',
   GAMMA_SPORTS_TAG: '100639'
 };
@@ -101,4 +103,27 @@ function scoreWrapperBtiTab(url) {
   const gc = getWrapperGamecode(url);
   if (gc && SITE_CONFIG.BTI_GAMECODES.includes(gc)) return 10;
   return 1;
+}
+
+function isInjectableBtiUrl(url) {
+  if (!url || url === 'about:blank') return false;
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return SITE_CONFIG.BTI_INJECTABLE_HOSTS.some((s) => h === s || h.endsWith('.' + s));
+  } catch (_) {
+    return false;
+  }
+}
+
+function scoreBtiFrameUrl(url) {
+  if (!url) return 0;
+  let score = 0;
+  for (const h of SITE_CONFIG.BTI_HOST_HINTS) {
+    if (url.includes(h)) score += 50;
+  }
+  if (/\/sports/i.test(url)) score += 30;
+  if (/sportsbook|bti|master_fe/i.test(url)) score += 15;
+  if (/gamecode=/.test(url)) score += 10;
+  if (isWrapperUrl(url)) score += 5;
+  return score;
 }

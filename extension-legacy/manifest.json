@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "5.9.0",
+  "version": "5.9.1",
   "description": "텐텐뱃 (x10x10s) + Polymarket / BC.Game 양방 서치 및 슬립 비교 베팅",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows"],
   "host_permissions": [
@@ -12,14 +12,16 @@
     "*://*.bc.game/*",
     "*://gamma-api.polymarket.com/*",
     "*://*.bti-sports.com/*",
-    "*://*.bti-sports.io/*"
+    "*://*.bti-sports.io/*",
+    "*://*.live8588.com/*",
+    "*://*.fxf774.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["*://*.bti-sports.io/*", "*://*.bti-sports.com/*", "*://*.x10x10s.com/*"],
+      "matches": ["*://*.bti-sports.io/*", "*://*.bti-sports.com/*", "*://*.x10x10s.com/*", "*://*.live8588.com/*", "*://*.fxf774.com/*"],
       "js": ["bti_content.js"],
       "run_at": "document_idle",
       "all_frames": true

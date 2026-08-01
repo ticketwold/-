@@ -5,6 +5,7 @@
 const POLL_MS = 16;
 const FALLBACK_REFRESH_MS = 800;
 const BTI_FULL_SCAN_MS = 2500;
+const BTI_MAX_FRAMES = 16;
 const IS_PANEL = document.body.classList.contains('panel-mode');
 let calcRunning = false;
 let calcTimer = null;
@@ -1136,25 +1137,111 @@ async function refreshSlips() {
 }
 
 async function placeBtiBet(btiTab, amount, targetOdds, hint = {}) {
-  const frameIds = [
-    btiSlipFrameId(btiTab.id),
-    lastBtiFrame?.tabId === btiTab.id ? lastBtiFrame.frameId : 0,
-    btiBoardFrameId(btiTab.id)
-  ];
-  const { res } = await sendBtiToFrames(btiTab.id, frameIds, {
-    type: 'PLACE_BET', amount, targetOdds, hint
-  });
-  return res || { success: false, reason: '응답 없음' };
+  const frameIds = await resolveBtiBetFrameIds(btiTab.id);
+  const msg = { type: 'PLACE_BET', amount, targetOdds, hint };
+  let lastRes = null;
+  for (const frameId of frameIds) {
+    const res = await sendBti(btiTab.id, frameId, msg);
+    if (!res) continue;
+    lastRes = res;
+    if (res.success) return { ...res, frameId };
+  }
+  return lastRes || { success: false, reason: '텐텐뱃 응답 없음 — 슬립/iframe 확인' };
 }
 
 async function ensureBtiSlip(btiTab, hint = {}) {
-  const frameIds = [
-    btiBoardFrameId(btiTab.id),
-    btiSlipFrameId(btiTab.id),
-    lastBtiFrame?.tabId === btiTab.id ? lastBtiFrame.frameId : 0
-  ];
+  const frameIds = await resolveBtiBetFrameIds(btiTab.id);
   const { res } = await sendBtiToFrames(btiTab.id, frameIds, { type: 'ENSURE_BTI_SLIP', hint });
   return res || { ok: false, reason: '응답 없음' };
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} (${ms}ms 초과)`)), ms))
+  ]);
+}
+
+async function orderBtiFrameIds(tabId) {
+  const frames = await getAllFrames(tabId);
+  const scored = [];
+
+  for (const f of frames) {
+    if (f.frameId !== 0 && !isInjectableBtiUrl(f.url)) continue;
+    let score = scoreBtiFrameUrl(f.url || '');
+    if (f.frameId === 0) score += 3;
+    scored.push({ frameId: f.frameId, score, url: f.url || '' });
+  }
+
+  if (!scored.length) {
+    for (const f of frames) {
+      scored.push({ frameId: f.frameId, score: f.frameId === 0 ? 1 : 0, url: f.url || '' });
+    }
+  }
+
+  if (lastBtiFrame?.tabId === tabId) {
+    const hit = scored.find((s) => s.frameId === lastBtiFrame.frameId);
+    if (hit) hit.score += 120;
+  }
+  if (lastBtiSlipFrame?.tabId === tabId) {
+    const hit = scored.find((s) => s.frameId === lastBtiSlipFrame.frameId);
+    if (hit) hit.score += 100;
+  }
+  if (lastBtiBoardFrame?.tabId === tabId) {
+    const hit = scored.find((s) => s.frameId === lastBtiBoardFrame.frameId);
+    if (hit) hit.score += 80;
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const ids = [];
+  for (const s of scored) {
+    if (!ids.includes(s.frameId)) ids.push(s.frameId);
+  }
+  return ids.length ? ids : [0];
+}
+
+async function resolveBtiBetFrameIds(tabId) {
+  const order = await orderBtiFrameIds(tabId);
+  const scored = [];
+  const frames = await getAllFrames(tabId);
+
+  for (const frameId of order.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(tabId, frameId);
+    let probe = null;
+    try {
+      probe = await withTimeout(sendBti(tabId, frameId, { type: 'PROBE_BET_FRAME' }), 2500, 'BTI탐색');
+    } catch (_) {}
+    const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
+    let score = scoreBtiFrameUrl(frameUrl);
+    if (probe?.hasInput) score += 500;
+    if (probe?.hasBtn) score += 400;
+    if (probe?.hasSlip) score += 200;
+    if (probe?.slipOdds > 1) score += Math.min(probe.slipOdds, 50);
+    if (probe?.hasInput && probe?.hasBtn) score += 300;
+    if (score > 0) scored.push({ frameId, score });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const ids = scored.filter((s) => s.score >= 200).map((s) => s.frameId);
+  return ids.length ? ids : order.slice(0, 4);
+}
+
+async function setBtiAmount(btiTab, amountKrw) {
+  if (!btiTab?.id) return { ok: false, reason: '탭 없음' };
+  const frameIds = await resolveBtiBetFrameIds(btiTab.id);
+  for (const frameId of frameIds) {
+    const res = await sendBti(btiTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountKrw });
+    if (res?.ok) return res;
+  }
+  return { ok: false, reason: '텐텐뱃 금액 입력 실패 — 슬립 열기' };
+}
+
+async function prepBetAmounts(found, btiBetKrw, polyUsd) {
+  const [btiRes, polyRes] = await Promise.all([
+    setBtiAmount(found.btiTab, btiBetKrw),
+    setPolyAmount(found.polyTab, polyUsd)
+  ]);
+  return { btiOk: !!btiRes?.ok, polyOk: !!polyRes?.ok, btiRes, polyRes };
 }
 
 async function injectPolyMain(tabId) {
@@ -1267,23 +1354,42 @@ async function getStrikeContext() {
 }
 
 async function strikeBothSides(ctx) {
-  const { found, btiO, polyUsd, btiBetKrw, hint, polyPreSynced } = ctx;
+  const { found, btiO, polyUsd, btiBetKrw, hint } = ctx;
+  const t0 = performance.now();
 
-  if (!polyPreSynced) {
-    try {
-      await ensureBtiSlip(found.btiTab, hint);
-    } catch (_) {}
+  const ensured = await ensureBtiSlip(found.btiTab, hint);
+  if (!ensured?.ok) {
+    log(`텐텐뱃 슬립 준비: ${ensured?.reason || '실패'}`, 'err');
   }
 
-  const btiHint = { ...hint, skipEnsure: !!polyPreSynced, forceBet: true };
-  const t0 = performance.now();
-  const [btiRes, polyRes] = await Promise.all([
-    placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint),
-    placePolyBet(found.polyTab, polyUsd, { skipFill: polyPreSynced })
-  ]);
+  const prep = await prepBetAmounts(found, btiBetKrw, polyUsd);
+  if (!prep.btiOk) {
+    return {
+      ok: false,
+      btiRes: { success: false, reason: prep.btiRes?.reason || '텐텐뱃 금액 입력 실패' },
+      polyRes: { success: false, reason: '텐텐뱃 준비 실패 — Poly 배팅 안 함' },
+      elapsedMs: Math.round(performance.now() - t0)
+    };
+  }
+
+  const btiHint = { ...hint, skipEnsure: true, forceBet: true };
+  log('텐텐뱃 배팅…', 'info');
+  const btiRes = await placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint);
+
+  if (!btiRes?.success) {
+    return {
+      ok: false,
+      btiRes,
+      polyRes: { success: false, reason: '텐텐뱃 실패 — Poly 배팅 취소' },
+      elapsedMs: Math.round(performance.now() - t0)
+    };
+  }
+
+  log('텐텐뱃 OK → Polymarket 배팅…', 'info');
+  const polyRes = await placePolyBet(found.polyTab, polyUsd, { skipFill: prep.polyOk });
 
   return {
-    ok: !!(btiRes?.success && polyRes?.success),
+    ok: !!(btiRes.success && polyRes?.success),
     btiRes,
     polyRes,
     elapsedMs: Math.round(performance.now() - t0)
@@ -1291,7 +1397,7 @@ async function strikeBothSides(ctx) {
 }
 
 async function executeBet(label, options = {}) {
-  const { ignoreProfit = false } = options;
+  const ignoreProfit = options.ignoreProfit ?? !!$('ignoreProfit')?.checked;
   if (betLock) {
     log('이미 배팅 진행 중', 'err');
     return;
@@ -1316,7 +1422,9 @@ async function executeBet(label, options = {}) {
     }
 
     if (!ignoreProfit && ctx.profit != null && ctx.profit < getMinProfit()) {
-      log(`수익률 ${ctx.profit.toFixed(2)}% — 최소 ${getMinProfit()}% 미달`, 'err');
+      log(`수익률 ${ctx.profit.toFixed(2)}% — 최소 ${getMinProfit()}% 미달 (배팅 취소)`, 'err');
+      const hint = $('betHint');
+      if (hint) hint.textContent = `수익 구간 밖 (${ctx.profit.toFixed(2)}%) — 배팅 안 함`;
       return;
     }
 
@@ -1350,6 +1458,7 @@ async function executeBet(label, options = {}) {
 
 function maybeAutoBet(btiO, polyO, profit) {
   if (!calcRunning || betLock || !$('autoBet')?.checked) return;
+  if ($('ignoreProfit')?.checked) return;
   if (!btiO || !polyO || profit == null || profit < getMinProfit()) return;
   if (Date.now() - lastBetAt < getBetCooldownMs()) return;
   executeBet('자동');
@@ -1550,7 +1659,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
 
 $('botStart')?.addEventListener('click', startCalc);
 $('botStop')?.addEventListener('click', stopCalc);
-$('betNowBtn')?.addEventListener('click', () => executeBet('수동', { ignoreProfit: true }));
+$('betNowBtn')?.addEventListener('click', () => executeBet('수동'));
 $('autoBet')?.addEventListener('change', saveBetPrefs);
 $('betCooldown')?.addEventListener('change', saveBetPrefs);
 $('clearHistoryBtn')?.addEventListener('click', clearHistory);
@@ -1607,4 +1716,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.0 ${IS_PANEL ? '패널' : '팝업'} — 슬립 기반 배팅`, 'info');
+log(`v5.9.1 ${IS_PANEL ? '패널' : '팝업'} — BTI 우선 배팅`, 'info');

@@ -597,7 +597,6 @@ function readActiveSlipDisplayOdds() {
       const eventText = eventEl?.textContent?.trim() || '';
       const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
 
-      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
       const mktType = detectMarketType(allText);
       if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') continue;
 
@@ -1732,8 +1731,25 @@ function searchBtiOdds(query) {
   return { ...board, query, hits, hitCount: hits.length, slip: readBtiOdds() };
 }
 
+function setBtiStakeAmount(amount) {
+  const input = findBtiBetInput();
+  if (!input) return { ok: false, reason: '입력 필드 없음' };
+  const want = Math.max(1000, Math.round(Number(amount) || 0));
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  nativeSetter.call(input, String(want));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  const stake = readBtiStake();
+  return stake > 0 ? { ok: true, stake } : { ok: false, reason: '금액 반영 실패' };
+}
+
 // popup / background 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'SET_BTI_AMOUNT') {
+    sendResponse(setBtiStakeAmount(msg.amount));
+    return false;
+  }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;
