@@ -344,4 +344,4 @@ chrome.storage.local.get('autoBetLog', (data) => {
 setInterval(() => liveAmountSync(false), SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.0.9 — 텐텐뱃 iframe 배당 탐색 강화', 'info');
+logLine('v1.1.0 — Polymarket 배당 API·스크랩 폴백', 'info');

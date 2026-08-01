@@ -325,27 +325,7 @@ function btiHintFromPoly(poly) {
 }
 
 async function readPolySlipAllFrames(polyTab) {
-  const frames = await getAllFrames(polyTab.id);
-  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)].slice(0, POLY_MAX_FRAMES);
-  const seen = new Set();
-  let best = null;
-  for (const frameId of order) {
-    if (seen.has(frameId)) continue;
-    seen.add(frameId);
-    await ensurePolyScript(polyTab.id, frameId);
-    let res;
-    try {
-      res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), POLY_FRAME_MS, 'Poly읽기');
-    } catch (_) {
-      continue;
-    }
-    const slip = res?.slip;
-    if (slip?.fromPayout && slip.odds > 1) return slip;
-    if (slip?.odds > 1 || slip?.needsStake) {
-      if (!best || slip.fromPayout || (slip.odds > 1 && !best.odds)) best = slip;
-    }
-  }
-  return best;
+  return readPolyOddsOnce(polyTab);
 }
 
 async function readBtiOddsOnce(btiTab, poly) {
@@ -539,7 +519,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
 
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = '예측 배당 없음 — 금액(USDT) 입력';
+  else if (btiO && !polyO) reason = '예측 배당 없음 — Polymarket outcome 클릭 또는 Amount 입력';
 
   return {
     ok: true,

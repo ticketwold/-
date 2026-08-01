@@ -461,7 +461,6 @@ function readSelectedBoardCents(teamHint) {
   for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
     if (!visible(btn) || isBuySellTab(btn)) continue;
     const sel = selectionScore(btn);
-    if (sel < 80) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
     if (!t || t.length > 120) continue;
     const cents = parseCentsFromText(t);
@@ -469,11 +468,12 @@ function readSelectedBoardCents(teamHint) {
     if (teamHint && !teamMatchesButton(teamHint, t)) continue;
 
     let score = sel + 150;
+    if (sel < 30 && !/active|selected|pressed|border-primary|ring-/i.test(String(btn.className || ''))) continue;
     if (teamHint && teamMatchesButton(teamHint, t)) score += 100;
     if (/^yes\b|^no\b/i.test(t)) score += 40;
     candidates.push({ cents, score, t });
   }
-  if (!candidates.length) return null;
+  if (!candidates.length) return readPageOutcomeCents(teamHint);
   candidates.sort((a, b) => b.score - a.score);
   return candidates[0].cents;
 }
@@ -856,8 +856,16 @@ function readPolymarketSlip() {
     };
   }
 
-  // 금액 없을 때만 보드 ¢ 참고
-  const listedCents = readLiveListedCents(panel, 0, 0);
+  // 금액 없을 때 보드 ¢ / Avg price 참고
+  let listedCents = readLiveListedCents(panel, 0, 0);
+  if (!listedCents) listedCents = readPageOutcomeCents(team);
+  if (!listedCents && panel) {
+    const avgM = (panel.innerText || '').match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
+    if (avgM) {
+      const c = parseFloat(avgM[1]);
+      if (isValidPolyCents(c)) listedCents = c;
+    }
+  }
   const odds = oddsFromCents(listedCents);
 
   if (!odds || odds <= 1.001) {
