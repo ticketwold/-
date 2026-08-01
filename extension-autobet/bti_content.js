@@ -904,10 +904,13 @@ function probeBtiBetFrame() {
   const hasSlip = cards.length > 0 || (odds?.odds > 1);
   const r = input?.getBoundingClientRect?.();
   const hasInput = !!input && r && r.width > 0 && r.height > 0;
+  const slipOpen = isActiveBetslipOpen();
   return {
     hasSlip,
     hasInput,
     hasBtn: !!betBtn,
+    slipOpen,
+    ready: slipOpen && hasInput,
     slipOdds: odds?.odds > 1 ? odds.odds : 0,
     slipCount: cards.length,
     buttonCount: queryBoardButtons().length,

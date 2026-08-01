@@ -396,6 +396,34 @@ async function setBtiAmount(btiTab, amountKrw) {
   return { ok: false, reason: '텐텐뱃 금액 입력 실패 — 슬립 열기' };
 }
 
+async function checkBtiSlipUi(btiTab) {
+  if (!btiTab?.id) return { open: false, ready: false, reason: '탭 없음' };
+  const frameIds = await resolveBtiBetFrameIds(btiTab.id);
+  let bestOpen = null;
+  let sawClosed = false;
+
+  for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(btiTab.id, frameId);
+    const probe = await sendBti(btiTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+    if (!probe) continue;
+    if (probe.slipOpen) {
+      const score = (probe.hasInput ? 500 : 0) + (probe.hasBtn ? 200 : 0) + (probe.hasSlip ? 100 : 0);
+      if (!bestOpen || score > bestOpen.score) {
+        bestOpen = { open: true, ready: !!probe.ready, frameId, probe, score };
+      }
+    } else if (probe.hasInput === false && probe.hasSlip === false) {
+      sawClosed = true;
+    }
+  }
+
+  if (bestOpen) return bestOpen;
+  return {
+    open: false,
+    ready: false,
+    reason: sawClosed ? '슬립 닫힘' : '베팅슬립 없음'
+  };
+}
+
 async function placeBtiBet(btiTab, amount, targetOdds, hint = {}) {
   const frameIds = await resolveBtiBetFrameIds(btiTab.id);
   const msg = { type: 'PLACE_BET', amount, targetOdds, hint };

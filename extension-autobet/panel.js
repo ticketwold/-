@@ -17,7 +17,8 @@ let oddsReadBusy = false;
 let amountSyncQueued = true;
 let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
 let polyPreSynced = false;
-let tabCache = null;
+let btiSlipPaused = false;
+let btiSlipPauseBusy = false;
 let liveSnap = { ok: false };
 let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0 };
 
@@ -69,8 +70,13 @@ function setArmedUi(armed) {
   armedLocal = !!armed;
   const st = $('armStatus');
   if (st) {
-    st.textContent = armed ? '무장' : '해제';
-    st.className = armed ? 'armed' : 'disarmed';
+    if (armed && btiSlipPaused) {
+      st.textContent = '무장·대기';
+      st.className = 'armed paused';
+    } else {
+      st.textContent = armed ? '무장' : '해제';
+      st.className = armed ? 'armed' : 'disarmed';
+    }
   }
   $('armBtn').disabled = armed;
   $('disarmBtn').disabled = !armed;
@@ -177,6 +183,42 @@ function stabilizeSnap(snap, cfg) {
   return snap;
 }
 
+async function updateBtiSlipPauseState() {
+  if (!armedLocal || haltAutoBet || strikeLock || btiSlipPauseBusy) return;
+  const tab = tabCache?.btiTab || liveSnap?.found?.btiTab;
+  if (!tab?.id) return;
+
+  btiSlipPauseBusy = true;
+  try {
+    const ui = await checkBtiSlipUi(tab);
+    const wasPaused = btiSlipPaused;
+    btiSlipPaused = !ui.open;
+
+    if (btiSlipPaused) {
+      if (!wasPaused) {
+        logLine('⏸ 텐텐뱃 슬립 닫힘 — 열리면 자동 재개', 'info');
+        polyPreSynced = false;
+      }
+      const hint = $('statusHint');
+      if (hint) hint.textContent = '⏸ 텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개';
+      setArmedUi(true);
+      return;
+    }
+
+    if (wasPaused) {
+      logLine('▶ 텐텐뱃 슬립 열림 — 자동 재개', 'ok');
+      amountSyncQueued = true;
+      setArmedUi(true);
+      liveAmountSync(true);
+      refreshOddsLive();
+    }
+  } catch (_) {
+    /* ignore probe errors */
+  } finally {
+    btiSlipPauseBusy = false;
+  }
+}
+
 async function refreshOddsLive() {
   if (oddsReadBusy || strikeLock) return;
   oddsReadBusy = true;
@@ -239,6 +281,7 @@ function needsAmountResync(snap, cfg) {
 
 async function liveAmountSync(force) {
   if (amountSyncLock || strikeLock) return;
+  if (btiSlipPaused && !force) return;
   const cfg = getConfig();
   const syncOn = cfg.preSyncAmount || armedLocal;
   if (!syncOn && !force) return;
@@ -314,6 +357,10 @@ async function executeStrike(snap, cfg, label) {
     else logLine('이미 배팅 진행 중', 'err');
     return;
   }
+  if (btiSlipPaused) {
+    logLine('텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개', 'info');
+    return;
+  }
   strikeLock = true;
   setTestBtnBusy(true);
   lastStrikeAt = Date.now();
@@ -367,7 +414,7 @@ async function executeStrike(snap, cfg, label) {
 }
 
 async function panelLoop() {
-  if (!armedLocal || strikeLock || panelLoopBusy || haltAutoBet) return;
+  if (!armedLocal || strikeLock || panelLoopBusy || haltAutoBet || btiSlipPaused) return;
 
   panelLoopBusy = true;
   try {
@@ -402,6 +449,7 @@ function arm(armed) {
     if (res?.ok) {
       if (armed) {
         haltAutoBet = false;
+        btiSlipPaused = false;
         lastStrikeAt = Date.now();
       }
       setArmedUi(res.armed);
@@ -521,10 +569,13 @@ chrome.storage.local.get('autoBetLog', (data) => {
   (data.autoBetLog || []).slice(0, 15).reverse().forEach((e) => logLine(e.text, e.level));
 });
 
+setInterval(() => {
+  if (armedLocal && !haltAutoBet) updateBtiSlipPauseState();
+}, 500);
 setInterval(refreshOddsLive, ODDS_POLL_MS);
 setInterval(() => {
   if ($('preSync')?.checked || armedLocal) liveAmountSync(false);
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.2 — 로그 표기 텐텐뱃 통일', 'info');
+logLine('v1.2.4 — 텐텐뱃 슬립 닫힘 시 일시정지·자동 재개', 'info');

@@ -24,6 +24,7 @@ header h1 { font-size: 18px; }
 }
 .status-row span { color: #9aa0a6; }
 #armStatus.armed { color: #34d399; }
+#armStatus.armed.paused { color: #fbbf24; }
 #armStatus.disarmed { color: #f87171; }
 #profitVal.positive { color: #34d399; }
 .row { margin-bottom: 10px; }
