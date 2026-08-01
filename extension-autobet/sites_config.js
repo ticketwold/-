@@ -7,8 +7,25 @@ const SITE_CONFIG = {
   BTI_HOST_HINTS: ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'],
   BTI_INJECTABLE_HOSTS: ['bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com'],
   GAMMA_API: 'https://gamma-api.polymarket.com',
-  GAMMA_SPORTS_TAG: '100639'
+  GAMMA_SPORTS_TAG: '100639',
+  LEG1_LABEL: '텐텐뱃',
+  LEG1_SHORT: '텐텐'
 };
+
+function leg1Label() {
+  return SITE_CONFIG.LEG1_LABEL || '텐텐뱃';
+}
+
+function leg1ShortLabel() {
+  return SITE_CONFIG.LEG1_SHORT || '텐텐';
+}
+
+function formatStrikeFailLine(btiRes, polyRes, leg2Pref) {
+  const leg2 = leg2PrefLabel(leg2Pref || 'auto');
+  const left = btiRes?.reason || btiRes?.btnText || '실패';
+  const right = polyRes?.reason || polyRes?.method || polyRes?.btnText || '실패';
+  return `✗ ${leg1Label()}: ${left} · ${leg2}: ${right}`;
+}
 
 function isWrapperUrl(url) {
   if (!url) return false;

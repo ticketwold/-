@@ -47,7 +47,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'AUTOBET_ARM') {
     armed = !!msg.armed;
     saveConfig({ armed }).then(() => {
-      logEntry(armed ? '무장' : '해제', 'info');
+      if (armed) logEntry('무장', 'info');
       broadcast({ type: 'AUTOBET_ARMED', armed });
       sendResponse({ ok: true, armed });
     });
@@ -69,8 +69,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'AUTOBET_STRIKE_RESULT' && msg.result) {
     const r = msg.result;
-    if (r.ok) logEntry('✓ 배팅 성공 (panel)', 'ok');
-    else logEntry(`✗ BTI:${r.btiRes?.reason} Poly:${r.polyRes?.reason}`, 'err');
+    if (r.ok) {
+      armed = false;
+      saveConfig({ armed: false }).then(() => {
+        broadcast({ type: 'AUTOBET_ARMED', armed: false });
+      });
+      logEntry('✓ 배팅 성공 — 자동 해제', 'ok');
+    } else {
+      logEntry(formatStrikeFailLine(r.btiRes, r.polyRes, config.leg2), 'err');
+    }
     return false;
   }
 
