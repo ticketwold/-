@@ -185,15 +185,7 @@ function readPanelStake(panel) {
       inp.getAttribute('data-value')
     ]) {
       const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-    const box = inp.closest('div') || inp.parentElement;
-    if (box) {
-      const bm = (box.textContent || '').match(/\$\s*([\d,]+(?:\.\d+)?)/);
-      if (bm) {
-        const v = parseFloat(bm[1].replace(/,/g, ''));
-        if (v > 0 && v < 100000) return v;
-      }
+      if (Number.isFinite(v) && v > 0 && v < 50000) return v;
     }
   }
 
@@ -824,18 +816,67 @@ function polyStakeRecentlyChanged(maxAgeMs = 1400) {
 function readBoardRefCents(panel, team) {
   const panelEl = panel || findTradePanel();
   const teamLabel = team || readTeamLabel(panelEl);
-  const selected = readSelectedBoardCents(teamLabel);
-  if (selected) return selected;
+
   const avg = readListedPriceCents(panelEl);
   if (avg) return avg;
+
   const buyBtn = readBuyButtonCents(panelEl);
   if (buyBtn) return buyBtn;
+
+  const selected = readSelectedBoardCents(teamLabel);
+  if (selected) return selected;
+
+  const panelText = panelEl?.innerText || '';
+  const avgInline = panelText.match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
+  if (avgInline) {
+    const c = parseFloat(avgInline[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  if (teamLabel) {
+    const teamEsc = teamLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 24);
+    const nearTeam = panelText.match(new RegExp(`${teamEsc}[\\s\\S]{0,40}?(\\d+(?:\\.\\d+)?)\\s*¢`, 'i'));
+    if (nearTeam) {
+      const c = parseFloat(nearTeam[1]);
+      if (isValidPolyCents(c)) return c;
+    }
+  }
+
   return readPageOutcomeCents(teamLabel) || readEventBoardCents(teamLabel);
 }
 
 function isPayoutOddsPlausible(slipPriceCents, boardCents) {
-  if (!isValidPolyCents(slipPriceCents) || !isValidPolyCents(boardCents)) return true;
-  return Math.abs(slipPriceCents - boardCents) <= 5;
+  if (!isValidPolyCents(slipPriceCents) || !isValidPolyCents(boardCents)) return false;
+  return Math.abs(slipPriceCents - boardCents) <= 4;
+}
+
+function buildBoardSlip(team, stake, boardCents, boardOdds, opts = {}) {
+  const centsLabel = formatCentsLabel(boardCents);
+  const { toWinDisplay, fromPayoutOdds, pending } = opts;
+  let displayLabel = `${centsLabel} (${boardOdds.toFixed(3)})`;
+  if (fromPayoutOdds > 1 && toWinDisplay > 0 && stake > 0) {
+    displayLabel = `${fromPayoutOdds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`;
+  }
+  return {
+    source: predictionSiteId(),
+    odds: boardOdds,
+    priceCents: boardCents,
+    price: boardCents / 100,
+    teamLabel: team,
+    outcome: team,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel,
+    stake: stake || null,
+    payout: null,
+    toWin: null,
+    hint: pending ? '금액 동기화 중 — ¢ 배당' : `${centsLabel} 기준`,
+    marketKind: 'ml',
+    period: 'ft',
+    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    fromPayout: false,
+    liveCents: true,
+    pendingToWin: !!pending
+  };
 }
 
 function buildPendingPolySlip(team, stake, boardCents, hint) {
@@ -880,13 +921,31 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
   notePolyStakeChange(stake);
-  const toWinDisplay = readPayoutAmount(panel, stake);
   const team = readTeamLabel(panel);
   const boardCents = readBoardRefCents(panel, team);
+  const boardOdds = boardCents ? oddsFromCents(boardCents) : null;
+  const toWinDisplay = readPayoutAmount(panel, stake);
   const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
   const stakeUnsettled = polyStakeRecentlyChanged() || (stake > 0 && !toWinDisplay);
 
-  // Amount + To win — 보드 ¢와 불일치하면 금액 동기화 중으로 간주 (오배당 방지)
+  // 보드/Avg ¢ 우선 — 당첨금÷금액은 To win 안정 후에만
+  if (boardOdds > 1.001) {
+    const payoutTrusted = slipOdds
+      && !stakeUnsettled
+      && isPayoutOddsPlausible(slipOdds.priceCents, boardCents);
+
+    if (!payoutTrusted) {
+      if (stakeUnsettled || stake > 0) {
+        return buildBoardSlip(team, stake, boardCents, boardOdds, {
+          toWinDisplay,
+          pending: stakeUnsettled || !!(slipOdds && !isPayoutOddsPlausible(slipOdds.priceCents, boardCents))
+        });
+      }
+      return buildBoardSlip(team, stake, boardCents, boardOdds, {});
+    }
+  }
+
+  // Amount + To win — 보드와 일치할 때만 당첨금 기준
   if (slipOdds) {
     const { odds, totalPayout, profit, priceCents } = slipOdds;
     const payoutStale = stakeUnsettled

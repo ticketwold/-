@@ -1520,7 +1520,14 @@ async function checkProfitZoneAndBet() {
   const betHint = $('betHint');
 
   if (cachedPoly?.pendingToWin) {
+    profitZoneSince = 0;
     if (betHint) betHint.textContent = 'Poly 금액 동기화 중 — 배당 안정화 대기';
+    return;
+  }
+
+  if (!btiO || !polyO || profit == null) {
+    profitZoneSince = 0;
+    if (betHint) betHint.textContent = '배당 모니터링 중…';
     return;
   }
 
@@ -1825,4 +1832,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.3 ${IS_PANEL ? '패널' : '팝업'} — Poly 오배당 필터`, 'info');
+log(`v5.9.4 ${IS_PANEL ? '패널' : '팝업'} — Poly ¢ 우선 배당`, 'info');
