@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <h1>⚡ 양방 자동배팅</h1>
+  <div class="sub">양방배팅봇 수익 구간 → 즉시 동시 배팅 · v1.0.0</div>
+</header>
+
+<section class="status-box" id="statusBox">
+  <div class="status-row">
+    <span>상태</span>
+    <strong id="armStatus" class="disarmed">해제</strong>
+  </div>
+  <div class="status-row">
+    <span>수익률</span>
+    <strong id="profitVal">-</strong>
+  </div>
+  <div class="status-row">
+    <span>텐텐뱃 / 예측</span>
+    <strong id="oddsVal">- / -</strong>
+  </div>
+  <div class="hint" id="statusHint">무장 후 수익 구간 진입 시 양쪽 동시 배팅</div>
+</section>
+
+<div class="row">
+  <label>최소 수익률 (%)</label>
+  <input type="number" id="minProfit" value="1" min="0" step="0.1">
+</div>
+<div class="row two-col">
+  <div>
+    <label>텐텐뱃 금액 (원)</label>
+    <input type="number" id="btiBet" value="10000" min="1000" step="1000">
+  </div>
+  <div>
+    <label>USDT 환율</label>
+    <input type="number" id="usdRate" value="1400" min="1000" step="10">
+  </div>
+</div>
+<div class="row">
+  <label>오른쪽(B) 사이트</label>
+  <select id="leg2Site">
+    <option value="auto">자동</option>
+    <option value="polymarket">Polymarket</option>
+    <option value="bcgame">BC.Game</option>
+  </select>
+</div>
+<div class="row">
+  <label>재배팅 쿨다운 (ms)</label>
+  <input type="number" id="cooldownMs" value="8000" min="1000" step="500">
+</div>
+<label class="check">
+  <input type="checkbox" id="useBridge" checked>
+  양방배팅봇 신호 우선 사용 (더 빠름)
+</label>
+<label class="check">
+  <input type="checkbox" id="preSync" checked>
+  무장 시 예측 금액 미리 입력
+</label>
+
+<div class="btn-row">
+  <button id="armBtn" class="btn primary">🔴 무장 (자동배팅 ON)</button>
+  <button id="disarmBtn" class="btn" disabled>해제</button>
+</div>
+
+<div id="log" class="log"></div>
+
+<script src="panel.js"></script>
+</body>
+</html>

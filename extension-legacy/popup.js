@@ -1,4 +1,4 @@
-// popup.js v5.8.0 — 텐텐뱃 + Polymarket / BC.Game
+// popup.js v5.8.1 — 텐텐뱃 + Polymarket / BC.Game
 
 'use strict';
 
@@ -295,6 +295,35 @@ function formatBtiMeta(slip) {
   return `${prefix}${label}`;
 }
 
+function broadcastAutoBetState(btiO, polyO, profit, poly) {
+  if (btiO == null || polyO == null || profit == null) return;
+  const state = {
+    profit,
+    btiOdds: btiO,
+    polyOdds: polyO,
+    polyTeam: poly?.teamLabel || '',
+    hint: btiHintFromPoly(poly),
+    calcRunning,
+    minProfit: getMinProfit()
+  };
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (!tab.url || !(isWrapperUrl(tab.url) || isLeg2PredictionUrl(tab.url))) continue;
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'MAIN',
+        func: (s) => {
+          if (typeof window.__arbAutoWriteState === 'function') window.__arbAutoWriteState(s);
+          else {
+            try { localStorage.setItem('__arbBotState_v1', JSON.stringify({ ...s, ts: Date.now() })); } catch (_) {}
+          }
+        },
+        args: [state]
+      }).catch(() => {});
+    }
+  });
+}
+
 function updateSlipUI(bti, poly, arbBti = null) {
   $('btiOdds').textContent = formatOdds(bti);
   $('polyOdds').textContent = formatOdds(poly);
@@ -320,6 +349,8 @@ function updateSlipUI(bti, poly, arbBti = null) {
   else if (profit !== null && profit >= getMinProfit()) hint.textContent = calcRunning ? `수익 구간 — ${leg2FullLabel()} 금액 자동 갱신 (${profit.toFixed(2)}%)` : '수익 구간 충족';
   else if (profit !== null) hint.textContent = `수익 구간 밖 (최소 ${getMinProfit()}%)`;
   else hint.textContent = '배당 확인 중...';
+
+  broadcastAutoBetState(btiO, polyO, profit, poly);
 
   if (btiO && polyO) {
     const btiBet = getBtiBet();
