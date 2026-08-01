@@ -808,16 +808,106 @@ function oddsFromCents(cents) {
   return price > 0 && price < 1 ? 1 / price : null;
 }
 
+let _polyStakeTrack = { v: 0, at: 0 };
+
+function notePolyStakeChange(stake) {
+  if (!stake || stake <= 0) return;
+  if (Math.abs(stake - _polyStakeTrack.v) > 0.02) {
+    _polyStakeTrack = { v: stake, at: Date.now() };
+  }
+}
+
+function polyStakeRecentlyChanged(maxAgeMs = 1400) {
+  return _polyStakeTrack.at > 0 && Date.now() - _polyStakeTrack.at < maxAgeMs;
+}
+
+function readBoardRefCents(panel, team) {
+  const panelEl = panel || findTradePanel();
+  const teamLabel = team || readTeamLabel(panelEl);
+  const selected = readSelectedBoardCents(teamLabel);
+  if (selected) return selected;
+  const avg = readListedPriceCents(panelEl);
+  if (avg) return avg;
+  const buyBtn = readBuyButtonCents(panelEl);
+  if (buyBtn) return buyBtn;
+  return readPageOutcomeCents(teamLabel) || readEventBoardCents(teamLabel);
+}
+
+function isPayoutOddsPlausible(slipPriceCents, boardCents) {
+  if (!isValidPolyCents(slipPriceCents) || !isValidPolyCents(boardCents)) return true;
+  return Math.abs(slipPriceCents - boardCents) <= 5;
+}
+
+function buildPendingPolySlip(team, stake, boardCents, hint) {
+  const fallbackOdds = oddsFromCents(boardCents);
+  if (!(fallbackOdds > 1.001)) {
+    return {
+      source: predictionSiteId(),
+      odds: null,
+      needsStake: true,
+      pendingToWin: true,
+      teamLabel: team,
+      stake,
+      hint: hint || 'To win 계산 중…',
+      marketKind: 'ml'
+    };
+  }
+  const priceCents = boardCents || decimalToCents(fallbackOdds);
+  const centsLabel = formatCentsLabel(priceCents);
+  return {
+    source: predictionSiteId(),
+    odds: fallbackOdds,
+    priceCents,
+    price: priceCents / 100,
+    teamLabel: team,
+    outcome: team,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel: `${centsLabel} (${fallbackOdds.toFixed(3)})`,
+    stake,
+    payout: null,
+    toWin: null,
+    hint: hint || '금액 변경 중 — ¢ 배당 유지',
+    marketKind: 'ml',
+    period: 'ft',
+    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    fromPayout: false,
+    liveCents: true,
+    pendingToWin: true
+  };
+}
+
 function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
+  notePolyStakeChange(stake);
   const toWinDisplay = readPayoutAmount(panel, stake);
   const team = readTeamLabel(panel);
+  const boardCents = readBoardRefCents(panel, team);
   const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
+  const stakeUnsettled = polyStakeRecentlyChanged() || (stake > 0 && !toWinDisplay);
 
-  // Amount + To win 있으면 당첨금만으로 배당 (¢ 표시 가격 무시)
+  // Amount + To win — 보드 ¢와 불일치하면 금액 동기화 중으로 간주 (오배당 방지)
   if (slipOdds) {
     const { odds, totalPayout, profit, priceCents } = slipOdds;
+    const payoutStale = stakeUnsettled
+      || !isPayoutOddsPlausible(priceCents, boardCents);
+
+    if (payoutStale) {
+      if (boardCents) {
+        return buildPendingPolySlip(team, stake, boardCents, 'To win 갱신 중 — ¢ 배당 유지');
+      }
+      return {
+        source: predictionSiteId(),
+        odds: null,
+        needsStake: true,
+        pendingToWin: true,
+        teamLabel: team,
+        stake,
+        hint: 'To win 계산 대기 중…',
+        marketKind: 'ml'
+      };
+    }
+
     return {
       source: predictionSiteId(),
       odds,
@@ -843,12 +933,16 @@ function readPolymarketSlip() {
     };
   }
 
-  // Amount 있으나 To win 없음 — ¢ 보드 배당 표시 안 함
+  // Amount 있으나 To win 없음 — ¢ 배당 유지
   if (stake > 0 && !toWinDisplay) {
+    if (boardCents) {
+      return buildPendingPolySlip(team, stake, boardCents, 'Amount 입력됨 — To win 계산 중');
+    }
     return {
       source: predictionSiteId(),
       odds: null,
       needsStake: true,
+      pendingToWin: true,
       teamLabel: team,
       stake,
       hint: predictionSiteId() === 'bcgame' ? '우승(당첨) 계산 대기 중...' : 'To win 계산 대기 중...',
@@ -1122,6 +1216,7 @@ async function setPolyTradeAmount(amountUsd, force = true) {
   await sleep(120);
 
   const rounded = Math.max(1, Math.round(amountUsd * 100) / 100);
+  notePolyStakeChange(rounded);
   const existing = readAmountFromPanel(panel);
   if (!force && existing && Math.abs(existing - rounded) < 0.05) {
     return { ok: true, stake: existing, method: 'unchanged' };
@@ -1465,6 +1560,7 @@ try {
 
   function slipKey(slip) {
     if (!slip) return '';
+    if (slip.pendingToWin) return `pending_${slip.stake || ''}_${slip.priceCents || 'c'}`;
     const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
     return `${slip.priceCents || 'c'}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}`;
   }

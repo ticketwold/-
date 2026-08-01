@@ -32,6 +32,7 @@ let betLock = false;
 let lastBetAt = 0;
 let autoBetScheduleTimer = null;
 let profitZoneSince = 0;
+let polySyncGraceUntil = 0;
 const PROFIT_ZONE_SETTLE_MS = 500;
 const BET_PREF_KEY = 'betPrefs';
 
@@ -171,12 +172,14 @@ async function saveHistory() {
 
 function maybeRecordHistory(bti, poly, arbBti) {
   if (!calcRunning) return;
+  if (poly?.pendingToWin) return;
   const polyO = poly?.odds > 1 ? poly.odds : null;
   const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
   if (!polyO || !btiO) return;
 
   const profit = calcProfit(btiO, polyO);
   if (profit == null) return;
+  if (profit > 12 && polyO > 3.5) return;
 
   const team = poly?.teamLabel || formatBtiMeta(bti) || '경기';
   const key = buildHistoryKey(btiO, polyO, team);
@@ -1090,9 +1093,31 @@ function slipOdds(slip) {
 }
 
 function mergeSlipCached(cached, fresh) {
+  if (fresh?.pendingToWin) {
+    if (cached?.odds > 1) {
+      return {
+        ...cached,
+        stake: fresh.stake > 0 ? fresh.stake : cached.stake,
+        pendingToWin: true,
+        hint: fresh.hint || cached.hint
+      };
+    }
+    return slipOdds(fresh) ? { ...fresh, odds: slipOdds(fresh) } : cached;
+  }
   if (!fresh || !slipOdds(fresh)) return cached?.fromPayout ? cached : null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
+  if (cached.odds > 1 && fresh.fromPayout) {
+    const ratio = freshOdds / cached.odds;
+    if (ratio > 1.18 || ratio < 0.85) {
+      return {
+        ...cached,
+        stake: fresh.stake > 0 ? fresh.stake : cached.stake,
+        odds: slipOdds(cached),
+        pendingToWin: Date.now() < polySyncGraceUntil
+      };
+    }
+  }
   if (fresh.fromPayout && !cached.fromPayout) return { ...fresh, odds: freshOdds };
   if (cached.fromPayout && !fresh.fromPayout) return { ...cached, odds: slipOdds(cached) };
   if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
@@ -1106,7 +1131,9 @@ function applySlipUpdate(source, slip) {
     cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
   }
   if (isLeg2Source(source)) {
-    cachedPoly = slipOdds(slip) ? mergeSlipCached(cachedPoly, slip) : null;
+    const merged = slipOdds(slip) || slip?.pendingToWin ? mergeSlipCached(cachedPoly, slip) : null;
+    if (merged) cachedPoly = merged;
+    else if (!slip?.pendingToWin) cachedPoly = null;
   }
   updateSlipUI(cachedBti, cachedPoly);
   if (calcRunning) scheduleAutoBetCheck();
@@ -1590,6 +1617,7 @@ async function syncPolyAmount() {
   }
 
   syncPolyPending = true;
+  polySyncGraceUntil = Date.now() + 1800;
   try {
     const res = await setPolyAmount(found.polyTab, polyUsd);
     if (res?.ok) {
@@ -1798,4 +1826,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.2 ${IS_PANEL ? '패널' : '팝업'} — 수익 구간 자동배팅`, 'info');
+log(`v5.9.3 ${IS_PANEL ? '패널' : '팝업'} — Poly 오배당 필터`, 'info');
