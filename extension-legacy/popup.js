@@ -1614,6 +1614,7 @@ async function calcPollLoop() {
   if (!calcRunning) return;
   await refreshSlips();
   scheduleSyncPolyAmount();
+  scheduleAutoBetCheck();
 }
 
 function onOddsChanged(msg) {
