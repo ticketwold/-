@@ -382,22 +382,29 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
   };
 }
 
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} (${ms}ms 초과)`)), ms))
+  ]);
+}
+
 async function strikeBothSides(ctx) {
   const { found, btiO, polyO, polyUsd, hint, btiBetKrw } = ctx;
   const t0 = performance.now();
 
-  await ensureBtiSlip(found.btiTab, hint);
+  try {
+    await withTimeout(ensureBtiSlip(found.btiTab, hint), 12000, 'BTI 슬립 준비');
+  } catch (e) {
+    console.warn('[strike] ensureBtiSlip:', e.message);
+  }
 
-  const btiHint = { ...hint, skipEnsure: true };
-  const [btiRes, polyRes] = await Promise.all([
-    placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint),
-    placePolyBet(found.polyTab, polyUsd)
-  ]);
-
-  return {
-    ok: !!(btiRes?.success && polyRes?.success),
-    btiRes,
-    polyRes,
+  const btiHint = { ...hint, skipEnsure: true, forceBet: true };
+  const btiP = withTimeout(placeBtiBet(found.btiTab, btiBetKrw, null, btiHint), 25000, '텐텐뱃 배팅')
+    .catch((e) => ({ success: false, reason: e.message }));
+  const polyP = withTimeout(placePolyBet(found.polyTab, polyUsd), 25000, 'Polymarket 배팅')
+    .catch((e) => ({ success: false, reason: e.message }));
+  const [btiRes, polyRes] = await Promise.all([btiP, polyP]);
     elapsedMs: Math.round((performance.now() - t0) * 100) / 100
   };
 }

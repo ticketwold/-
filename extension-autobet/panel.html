@@ -7,7 +7,7 @@
 <body>
 <header>
   <h1>⚡ 양방 자동배팅</h1>
-  <div class="sub">양방배팅봇 수익 구간 → 즉시 동시 배팅 · v1.0.3</div>
+  <div class="sub">양방배팅봇 수익 구간 → 즉시 동시 배팅 · v1.0.4</div>
 </header>
 
 <section class="status-box" id="statusBox">
@@ -23,12 +23,12 @@
     <span>텐텐뱃 / 예측</span>
     <strong id="oddsVal">- / -</strong>
   </div>
-  <div class="hint" id="statusHint">무장 후 수익 구간 진입 시 양쪽 동시 배팅</div>
+  <div class="hint" id="statusHint">무장 후 이 창을 닫지 마세요 — 여기서 배팅 실행</div>
 </section>
 
 <div class="row">
-  <label>최소 수익률 (%)</label>
-  <input type="number" id="minProfit" value="1" min="0" step="0.1">
+  <label>최소 수익률 (%) — 테스트: -10 입력 가능</label>
+  <input type="number" id="minProfit" value="1" step="0.1">
 </div>
 <div class="row two-col">
   <div>
@@ -54,20 +54,27 @@
 </div>
 <label class="check">
   <input type="checkbox" id="useBridge" checked>
-  양방배팅봇 신호 우선 사용 (더 빠름)
+  양방배팅봇 신호 우선 사용
 </label>
 <label class="check">
   <input type="checkbox" id="preSync" checked>
-  무장 시 예측 금액 미리 입력
+  배팅 전 예측 금액 입력
 </label>
 
 <div class="btn-row">
-  <button id="armBtn" class="btn primary">🔴 무장 (자동배팅 ON)</button>
+  <button id="armBtn" class="btn primary">🔴 무장</button>
   <button id="disarmBtn" class="btn" disabled>해제</button>
+</div>
+<div class="btn-row">
+  <button id="testBetBtn" class="btn">🧪 테스트 배팅 (수익률 무시)</button>
 </div>
 
 <div id="log" class="log"></div>
 
+<script src="sites_config.js"></script>
+<script src="odds.js"></script>
+<script src="bti_read.js"></script>
+<script src="engine.js"></script>
 <script src="panel.js"></script>
 </body>
 </html>

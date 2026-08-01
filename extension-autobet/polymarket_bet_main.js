@@ -1,6 +1,8 @@
 // Polymarket 베팅 — MAIN world (trading-button UI 지원)
 (function () {
-  if (window.__polyMainPlaceBet) return;
+  const VERSION = '1.0.3';
+  if (window.__polyMainVersion === VERSION && window.__polyMainPlaceBet) return;
+  window.__polyMainVersion = VERSION;
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
