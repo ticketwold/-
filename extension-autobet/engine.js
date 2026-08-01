@@ -396,6 +396,14 @@ async function setBtiAmount(btiTab, amountKrw) {
   return { ok: false, reason: '텐텐뱃 금액 입력 실패 — 슬립 열기' };
 }
 
+function isBtiProbeOpen(probe) {
+  if (!probe) return false;
+  if (probe.slipOpen) return true;
+  if (probe.hasInput && (probe.hasBtn || probe.hasSlip)) return true;
+  if (probe.hasSlip && probe.slipCount > 0 && probe.slipOdds > 1.01) return true;
+  return false;
+}
+
 async function checkBtiSlipUi(btiTab) {
   if (!btiTab?.id) return { open: false, ready: false, reason: '탭 없음' };
   const frameIds = await resolveBtiBetFrameIds(btiTab.id);
@@ -406,12 +414,20 @@ async function checkBtiSlipUi(btiTab) {
     await ensureBtiScript(btiTab.id, frameId);
     const probe = await sendBti(btiTab.id, frameId, { type: 'PROBE_BET_FRAME' });
     if (!probe) continue;
-    if (probe.slipOpen) {
-      const score = (probe.hasInput ? 500 : 0) + (probe.hasBtn ? 200 : 0) + (probe.hasSlip ? 100 : 0);
+    if (isBtiProbeOpen(probe)) {
+      const score = (probe.hasInput ? 500 : 0) + (probe.hasBtn ? 200 : 0) + (probe.hasSlip ? 100 : 0)
+        + (probe.slipOdds > 1 ? Math.min(probe.slipOdds, 50) : 0);
       if (!bestOpen || score > bestOpen.score) {
-        bestOpen = { open: true, ready: !!probe.ready, frameId, probe, score };
+        bestOpen = {
+          open: true,
+          ready: !!(probe.ready || (probe.hasInput && probe.hasBtn)),
+          frameId,
+          probe,
+          score,
+          slipCount: probe.slipCount || 0
+        };
       }
-    } else if (probe.hasInput === false && probe.hasSlip === false) {
+    } else if (!probe.hasInput && !probe.hasSlip) {
       sawClosed = true;
     }
   }
@@ -576,11 +592,21 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
 async function strikeBothSides(ctx) {
   const { found, btiO, polyO, polyUsd, hint, btiBetKrw, polyPreSynced, poly } = ctx;
   const t0 = performance.now();
-  const strikeHint = { ...hint, clearSlips: true, forArbPick: true };
   const polyTeam = poly?.teamLabel || poly?.outcome || hint?.polyTeam || hint?.excludeTeam || '';
 
+  let slipCount = 0;
   try {
-    await withTimeout(ensureBtiSlip(found.btiTab, strikeHint), 10000, '텐텐뱃 슬립 준비');
+    const ui = await checkBtiSlipUi(found.btiTab);
+    slipCount = ui?.slipCount || ui?.probe?.slipCount || 0;
+  } catch (_) {}
+
+  const strikeHint = { ...hint, forArbPick: true, clearSlips: slipCount > 1 };
+
+  try {
+    const ensured = await withTimeout(ensureBtiSlip(found.btiTab, strikeHint), 10000, '텐텐뱃 슬립 준비');
+    if (!ensured?.ok && slipCount <= 1) {
+      console.warn('[strike] ensureBtiSlip:', ensured?.reason || 'unknown');
+    }
   } catch (e) {
     console.warn('[strike] ensureBtiSlip:', e.message);
   }
@@ -592,14 +618,20 @@ async function strikeBothSides(ctx) {
   }
 
   const btiHint = { ...strikeHint, skipEnsure: true, forceBet: true };
-  const btiP = withTimeout(placeBtiBet(found.btiTab, btiBetKrw, btiO || null, btiHint), 25000, '텐텐뱃 배팅')
-    .catch((e) => ({ success: false, reason: e.message }));
-  const polyP = withTimeout(
-    placePolyBet(found.polyTab, polyUsd, { skipFill: !!polyPreSynced, teamHint: polyTeam }),
+  const btiRes = await withTimeout(
+    placeBtiBet(found.btiTab, btiBetKrw, btiO || null, btiHint),
     25000,
-    'Polymarket 배팅'
+    '텐텐뱃 배팅'
   ).catch((e) => ({ success: false, reason: e.message }));
-  const [btiRes, polyRes] = await Promise.all([btiP, polyP]);
+
+  let polyRes = { success: false, reason: '텐텐뱃 실패로 예측 스킵' };
+  if (btiRes?.success) {
+    polyRes = await withTimeout(
+      placePolyBet(found.polyTab, polyUsd, { skipFill: !!polyPreSynced, teamHint: polyTeam }),
+      25000,
+      'Polymarket 배팅'
+    ).catch((e) => ({ success: false, reason: e.message }));
+  }
 
   return {
     ok: !!(btiRes?.success && polyRes?.success),

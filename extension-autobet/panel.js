@@ -19,6 +19,7 @@ let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
 let polyPreSynced = false;
 let btiSlipPaused = false;
 let btiSlipPauseBusy = false;
+let btiSlipEverOpen = false;
 let liveSnap = { ok: false };
 let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0 };
 
@@ -192,26 +193,34 @@ async function updateBtiSlipPauseState() {
   try {
     const ui = await checkBtiSlipUi(tab);
     const wasPaused = btiSlipPaused;
-    btiSlipPaused = !ui.open;
+    const isOpen = !!ui.open;
 
-    if (btiSlipPaused) {
-      if (!wasPaused) {
-        logLine('⏸ 텐텐뱃 슬립 닫힘 — 열리면 자동 재개', 'info');
-        polyPreSynced = false;
+    if (isOpen) {
+      btiSlipEverOpen = true;
+      btiSlipPaused = false;
+      if (wasPaused) {
+        logLine('▶ 텐텐뱃 슬립 열림 — 자동 재개', 'ok');
+        amountSyncQueued = true;
+        setArmedUi(true);
+        liveAmountSync(true);
+        refreshOddsLive();
       }
-      const hint = $('statusHint');
-      if (hint) hint.textContent = '⏸ 텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개';
-      setArmedUi(true);
       return;
     }
 
-    if (wasPaused) {
-      logLine('▶ 텐텐뱃 슬립 열림 — 자동 재개', 'ok');
-      amountSyncQueued = true;
-      setArmedUi(true);
-      liveAmountSync(true);
-      refreshOddsLive();
+    if (!btiSlipEverOpen) {
+      btiSlipPaused = false;
+      return;
     }
+
+    btiSlipPaused = true;
+    if (!wasPaused) {
+      logLine('⏸ 텐텐뱃 슬립 닫힘 — 열리면 자동 재개', 'info');
+      polyPreSynced = false;
+    }
+    const hint = $('statusHint');
+    if (hint) hint.textContent = '⏸ 텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개';
+    setArmedUi(true);
   } catch (_) {
     /* ignore probe errors */
   } finally {
@@ -414,7 +423,7 @@ async function executeStrike(snap, cfg, label) {
 }
 
 async function panelLoop() {
-  if (!armedLocal || strikeLock || panelLoopBusy || haltAutoBet || btiSlipPaused) return;
+  if (!armedLocal || strikeLock || panelLoopBusy || haltAutoBet) return;
 
   panelLoopBusy = true;
   try {
@@ -435,6 +444,9 @@ async function panelLoop() {
 
     if (snap.profit == null || snap.btiO == null || snap.polyO == null) return;
     if (snap.profit < cfg.minProfit) return;
+
+    if (btiSlipPaused) return;
+
     if (!armedLocal || haltAutoBet || strikeLock) return;
 
     await executeStrike(snap, cfg, 'panel');
@@ -450,6 +462,7 @@ function arm(armed) {
       if (armed) {
         haltAutoBet = false;
         btiSlipPaused = false;
+        btiSlipEverOpen = false;
         lastStrikeAt = Date.now();
       }
       setArmedUi(res.armed);
@@ -578,4 +591,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.4 — 텐텐뱃 슬립 닫힘 시 일시정지·자동 재개', 'info');
+logLine('v1.2.5 — 배팅 안정화 (슬립 유지·순차 배팅)', 'info');

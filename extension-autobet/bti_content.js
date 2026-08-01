@@ -1079,6 +1079,12 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       } else {
         return { success: false, reason: '배당 업데이트 중 — 배당 수락 필요' };
       }
+    } else if (force && document.querySelector('[class*="UpdateNotification"]')) {
+      const acceptBtn = findAcceptOddsButton();
+      if (acceptBtn) {
+        acceptBtn.click();
+        await new Promise((r) => setTimeout(r, 150));
+      }
     }
 
     const oppose = hint.excludeTeam || hint.polyTeam;
@@ -1091,7 +1097,7 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     const mustPrepare = multiSlip || wrongSlip || !realCards.length;
 
     if (mustPrepare || !hint.skipEnsure) {
-      if (multiSlip || wrongSlip || hint.clearSlips) {
+      if (multiSlip || wrongSlip) {
         const cleared = await clearAllBtiSlips();
         if (cleared.slipLeft > 0 && multiSlip) {
           return { success: false, reason: `슬립 ${cleared.slipLeft}건 — 전체삭제 후 재시도`, slipLeft: cleared.slipLeft };
@@ -1801,7 +1807,7 @@ async function ensureSlipFromBoard(hint = {}) {
   );
   const multiSlip = cards.length > 1;
 
-  if (multiSlip || wrongTeam || hint.clearSlips) {
+  if (multiSlip || wrongTeam) {
     const cleared = await clearAllBtiSlips();
     cards = getRealSlipCards();
     if (cleared.slipLeft > 0 && multiSlip) {
@@ -1809,9 +1815,10 @@ async function ensureSlipFromBoard(hint = {}) {
     }
   }
 
-  if (cards.length === 1 && existing?.odds > 1.01 && !wrongTeam) {
-    const stable = await waitSlipStable(existing.odds, 2500);
-    return { ok: true, slip: existing, alreadyHad: true, stable: stable.ready };
+  const existingAfter = readBtiSlip(arbHint);
+  if (cards.length === 1 && existingAfter?.odds > 1.01 && !wrongTeam) {
+    const stable = await waitSlipStable(existingAfter.odds, 2500);
+    return { ok: true, slip: existingAfter, alreadyHad: true, stable: stable.ready };
   }
 
   const board = readBtiBoardOdds(hint);
