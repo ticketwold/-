@@ -508,6 +508,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'GET_TABS') {
+    (async () => {
+      const leg2Pref = msg.leg2Pref || 'auto';
+      const bti = await pickBtiTab();
+      const poly = await findLeg2Tab(leg2Pref);
+      sendResponse({
+        btiTab: bti ? { id: bti.id, url: bti.url } : null,
+        polyTab: poly ? { id: poly.id, url: poly.url } : null,
+        leg2Pref
+      });
+    })();
+    return true;
+  }
+
   if (msg.type === 'ODDS_CHANGED' || msg.type === 'BTI_STAKE_CHANGED') {
     broadcast(msg);
     return false;
@@ -543,9 +557,15 @@ chrome.windows.onRemoved.addListener((id) => {
   if (id === panelWindowId) panelWindowId = null;
 });
 
-// 확장 아이콘 클릭 → 큰 패널 창 열기
+// 확장 아이콘 클릭 → 패널 창 열기 (default_popup 없음 — onClicked 동작)
 chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
+});
+
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    openPanelWindow().catch(() => {});
+  }
 });
 
 console.log('[양방봇 v5] background loaded');
