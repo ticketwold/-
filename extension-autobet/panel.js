@@ -344,4 +344,4 @@ chrome.storage.local.get('autoBetLog', (data) => {
 setInterval(() => liveAmountSync(false), SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.0.8 — 홈/원정 전환 시 슬립 배당 읽기 수정', 'info');
+logLine('v1.0.9 — 텐텐뱃 iframe 배당 탐색 강화', 'info');
