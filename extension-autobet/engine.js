@@ -9,6 +9,18 @@ let btiScriptReady = new Set();
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+const BTI_PROBE_MS = 5000;
+const BTI_MAX_FRAMES = 8;
+const POLY_FRAME_MS = 3000;
+const POLY_MAX_FRAMES = 6;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} (${ms}ms 초과)`)), ms))
+  ]);
+}
+
 async function getAllFrames(tabId) {
   if (!chrome.webNavigation?.getAllFrames) return [{ frameId: 0 }];
   return new Promise((resolve) => {
@@ -118,7 +130,7 @@ function scoreBtiProbe(ping, slip) {
   return score;
 }
 
-async function probeBtiFrame(tabId, frameId, hint = {}) {
+async function probeBtiFrameInner(tabId, frameId, hint = {}) {
   let ping = await sendBti(tabId, frameId, { type: 'PING' });
   if (!ping?.ok) {
     await ensureBtiScript(tabId, frameId);
@@ -153,6 +165,14 @@ async function probeBtiFrame(tabId, frameId, hint = {}) {
     hasInput: !!(ping?.hasInput || slip?.hasInput),
     hasBoard: !!((ping?.buttonCount || 0) > 0 || (slip?.buttonCount || 0) > 0)
   };
+}
+
+async function probeBtiFrame(tabId, frameId, hint = {}) {
+  try {
+    return await withTimeout(probeBtiFrameInner(tabId, frameId, hint), BTI_PROBE_MS, `BTI프레임${frameId}`);
+  } catch (_) {
+    return { frameId, ping: null, slip: null, score: 0, hasInput: false, hasBoard: false };
+  }
 }
 
 function updateBtiFrameRoles(tabId, results) {
@@ -195,13 +215,14 @@ function mergeBtiFrameResults(results) {
 }
 
 async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
-  await ensureAllBtiScripts(tabId);
   const frames = await getAllFrames(tabId);
   const order = [];
   if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
   for (const f of frames) if (!order.includes(f.frameId)) order.push(f.frameId);
+  const toProbe = order.slice(0, forceFull ? BTI_MAX_FRAMES : Math.min(order.length, 4));
 
   if (!forceFull && lastBtiFrame?.tabId === tabId) {
+    await ensureBtiScript(tabId, lastBtiFrame.frameId);
     const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint);
     if (fast.slip?.odds > 1.01) {
       lastBtiFrame = { tabId, frameId: fast.frameId };
@@ -209,7 +230,8 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
     }
   }
 
-  const results = await Promise.all(order.map((fid) => probeBtiFrame(tabId, fid, hint)));
+  await Promise.all(toProbe.map((fid) => ensureBtiScript(tabId, fid)));
+  const results = await Promise.all(toProbe.map((fid) => probeBtiFrame(tabId, fid, hint)));
   updateBtiFrameRoles(tabId, results);
   const merged = mergeBtiFrameResults(results);
   if (merged.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: merged.frameId };
@@ -223,14 +245,19 @@ function btiHintFromPoly(poly) {
 
 async function readPolySlipAllFrames(polyTab) {
   const frames = await getAllFrames(polyTab.id);
-  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
+  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)].slice(0, POLY_MAX_FRAMES);
   const seen = new Set();
   let best = null;
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
     seen.add(frameId);
     await ensurePolyScript(polyTab.id, frameId);
-    const res = await sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId);
+    let res;
+    try {
+      res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), POLY_FRAME_MS, 'Poly읽기');
+    } catch (_) {
+      continue;
+    }
     const slip = res?.slip;
     if (slip?.fromPayout && slip.odds > 1) return slip;
     if (slip?.odds > 1 || slip?.needsStake) {
@@ -240,16 +267,14 @@ async function readPolySlipAllFrames(polyTab) {
   return best;
 }
 
-async function readBtiArbOdds(btiTab, poly) {
+async function readBtiOddsOnce(btiTab, poly) {
   if (!btiTab?.id) return null;
-  const merged = await readBtiFromAllFrames(btiTab.id, btiHintFromPoly(poly), true);
+  const hint = btiHintFromPoly(poly);
+  let merged = await readBtiFromAllFrames(btiTab.id, hint, false);
+  if (!(merged.slip?.odds > 1.01)) {
+    merged = await readBtiFromAllFrames(btiTab.id, hint, true);
+  }
   return merged.slip?.odds > 1.01 ? merged.slip : null;
-}
-
-async function readBtiSlip(btiTab) {
-  if (!btiTab?.id) return null;
-  const merged = await readBtiFromAllFrames(btiTab.id, {}, true);
-  return merged.slip?.odds > 1 ? merged.slip : null;
 }
 
 async function sendBtiToFrames(tabId, frameIds, msg) {
@@ -353,13 +378,11 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
   }
 
   const poly = await readPolySlipAllFrames(found.polyTab);
-  const [bti, arbBti] = await Promise.all([
-    readBtiSlip(found.btiTab),
-    readBtiArbOdds(found.btiTab, poly)
-  ]);
+  const arbBti = await readBtiOddsOnce(found.btiTab, poly);
+  const bti = arbBti;
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = arbBti?.odds > 1 ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = arbBti?.odds > 1 ? arbBti.odds : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
 
@@ -382,13 +405,6 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
   };
 }
 
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} (${ms}ms 초과)`)), ms))
-  ]);
-}
-
 async function strikeBothSides(ctx) {
   const { found, btiO, polyO, polyUsd, hint, btiBetKrw } = ctx;
   const t0 = performance.now();
@@ -405,6 +421,11 @@ async function strikeBothSides(ctx) {
   const polyP = withTimeout(placePolyBet(found.polyTab, polyUsd), 25000, 'Polymarket 배팅')
     .catch((e) => ({ success: false, reason: e.message }));
   const [btiRes, polyRes] = await Promise.all([btiP, polyP]);
+
+  return {
+    ok: !!(btiRes?.success && polyRes?.success),
+    btiRes,
+    polyRes,
     elapsedMs: Math.round((performance.now() - t0) * 100) / 100
   };
 }
