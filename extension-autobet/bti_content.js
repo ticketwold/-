@@ -1877,9 +1877,13 @@ function searchBtiOdds(query) {
 
   const hits = board.events.filter((ev) => {
     const blob = normalizeQuery(`${ev.homeTeam} ${ev.awayTeam} ${ev.eventText}`);
-    return blob.includes(q)
-      || normalizeQuery(ev.homeTeam).includes(q)
-      || normalizeQuery(ev.awayTeam).includes(q);
+    if (blob.includes(q)) return true;
+    if (normalizeQuery(ev.homeTeam).includes(q)) return true;
+    if (normalizeQuery(ev.awayTeam).includes(q)) return true;
+    return (ev.selections || []).some((s) => {
+      const sel = normalizeQuery(`${s.selectionText} ${s.marketText}`);
+      return sel.includes(q);
+    });
   });
 
   return { ...board, query, hits, hitCount: hits.length, slip: readBtiOdds() };
@@ -1943,6 +1947,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((data) => sendResponse({ ok: true, data }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  }
+  if (msg.type === 'READ_BTI_BOARD') {
+    const slip = readBtiBoardOdds(msg.hint || {});
+    sendResponse({ slip: slip?.odds > 1.01 ? slip : null });
+    return false;
   }
   if (msg.type === 'SEARCH_ODDS' || msg.type === 'BTI_SEARCH') {
     sendResponse(searchBtiOdds(msg.query || msg.team || msg.q || ''));

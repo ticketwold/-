@@ -328,6 +328,46 @@ async function readPolySlipAllFrames(polyTab) {
   return readPolyOddsOnce(polyTab);
 }
 
+async function readBtiBoardOddsFromFrames(btiTab, hint = {}) {
+  if (!btiTab?.id) return null;
+  const order = await orderBtiFrameIds(btiTab.id);
+  let best = null;
+  let bestScore = 0;
+  for (const frameId of order.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(btiTab.id, frameId);
+    const res = await sendBti(btiTab.id, frameId, { type: 'READ_BTI_BOARD', hint });
+    const slip = res?.slip;
+    if (slip?.odds > 1.01) {
+      const score = slip.odds + (slip.source === 'board' ? 400 : 0) + (slip.homeTeam ? 50 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = slip;
+      }
+    }
+  }
+  return best;
+}
+
+async function searchBtiBoardFromFrames(btiTab, query = '') {
+  if (!btiTab?.id) {
+    return { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
+  }
+  const order = await orderBtiFrameIds(btiTab.id);
+  let best = null;
+  for (const frameId of order.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(btiTab.id, frameId);
+    const board = await sendBti(
+      btiTab.id,
+      frameId,
+      query ? { type: 'SEARCH_ODDS', query } : { type: 'SCRAPE_BOARD' }
+    );
+    if (!board) continue;
+    const score = (board.eventCount || 0) * 25 + (board.buttonCount || 0) + (board.hitCount || 0) * 10;
+    if (!best || score > best.score) best = { ...board, frameId, score };
+  }
+  return best || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
+}
+
 async function readBtiOddsOnce(btiTab, poly) {
   if (!btiTab?.id) return null;
 
@@ -339,7 +379,12 @@ async function readBtiOddsOnce(btiTab, poly) {
 
   const arbHint = { ...btiHintFromPoly(poly), forArbPick: true };
   merged = await readBtiFromAllFrames(btiTab.id, arbHint, true);
-  return merged.slip?.odds > 1.01 ? merged.slip : null;
+  if (merged.slip?.odds > 1.01) return merged.slip;
+
+  const boardSlip = await readBtiBoardOddsFromFrames(btiTab, arbHint);
+  if (boardSlip?.odds > 1.01) return boardSlip;
+
+  return null;
 }
 
 async function sendBtiToFrames(tabId, frameIds, msg) {

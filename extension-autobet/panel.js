@@ -17,6 +17,7 @@ let oddsReadBusy = false;
 let amountSyncQueued = true;
 let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
 let polyPreSynced = false;
+let tabCache = null;
 let btiSlipPaused = false;
 let btiSlipPauseBusy = false;
 let btiSlipEverOpen = false;
@@ -486,8 +487,36 @@ $('scanBtn')?.addEventListener('click', async () => {
     const snap = await getSnap(cfg, null);
     liveSnap = snap;
     updateStatusFromSnap(snap, cfg);
+
+    if (snap.found?.btiTab) {
+      const board = await searchBtiBoardFromFrames(snap.found.btiTab);
+      const events = board.hits?.length ? board.hits : (board.events || []);
+      logLine(
+        `${leg1Label()} 배당판 — 버튼 ${board.buttonCount || 0} · 경기 ${board.eventCount || events.length}`,
+        (board.buttonCount || events.length) ? 'ok' : 'err'
+      );
+      for (const ev of events.slice(0, 6)) {
+        const ml = ev.moneyline?.length ? ev.moneyline : (ev.selections || []).filter((s) => s.marketKind === 'ml');
+        const odds = ml.map((s) => s.odds?.toFixed(2)).filter(Boolean).join(' / ');
+        logLine(`  ${ev.homeTeam || '?'} vs ${ev.awayTeam || '?'}${odds ? ` · ${odds}` : ''}`, 'info');
+      }
+      if (!snap.btiO && board.buttonCount > 0) {
+        const boardSlip = await readBtiBoardOddsFromFrames(snap.found.btiTab, snap.hint || {});
+        if (boardSlip?.odds > 1.01) {
+          snap.btiO = boardSlip.odds;
+          snap.bti = boardSlip;
+          if (snap.polyO > 1) {
+            snap.profit = calcProfit(snap.btiO, snap.polyO);
+            snap.polyUsd = calcPolyBetUsd(cfg.btiBetKrw, snap.btiO, snap.polyO, cfg.usdRate);
+          }
+          liveSnap = snap;
+          updateStatusFromSnap(snap, cfg);
+        }
+      }
+    }
+
     if (snap.btiO > 1) logLine(`${leg1Label()} ${snap.btiO.toFixed(3)}`, 'ok');
-    else logLine(`${leg1Label()} 배당 없음`, 'err');
+    else logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
     if (snap.polyO > 1) {
       const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
       logLine(`예측 ${cents}${snap.polyO.toFixed(3)}`, 'ok');
@@ -591,4 +620,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.5 — 배팅 안정화 (슬립 유지·순차 배팅)', 'info');
+logLine('v1.2.6 — tabCache·텐텐뱃 배당판 스캔 수정', 'info');
