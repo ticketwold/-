@@ -843,14 +843,49 @@ function readPolymarketSlip() {
     };
   }
 
-  // Amount 있으나 To win 없음 — ¢ 보드 배당 표시 안 함
+  // Amount 있으나 To win 없음 — ¢/Avg 배당 유지 (금액 동기화 중 사라짐 방지)
   if (stake > 0 && !toWinDisplay) {
+    let listedCents = readLiveListedCents(panel, 0, 0);
+    if (!listedCents) listedCents = readPageOutcomeCents(team);
+    if (!listedCents && panel) {
+      const avgM = (panel.innerText || '').match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
+      if (avgM) {
+        const c = parseFloat(avgM[1]);
+        if (isValidPolyCents(c)) listedCents = c;
+      }
+    }
+    const fallbackOdds = oddsFromCents(listedCents);
+    if (fallbackOdds > 1.001) {
+      const priceCents = listedCents || decimalToCents(fallbackOdds);
+      const centsLabel = formatCentsLabel(priceCents);
+      return {
+        source: predictionSiteId(),
+        odds: fallbackOdds,
+        priceCents,
+        price: priceCents / 100,
+        teamLabel: team,
+        outcome: team,
+        selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+        displayLabel: `${centsLabel} (${fallbackOdds.toFixed(3)})`,
+        stake,
+        payout: null,
+        toWin: null,
+        hint: 'Amount 입력됨 — To win 계산 중, ¢ 배당 유지',
+        marketKind: 'ml',
+        period: 'ft',
+        marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+        fromPayout: false,
+        liveCents: true,
+        pendingToWin: true
+      };
+    }
     return {
       source: predictionSiteId(),
       odds: null,
       needsStake: true,
       teamLabel: team,
       stake,
+      priceCents: isValidPolyCents(listedCents) ? listedCents : null,
       hint: predictionSiteId() === 'bcgame' ? '우승(당첨) 계산 대기 중...' : 'To win 계산 대기 중...',
       marketKind: 'ml'
     };

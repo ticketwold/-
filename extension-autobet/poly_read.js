@@ -219,6 +219,34 @@ async function injectScrapePolyCents(tabId) {
   }
 }
 
+const polyOddsCache = new Map();
+
+function cachePolyOdds(tabId, slip) {
+  if (!tabId || !(slip?.odds > 1)) return;
+  polyOddsCache.set(tabId, { slip: { ...slip }, at: Date.now() });
+}
+
+function getCachedPolyOdds(tabId, maxAgeMs = 60000) {
+  const hit = polyOddsCache.get(tabId);
+  if (!hit || Date.now() - hit.at > maxAgeMs) return null;
+  return hit.slip;
+}
+
+function mergePolySlipWithCache(tabId, slip) {
+  if (slip?.odds > 1) {
+    cachePolyOdds(tabId, slip);
+    return slip;
+  }
+  const cached = getCachedPolyOdds(tabId);
+  if (!cached) return slip;
+  return {
+    ...cached,
+    stake: slip?.stake > 0 ? slip.stake : cached.stake,
+    pendingToWin: slip?.pendingToWin || slip?.needsStake || false,
+    hint: slip?.hint || cached.hint
+  };
+}
+
 async function readPolySlipFromApi(polyTab) {
   if (!polyTab?.url || typeof fetchPolyEventBySlug !== 'function') return null;
   const slug = slugFromPolyUrl(polyTab.url);
@@ -259,23 +287,25 @@ async function readPolyOddsOnce(polyTab) {
 
   for (const slip of slips) {
     if (!slip) continue;
-    if (slip.fromPayout && slip.odds > 1) return slip;
+    if (slip.fromPayout && slip.odds > 1) return mergePolySlipWithCache(polyTab.id, slip);
     if (slip.odds > 1) {
       if (!best || slip.fromPayout || (slip.liveCents && !best.liveCents)) best = slip;
     } else if (slip.needsStake && !best) {
       best = slip;
     }
   }
-  if (best?.odds > 1) return best;
+  if (best?.odds > 1) return mergePolySlipWithCache(polyTab.id, best);
 
   const injected = await injectReadPoly(polyTab.id, siteKey);
-  if (injected?.odds > 1) return { ...injected, teamLabel: injected.teamLabel || polyTeamHintFromUrl(polyTab.url) };
+  if (injected?.odds > 1) {
+    return mergePolySlipWithCache(polyTab.id, { ...injected, teamLabel: injected.teamLabel || polyTeamHintFromUrl(polyTab.url) });
+  }
 
   const scraped = await injectScrapePolyCents(polyTab.id);
-  if (scraped?.odds > 1) return scraped;
+  if (scraped?.odds > 1) return mergePolySlipWithCache(polyTab.id, scraped);
 
   const apiSlip = await readPolySlipFromApi(polyTab);
-  if (apiSlip?.odds > 1) return apiSlip;
+  if (apiSlip?.odds > 1) return mergePolySlipWithCache(polyTab.id, apiSlip);
 
-  return best;
+  return mergePolySlipWithCache(polyTab.id, best);
 }

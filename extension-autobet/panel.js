@@ -12,6 +12,7 @@ let syncLock = false;
 let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
 let polyPreSynced = false;
 let tabCache = null;
+let lastKnownOdds = { btiO: null, polyO: null, at: 0 };
 
 function logLine(text, cls = '') {
   const el = $('log');
@@ -80,19 +81,42 @@ function saveConfig() {
   return cfg;
 }
 
+function displayOdds(btiO, polyO) {
+  const bti = btiO > 1 ? btiO : (lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
+  const poly = polyO > 1 ? polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
+  if (!bti && !poly) return;
+  $('oddsVal').textContent = `${bti?.toFixed(3) || '-'} / ${poly?.toFixed(3) || '-'}`;
+}
+
 function updateStatusFromSnap(snap, cfg) {
   if (snap.profit != null) {
     $('profitVal').textContent = `${snap.profit.toFixed(2)}%`;
     $('profitVal').className = snap.profit >= cfg.minProfit ? 'positive' : '';
   }
-  if (snap.btiO != null || snap.polyO != null) {
-    $('oddsVal').textContent = `${snap.btiO?.toFixed(3) || '-'} / ${snap.polyO?.toFixed(3) || '-'}`;
-  }
+  displayOdds(snap.btiO, snap.polyO);
   const hint = $('statusHint');
   if (snap.reason && !polyPreSynced) hint.textContent = snap.reason;
   else if (polyPreSynced && snap.polyUsd > 0) {
     hint.textContent = `실시간 동기화 — Poly $${snap.polyUsd.toFixed(2)} · BTI ${cfg.btiBetKrw.toLocaleString()}원`;
   }
+}
+
+function stabilizeSnap(snap, cfg) {
+  const now = Date.now();
+  if (snap.btiO > 1) lastKnownOdds.btiO = snap.btiO;
+  if (snap.polyO > 1) lastKnownOdds.polyO = snap.polyO;
+  if (snap.btiO > 1 || snap.polyO > 1) lastKnownOdds.at = now;
+
+  const fresh = now - lastKnownOdds.at < 60000;
+  if (!(snap.btiO > 1) && lastKnownOdds.btiO > 1 && fresh) snap.btiO = lastKnownOdds.btiO;
+  if (!(snap.polyO > 1) && lastKnownOdds.polyO > 1 && fresh) snap.polyO = lastKnownOdds.polyO;
+
+  if (snap.btiO > 1 && snap.polyO > 1) {
+    snap.profit = calcProfit(snap.btiO, snap.polyO);
+    snap.polyUsd = calcPolyBetUsd(cfg.btiBetKrw, snap.btiO, snap.polyO, cfg.usdRate);
+    snap.reason = '';
+  }
+  return snap;
 }
 
 async function getSnap(cfg, progressLabel) {
@@ -120,7 +144,7 @@ async function getSnap(cfg, progressLabel) {
       }
     }
   }
-  return snap;
+  return stabilizeSnap(snap, cfg);
 }
 
 function needsAmountResync(snap, cfg) {
@@ -147,25 +171,38 @@ async function liveAmountSync(force) {
     }
     updateStatusFromSnap(snap, cfg);
 
-    if (!snap.btiO || !snap.polyO || !snap.polyUsd) {
-      polyPreSynced = false;
+    if (!snap.btiO || !snap.polyO) {
+      if (!snap.btiO && !snap.polyO) polyPreSynced = false;
       return;
     }
 
     if (!force && !needsAmountResync(snap, cfg)) return;
 
+    const syncBtiO = snap.btiO;
+    const syncPolyO = snap.polyO;
+    const syncPolyUsd = snap.polyUsd;
+
     const [btiRes, polyRes] = await Promise.all([
       setBtiAmount(snap.found.btiTab, cfg.btiBetKrw),
-      setPolyAmount(snap.found.polyTab, snap.polyUsd)
+      setPolyAmount(snap.found.polyTab, syncPolyUsd)
     ]);
 
     lastSynced = {
-      polyUsd: snap.polyUsd,
+      polyUsd: syncPolyUsd,
       btiKrw: cfg.btiBetKrw,
-      btiO: snap.btiO,
-      polyO: snap.polyO,
+      btiO: syncBtiO,
+      polyO: syncPolyO,
       at: Date.now()
     };
+    lastKnownOdds.btiO = syncBtiO;
+    lastKnownOdds.polyO = syncPolyO;
+    lastKnownOdds.at = Date.now();
+
+    snap.btiO = syncBtiO;
+    snap.polyO = syncPolyO;
+    snap.polyUsd = syncPolyUsd;
+    snap.profit = calcProfit(syncBtiO, syncPolyO);
+    updateStatusFromSnap(snap, cfg);
     polyPreSynced = !!(polyRes?.ok && btiRes?.ok);
     if (polyPreSynced) {
       $('statusHint').textContent = `동기화 OK — Poly $${snap.polyUsd.toFixed(2)} · BTI ${cfg.btiBetKrw.toLocaleString()}원`;
@@ -344,4 +381,4 @@ chrome.storage.local.get('autoBetLog', (data) => {
 setInterval(() => liveAmountSync(false), SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.1.0 — Polymarket 배당 API·스크랩 폴백', 'info');
+logLine('v1.1.1 — 금액 입력 후 배당 유지', 'info');
