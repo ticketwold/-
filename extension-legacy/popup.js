@@ -1306,20 +1306,25 @@ async function probePolyMain(tabId) {
   }
 }
 
-async function focusBetTab(tab) {
-  if (!tab?.id) return;
-  try {
-    await chrome.tabs.update(tab.id, { active: true });
-    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
-    await new Promise((r) => setTimeout(r, 180));
-  } catch (_) {}
+async function prewarmTabs(btiTab, polyTab, hint, btiBetKrw, polyUsd) {
+  const tasks = [];
+  if (btiTab?.id) {
+    tasks.push(ensureBtiScript(btiTab.id, btiSlipFrameId(btiTab.id)));
+    if (hint) tasks.push(ensureBtiSlip(btiTab, hint).catch(() => null));
+    if (btiBetKrw > 0) tasks.push(setBtiAmount(btiTab, btiBetKrw));
+  }
+  if (polyTab?.id) {
+    tasks.push(ensurePolyScript(polyTab.id));
+    tasks.push(injectPolyMain(polyTab.id));
+    if (polyUsd > 0) tasks.push(setPolyAmount(polyTab, polyUsd));
+  }
+  await Promise.all(tasks);
 }
 
 async function placePolyBet(polyTab, amountUsd, opts = {}) {
   if (!polyTab?.id) return { success: false, reason: 'Polymarket 탭 없음' };
   const skipFill = !!opts.skipFill;
 
-  await focusBetTab(polyTab);
   await injectPolyMain(polyTab.id);
 
   const runMainBet = async (fast) => {
@@ -1402,7 +1407,7 @@ async function getStrikeContext() {
   }
 
   const btiBetKrw = await getBtiBetAmount(found.btiTab);
-  const polyUsd = calcPolyBetUsd(btiBetKrw, btiO, polyO, getUsdRate());
+  const polyUsd = Math.max(1, calcPolyBetUsd(btiBetKrw, btiO, polyO, getUsdRate()));
   const profit = calcProfit(btiO, polyO);
   const hint = btiHintFromPoly(cachedPoly);
   const polyPreSynced = calcRunning
@@ -1423,45 +1428,32 @@ async function getStrikeContext() {
 }
 
 async function strikeBothSides(ctx) {
-  const { found, btiO, polyUsd, btiBetKrw, hint } = ctx;
+  const { found, btiO, polyUsd, btiBetKrw, hint, polyPreSynced } = ctx;
   const t0 = performance.now();
 
-  const ensured = await ensureBtiSlip(found.btiTab, hint);
-  if (!ensured?.ok) {
-    log(`텐텐뱃 슬립 준비: ${ensured?.reason || '실패'}`, 'err');
+  if (!polyPreSynced) {
+    try {
+      await withTimeout(ensureBtiSlip(found.btiTab, hint), 8000, 'BTI 슬립 준비');
+    } catch (e) {
+      log(`텐텐뱃 슬립 준비: ${e.message}`, 'err');
+    }
   }
 
-  const prep = await prepBetAmounts(found, btiBetKrw, polyUsd);
-  if (!prep.btiOk) {
-    return {
-      ok: false,
-      btiRes: { success: false, reason: prep.btiRes?.reason || '텐텐뱃 금액 입력 실패' },
-      polyRes: { success: false, reason: '텐텐뱃 준비 실패 — Poly 배팅 안 함' },
-      elapsedMs: Math.round(performance.now() - t0)
-    };
-  }
+  await prewarmTabs(found.btiTab, found.polyTab, hint, btiBetKrw, polyUsd);
 
   const btiHint = { ...hint, skipEnsure: true, forceBet: true };
-  log('텐텐뱃 배팅…', 'info');
-  const btiRes = await placeBtiBet(found.btiTab, btiBetKrw, btiO, btiHint);
-
-  if (!btiRes?.success) {
-    return {
-      ok: false,
-      btiRes,
-      polyRes: { success: false, reason: '텐텐뱃 실패 — Poly 배팅 취소' },
-      elapsedMs: Math.round(performance.now() - t0)
-    };
-  }
-
-  log('텐텐뱃 OK → Polymarket 배팅…', 'info');
-  await focusBetTab(found.polyTab);
-  const polyResync = await setPolyAmount(found.polyTab, polyUsd);
-  const useSkipFill = prep.polyOk && polyResync?.ok;
-  const polyRes = await placePolyBet(found.polyTab, polyUsd, { skipFill: useSkipFill });
+  log('양쪽 동시 배팅…', 'info');
+  const btiP = withTimeout(placeBtiBet(found.btiTab, btiBetKrw, btiO || null, btiHint), 30000, '텐텐뱃 배팅')
+    .catch((e) => ({ success: false, reason: e.message }));
+  const polyP = withTimeout(
+    placePolyBet(found.polyTab, polyUsd, { skipFill: !!polyPreSynced }),
+    30000,
+    'Polymarket 배팅'
+  ).catch((e) => ({ success: false, reason: e.message }));
+  const [btiRes, polyRes] = await Promise.all([btiP, polyP]);
 
   return {
-    ok: !!(btiRes.success && polyRes?.success),
+    ok: !!(btiRes?.success && polyRes?.success),
     btiRes,
     polyRes,
     elapsedMs: Math.round(performance.now() - t0)
@@ -1469,7 +1461,8 @@ async function strikeBothSides(ctx) {
 }
 
 async function executeBet(label, options = {}) {
-  const ignoreProfit = options.ignoreProfit ?? !!$('ignoreProfit')?.checked;
+  const isManual = label === '수동';
+  const ignoreProfit = options.ignoreProfit ?? !!$('ignoreProfit')?.checked || isManual;
   if (betLock) {
     log('이미 배팅 진행 중', 'err');
     return;
@@ -1561,9 +1554,12 @@ async function checkProfitZoneAndBet() {
   const betHint = $('betHint');
 
   if (cachedPoly?.pendingToWin) {
-    profitZoneSince = 0;
-    if (betHint) betHint.textContent = 'Poly 금액 동기화 중 — 배당 안정화 대기';
-    return;
+    const graceLeft = polySyncGraceUntil - Date.now();
+    if (graceLeft > 0) {
+      profitZoneSince = 0;
+      if (betHint) betHint.textContent = 'Poly 금액 동기화 중 — 배당 안정화 대기';
+      return;
+    }
   }
 
   if (!btiO || !polyO || profit == null) {
@@ -1873,4 +1869,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.5 ${IS_PANEL ? '패널' : '팝업'} — Poly 배팅 안정화`, 'info');
+log(`v5.9.6 ${IS_PANEL ? '패널' : '팝업'} — 양쪽 동시 배팅`, 'info');
