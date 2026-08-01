@@ -176,6 +176,40 @@ async function simulateStrike(btiFn, polyFn) {
   assert(merged.priceCents === 29, '보드 ¢ 우선 (29¢)');
   assertNear(merged.odds, 3.45, 0.01, '보드 배당 우선');
 
+  // ── 홈/원정 전환 시뮬 ──
+  console.log('\n[7] 홈/원정 outcome 전환');
+  function teamMatchesButton(team, text) {
+    const norm = (s) => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+    const nt = norm(team);
+    const bt = norm(text);
+    return nt && bt && (bt.includes(nt) || nt.includes(bt));
+  }
+  function resolveTeamCents(buyTeam, activeOutcome) {
+    let team = buyTeam || activeOutcome?.team || '';
+    if (buyTeam && activeOutcome && !teamMatchesButton(buyTeam, activeOutcome.team)) team = buyTeam;
+    let cents = null;
+    if (activeOutcome && teamMatchesButton(team, activeOutcome.team)) cents = activeOutcome.cents;
+    return { team, cents };
+  }
+  const home = resolveTeamCents('LGD Gaming', { team: 'LGD Gaming', cents: 65 });
+  assert(home.team === 'LGD Gaming' && home.cents === 65, '홈팀 선택');
+  const away = resolveTeamCents('Team WE', { team: 'LGD Gaming', cents: 65 });
+  assert(away.team === 'Team WE' && away.cents === null, '원정 전환 — Buy 버튼 우선');
+  const away2 = resolveTeamCents('Team WE', { team: 'Team WE', cents: 35 });
+  assert(away2.cents === 35, '원정팀 ¢ 인식');
+
+  function mergeOnTeamSwitch(cached, fresh) {
+    if (cached?.teamLabel && fresh?.teamLabel && cached.teamLabel !== fresh.teamLabel) {
+      return { ...fresh, teamSwitched: true };
+    }
+    return { ...cached, ...fresh };
+  }
+  const switched = mergeOnTeamSwitch(
+    { teamLabel: 'Home', odds: 1.5, priceCents: 67 },
+    { teamLabel: 'Away', odds: 2.86, priceCents: 35 }
+  );
+  assert(switched.teamSwitched && switched.priceCents === 35, '팀 전환 시 캐시 갱신');
+
   // ── 결과 ──
   console.log(`\n═══ 결과: ${passed} passed, ${failed} failed ═══\n`);
   process.exit(failed > 0 ? 1 : 0);

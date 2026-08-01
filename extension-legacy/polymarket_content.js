@@ -450,10 +450,11 @@ function teamMatchesButton(team, text) {
 
 function readSelectedBoardCents(teamHint) {
   const candidates = [];
+  const minSel = teamHint ? 35 : 80;
   for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
     if (!visible(btn) || isBuySellTab(btn)) continue;
     const sel = selectionScore(btn);
-    if (sel < 80) continue;
+    if (sel < minSel) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
     if (!t || t.length > 120) continue;
     const cents = parseCentsFromText(t);
@@ -813,35 +814,92 @@ function polyStakeRecentlyChanged(maxAgeMs = 1400) {
   return _polyStakeTrack.at > 0 && Date.now() - _polyStakeTrack.at < maxAgeMs;
 }
 
-function readBoardRefCents(panel, team) {
-  const panelEl = panel || findTradePanel();
-  const teamLabel = team || readTeamLabel(panelEl);
+function stripTeamFromOutcomeText(t) {
+  return String(t || '')
+    .replace(/\d+(?:\.\d+)?\s*¢/g, '')
+    .replace(/\d+(?:\.\d+)?\s*%/g, '')
+    .replace(/^(?:buy|구매|sell|매도)\s+/i, '')
+    .trim();
+}
 
-  const avg = readListedPriceCents(panelEl);
-  if (avg) return avg;
+/** 홈/원정 outcome 버튼 중 현재 선택된 팀 + ¢ */
+function readActiveMoneylineOutcome() {
+  const candidates = [];
+  const roots = getOutcomeSearchRoots();
+  const seen = new Set();
 
-  const buyBtn = readBuyButtonCents(panelEl);
-  if (buyBtn) return buyBtn;
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 120 || seen.has(t)) continue;
+      seen.add(t);
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+      const team = stripTeamFromOutcomeText(t);
+      if (team.length < 2 || team.length > 72) continue;
+      if (/^(yes|no|over|under|draw|tie)$/i.test(team)) continue;
 
-  const selected = readSelectedBoardCents(teamLabel);
-  if (selected) return selected;
-
-  const panelText = panelEl?.innerText || '';
-  const avgInline = panelText.match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
-  if (avgInline) {
-    const c = parseFloat(avgInline[1]);
-    if (isValidPolyCents(c)) return c;
-  }
-
-  if (teamLabel) {
-    const teamEsc = teamLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 24);
-    const nearTeam = panelText.match(new RegExp(`${teamEsc}[\\s\\S]{0,40}?(\\d+(?:\\.\\d+)?)\\s*¢`, 'i'));
-    if (nearTeam) {
-      const c = parseFloat(nearTeam[1]);
-      if (isValidPolyCents(c)) return c;
+      const sel = selectionScore(btn);
+      let score = sel;
+      if (sel >= 80) score += 220;
+      else if (sel >= 50) score += 100;
+      if (/^buy\s+/i.test(t)) score -= 60;
+      candidates.push({ team, cents, score, sel, t });
     }
   }
 
+  if (!candidates.length) return null;
+  const selected = candidates.filter((c) => c.sel >= 35).sort((a, b) => b.score - a.score);
+  if (selected.length) return selected[0];
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0];
+}
+
+function resolvePolyTeamAndCents(panel, stake, toWinDisplay) {
+  const buyTeam = readTeamLabel(panel);
+  const activeOutcome = readActiveMoneylineOutcome();
+  let team = buyTeam || activeOutcome?.team || '';
+
+  if (buyTeam && activeOutcome && !teamMatchesButton(buyTeam, activeOutcome.team)) {
+    team = buyTeam;
+  }
+
+  let boardCents = null;
+
+  if (team) {
+    boardCents = readCentsForBuyTeam(team)
+      || readOutcomeButtonCents(team)
+      || readSelectedOutcomeForTeam(team)
+      || readSelectedBoardCents(team);
+  }
+
+  if (!boardCents && activeOutcome) {
+    if (!team || teamMatchesButton(team, activeOutcome.team)) {
+      boardCents = activeOutcome.cents;
+      if (!team) team = activeOutcome.team;
+    }
+  }
+
+  if (!boardCents) {
+    boardCents = readLiveListedCents(panel, stake, toWinDisplay);
+  }
+
+  if (!boardCents && activeOutcome) {
+    boardCents = activeOutcome.cents;
+    if (!team) team = activeOutcome.team;
+  }
+
+  return { team, boardCents };
+}
+
+function readBoardRefCents(panel, team) {
+  const panelEl = panel || findTradePanel();
+  const stake = readPanelStake(panelEl);
+  const toWin = readPayoutAmount(panelEl, stake);
+  const resolved = resolvePolyTeamAndCents(panelEl, stake, toWin);
+  if (resolved.boardCents) return resolved.boardCents;
+  const teamLabel = team || resolved.team || readTeamLabel(panelEl);
   return readPageOutcomeCents(teamLabel) || readEventBoardCents(teamLabel);
 }
 
@@ -921,10 +979,9 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
   notePolyStakeChange(stake);
-  const team = readTeamLabel(panel);
-  const boardCents = readBoardRefCents(panel, team);
-  const boardOdds = boardCents ? oddsFromCents(boardCents) : null;
   const toWinDisplay = readPayoutAmount(panel, stake);
+  const { team, boardCents } = resolvePolyTeamAndCents(panel, stake, toWinDisplay);
+  const boardOdds = boardCents ? oddsFromCents(boardCents) : null;
   const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
   const stakeUnsettled = polyStakeRecentlyChanged() || (stake > 0 && !toWinDisplay);
 
@@ -1630,9 +1687,9 @@ try {
 
   function slipKey(slip) {
     if (!slip) return '';
-    if (slip.pendingToWin) return `pending_${slip.stake || ''}_${slip.priceCents || 'c'}`;
+    if (slip.pendingToWin) return `pending_${slip.teamLabel || 't'}_${slip.stake || ''}_${slip.priceCents || 'c'}`;
     const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
-    return `${slip.priceCents || 'c'}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}`;
+    return `${slip.teamLabel || 'team'}_${slip.priceCents || 'c'}_${o}_${slip.stake || ''}`;
   }
 
   function tick() {
@@ -1667,6 +1724,8 @@ try {
       const btn = e.target?.closest?.('button, [role="button"], [role="radio"], a');
       if (!btn) return;
       notifyNow();
+      setTimeout(notifyNow, 60);
+      setTimeout(notifyNow, 200);
     }, true);
 
     new MutationObserver(schedule).observe(document.body, {

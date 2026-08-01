@@ -1171,7 +1171,7 @@ function mergeSlipCached(cached, fresh) {
   if (fresh.fromPayout && !cached.fromPayout) return { ...fresh, odds: freshOdds };
   if (cached.fromPayout && !fresh.fromPayout) return { ...cached, odds: slipOdds(cached) };
   if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
-    return { ...fresh, odds: freshOdds };
+    return { ...fresh, odds: freshOdds, teamSwitched: true };
   }
   return { ...cached, ...fresh, odds: freshOdds };
 }
@@ -1181,9 +1181,18 @@ function applySlipUpdate(source, slip) {
     cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
   }
   if (isLeg2Source(source)) {
+    const prevTeam = cachedPoly?.teamLabel;
     const merged = (slipOdds(slip) || slip?.pendingToWin) ? mergeSlipCached(cachedPoly, slip) : null;
-    if (merged) cachedPoly = merged;
-    else if (!slip?.pendingToWin) cachedPoly = null;
+    if (merged) {
+      if (prevTeam && merged.teamLabel && prevTeam !== merged.teamLabel) {
+        lastSyncedPolyUsd = 0;
+        lastSyncedPolyAt = 0;
+        polySyncGraceUntil = Date.now() + 1200;
+      }
+      cachedPoly = merged;
+    } else if (!slip?.pendingToWin) {
+      cachedPoly = null;
+    }
   }
   refreshSlipUiWithArb();
 }
@@ -1211,8 +1220,14 @@ async function refreshSlips() {
       readBtiSlip(found.btiTab)
     ]);
 
+    const prevPolyTeam = cachedPoly?.teamLabel;
     cachedPoly = mergeSlipCached(cachedPoly, poly);
     cachedBti = mergeSlipCached(cachedBti, bti);
+
+    if (poly?.teamLabel && prevPolyTeam && prevPolyTeam !== cachedPoly?.teamLabel) {
+      lastSyncedPolyUsd = 0;
+      lastSyncedPolyAt = 0;
+    }
 
     let arbBti = null;
     if (calcRunning && cachedPoly?.teamLabel && found.btiTab) {
@@ -1220,6 +1235,7 @@ async function refreshSlips() {
     }
 
     updateSlipUI(cachedBti, cachedPoly, arbBti);
+    scheduleSyncPolyAmount();
     return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
   } finally {
     refreshPending = false;
@@ -1722,16 +1738,15 @@ async function setPolyAmount(polyTab, amountUsd) {
 }
 
 function scheduleSyncPolyAmount() {
-  if (!calcRunning) return;
   if (syncPolyTimer) clearTimeout(syncPolyTimer);
   syncPolyTimer = setTimeout(() => {
     syncPolyTimer = null;
     syncPolyAmount();
-  }, 120);
+  }, 80);
 }
 
 async function syncPolyAmount() {
-  if (!calcRunning || syncPolyPending) return;
+  if (syncPolyPending) return;
 
   const found = await findTabs();
   if (!found.polyTab?.id || !found.btiTab?.id) return;
@@ -1743,11 +1758,13 @@ async function syncPolyAmount() {
   const btiOdds = btiArb?.odds > 1 ? btiArb.odds : cachedBti?.odds;
   if (!btiOdds || btiOdds <= 1) return;
 
-  const btiBet = await getBtiBetAmount(found.btiTab);
+  const btiBet = calcRunning ? await getBtiBetAmount(found.btiTab) : getBtiBet();
   if (!btiBet) return;
 
-  const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
-  if (Math.abs(lastSyncedPolyUsd - polyUsd) < 0.02 && Date.now() - lastSyncedPolyAt < 3000) {
+  const polyUsd = Math.max(1, calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate()));
+  const teamChanged = cachedPoly?.teamSwitched;
+  const stale = teamChanged || Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02 || Date.now() - lastSyncedPolyAt > 2500;
+  if (!stale) {
     updateSlipUI(cachedBti, cachedPoly, btiArb);
     return;
   }
@@ -1757,9 +1774,10 @@ async function syncPolyAmount() {
   try {
     const res = await setPolyAmount(found.polyTab, polyUsd);
     if (res?.ok) {
-      const changed = Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02;
+      const changed = teamChanged || Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02;
       lastSyncedPolyUsd = polyUsd;
       lastSyncedPolyAt = Date.now();
+      if (cachedPoly?.teamSwitched) delete cachedPoly.teamSwitched;
       updateSlipUI(cachedBti, cachedPoly, btiArb);
       if (changed) {
         const profit = calcProfit(btiOdds, polyO);
@@ -1784,7 +1802,6 @@ async function calcPollLoop() {
 function onOddsChanged(msg) {
   if (msg.source === 'bti') applySlipUpdate('bti', msg.slip);
   if (isLeg2Source(msg.source)) applySlipUpdate(msg.source, msg.slip);
-  if (!calcRunning) return;
   scheduleSyncPolyAmount();
 }
 
@@ -1920,8 +1937,9 @@ function bindUi() {
   $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로고침', 'info'); });
   ['slipMinProfit', 'minProfit', 'btiBet', 'usdRate'].forEach((id) => {
     $(id)?.addEventListener('input', () => {
+      lastSyncedPolyUsd = 0;
       updateSlipUI(cachedBti, cachedPoly);
-      if (calcRunning) scheduleSyncPolyAmount();
+      scheduleSyncPolyAmount();
     });
   });
 
@@ -1968,7 +1986,7 @@ async function bootApp() {
   bindSitePrefSelectors();
   updateLeg2UiLabels();
   await refreshSlips();
-  log(`v6.0.0 ${IS_PANEL ? '패널' : '팝업'} — 완성본`, 'info');
+  log(`v6.1.0 ${IS_PANEL ? '패널' : '팝업'} — 홈/원정·금액동기화`, 'info');
 }
 
 if (document.readyState === 'loading') {
