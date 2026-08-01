@@ -85,8 +85,10 @@ let panelWindowId = null;
 async function openPanel() {
   if (panelWindowId != null) {
     try {
-      await chrome.windows.get(panelWindowId);
-      await chrome.windows.update(panelWindowId, { focused: true });
+      const win = await chrome.windows.get(panelWindowId);
+      await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+      const tabs = await chrome.tabs.query({ windowId: panelWindowId });
+      if (tabs[0]?.id) await chrome.tabs.update(tabs[0].id, { active: true });
       return panelWindowId;
     } catch (_) {
       panelWindowId = null;
@@ -95,8 +97,8 @@ async function openPanel() {
   const win = await chrome.windows.create({
     url: chrome.runtime.getURL('panel.html'),
     type: 'popup',
-    width: 440,
-    height: 720,
+    width: 460,
+    height: 780,
     focused: true
   });
   panelWindowId = win.id;
@@ -106,4 +108,17 @@ async function openPanel() {
 chrome.action.onClicked.addListener(() => openPanel());
 chrome.windows.onRemoved.addListener((id) => { if (id === panelWindowId) panelWindowId = null; });
 
-loadConfig().then(() => console.log('[자동배팅] background — panel에서 배팅 실행'));
+chrome.runtime.onInstalled.addListener(() => {
+  openPanel().catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  loadConfig().then(() => {
+    if (armed) openPanel().catch(() => {});
+  });
+});
+
+loadConfig().then(() => {
+  console.log('[자동배팅] background — 별도 창 패널');
+  if (armed) openPanel().catch(() => {});
+});
