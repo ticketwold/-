@@ -456,7 +456,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           runSearchOnce(msg.leg1Site || 'bti', leg2Pref).then((r) => broadcast({ type: 'SEARCH_RESULT', ...r }));
         }, 500);
       }
-    }).catch((e) => sendResponse({ ok: false, error: e.message }));
+    }).catch((e) => {
+      searchRunning = false;
+      if (searchInterval) { clearInterval(searchInterval); searchInterval = null; }
+      sendResponse({ ok: false, error: e.message });
+    });
     return true;
   }
 
@@ -510,14 +514,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'GET_TABS') {
     (async () => {
-      const leg2Pref = msg.leg2Pref || 'auto';
-      const bti = await pickBtiTab();
-      const poly = await findLeg2Tab(leg2Pref);
-      sendResponse({
-        btiTab: bti ? { id: bti.id, url: bti.url } : null,
-        polyTab: poly ? { id: poly.id, url: poly.url } : null,
-        leg2Pref
-      });
+      try {
+        const leg2Pref = msg.leg2Pref || 'auto';
+        const bti = await pickBtiTab();
+        const poly = await findLeg2Tab(leg2Pref);
+        sendResponse({
+          btiTab: bti ? { id: bti.id, url: bti.url } : null,
+          polyTab: poly ? { id: poly.id, url: poly.url } : null,
+          leg2Pref
+        });
+      } catch (e) {
+        sendResponse({ btiTab: null, polyTab: null, error: e.message });
+      }
     })();
     return true;
   }
