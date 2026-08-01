@@ -235,6 +235,7 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 }
 
 function mergePolySlipWithCache(tabId, slip) {
+  slip = normalizePolySlip(slip);
   if (slip?.odds > 1) {
     cachePolyOdds(tabId, slip);
     return slip;

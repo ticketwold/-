@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 자동배팅",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "양방배팅봇 수익 구간 감지 시 텐텐뱃·Polymarket/BC.Game 동시 자동 배팅",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows"],
   "host_permissions": [

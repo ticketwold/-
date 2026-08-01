@@ -9,6 +9,8 @@ const $ = (id) => document.getElementById(id);
 
 let armedLocal = false;
 let strikeLock = false;
+let panelLoopBusy = false;
+let haltAutoBet = false;
 let lastStrikeAt = 0;
 let amountSyncLock = false;
 let oddsReadBusy = false;
@@ -73,6 +75,19 @@ function setArmedUi(armed) {
   $('armBtn').disabled = armed;
   $('disarmBtn').disabled = !armed;
   $('statusBox').style.borderColor = armed ? '#dc2626' : '#2d3142';
+}
+
+function disarmAfterStrike(reason) {
+  haltAutoBet = true;
+  armedLocal = false;
+  setArmedUi(false);
+  amountSyncQueued = false;
+  polyPreSynced = false;
+  lastStrikeAt = Date.now();
+  chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed: false });
+  const hint = $('statusHint');
+  if (hint) hint.textContent = '배팅 완료 — 자동 해제됨 (🔴 무장으로 재시작)';
+  if (reason) logLine(reason, 'info');
 }
 
 function setTestBtnBusy(busy) {
@@ -294,8 +309,9 @@ async function liveAmountSync(force) {
 }
 
 async function executeStrike(snap, cfg, label) {
-  if (strikeLock) {
-    logLine('이미 배팅 진행 중', 'err');
+  if (strikeLock || haltAutoBet) {
+    if (haltAutoBet) logLine('배팅 완료 상태 — 무장 후 재시작', 'err');
+    else logLine('이미 배팅 진행 중', 'err');
     return;
   }
   strikeLock = true;
@@ -329,8 +345,7 @@ async function executeStrike(snap, cfg, label) {
       logLine(`✓ 배팅 성공 ${result.elapsedMs}ms`, 'ok');
       logLine(`  BTI: ${result.btiRes?.btnText || result.btiRes?.reason || 'OK'}`, 'ok');
       logLine(`  Poly: ${result.polyRes?.btnText || result.polyRes?.method || result.polyRes?.reason || 'OK'}`, 'ok');
-      setArmedUi(false);
-      chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed: false });
+      disarmAfterStrike('배팅 성공 — 자동 해제');
     } else {
       logLine(`✗ 텐텐뱃: ${result.btiRes?.reason || '실패'}`, 'err');
       logLine(`✗ Polymarket: ${result.polyRes?.reason || '실패'}`, 'err');
@@ -352,33 +367,45 @@ async function executeStrike(snap, cfg, label) {
 }
 
 async function panelLoop() {
-  if (!armedLocal || strikeLock) return;
-  const cfg = saveConfig();
-  if (Number.isNaN(cfg.minProfit)) cfg.minProfit = 1;
+  if (!armedLocal || strikeLock || panelLoopBusy || haltAutoBet) return;
 
-  const now = Date.now();
-  if (now - lastStrikeAt < cfg.cooldownMs) return;
+  panelLoopBusy = true;
+  try {
+    const cfg = saveConfig();
+    if (Number.isNaN(cfg.minProfit)) cfg.minProfit = 1;
 
-  const snap = liveSnap?.ok ? liveSnap : await getSnap(cfg);
-  if (!snap.ok) {
-    $('statusHint').textContent = snap.reason || '탭 확인';
-    return;
+    const now = Date.now();
+    if (now - lastStrikeAt < cfg.cooldownMs) return;
+
+    const snap = liveSnap?.ok ? liveSnap : await getSnap(cfg);
+    if (!armedLocal || haltAutoBet) return;
+    if (!snap.ok) {
+      $('statusHint').textContent = snap.reason || '탭 확인';
+      return;
+    }
+    liveSnap = snap;
+    updateStatusFromSnap(snap, cfg);
+
+    if (snap.profit == null || snap.btiO == null || snap.polyO == null) return;
+    if (snap.profit < cfg.minProfit) return;
+    if (!armedLocal || haltAutoBet || strikeLock) return;
+
+    await executeStrike(snap, cfg, 'panel');
+  } finally {
+    panelLoopBusy = false;
   }
-  liveSnap = snap;
-  updateStatusFromSnap(snap, cfg);
-
-  if (snap.profit == null || snap.btiO == null || snap.polyO == null) return;
-  if (snap.profit < cfg.minProfit) return;
-
-  await executeStrike(snap, cfg, 'panel');
 }
 
 function arm(armed) {
   saveConfig();
   chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed }, (res) => {
     if (res?.ok) {
+      if (armed) {
+        haltAutoBet = false;
+        lastStrikeAt = Date.now();
+      }
       setArmedUi(res.armed);
-      logLine(armed ? '무장 — 실시간 금액 동기화 시작' : '해제', armed ? 'strike' : 'info');
+      logLine(armed ? '무장 — 수익 구간 시 1회 배팅 후 자동 해제' : '해제', armed ? 'strike' : 'info');
       if (armed) {
         amountSyncQueued = true;
         refreshOddsLive();
@@ -390,6 +417,31 @@ function arm(armed) {
 
 $('armBtn')?.addEventListener('click', () => arm(true));
 $('disarmBtn')?.addEventListener('click', () => arm(false));
+
+$('scanBtn')?.addEventListener('click', async () => {
+  const cfg = saveConfig();
+  logLine('배당 스캔…', 'info');
+  try {
+    const snap = await getSnap(cfg, null);
+    liveSnap = snap;
+    updateStatusFromSnap(snap, cfg);
+    if (snap.btiO > 1) logLine(`텐텐뱃 ${snap.btiO.toFixed(3)}`, 'ok');
+    else logLine('텐텐뱃 배당 없음', 'err');
+    if (snap.polyO > 1) {
+      const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
+      logLine(`예측 ${cents}${snap.polyO.toFixed(3)}`, 'ok');
+    } else {
+      logLine(snap.reason || '예측 배당 없음 — outcome 클릭 또는 Amount 입력', 'err');
+    }
+    if (snap.btiO > 1 && snap.polyO > 1) {
+      logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · Poly $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
+      amountSyncQueued = true;
+      liveAmountSync(true);
+    }
+  } catch (e) {
+    logLine(`스캔 실패: ${e.message}`, 'err');
+  }
+});
 
 $('testBetBtn')?.addEventListener('click', async () => {
   if (strikeLock) {
@@ -439,7 +491,10 @@ $('testBetBtn')?.addEventListener('click', async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'AUTOBET_ARMED') setArmedUi(msg.armed);
+  if (msg.type === 'AUTOBET_ARMED') {
+    setArmedUi(msg.armed);
+    if (!msg.armed) haltAutoBet = true;
+  }
   if (msg.type === 'AUTOBET_LOG' && msg.entry) logLine(msg.entry.text, msg.entry.level);
   if (msg.type === 'ODDS_CHANGED') {
     applyInstantOdds(msg);
@@ -471,4 +526,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.0 — 배당인식·무장없이 금액동기화', 'info');
+logLine('v1.2.1 — 배팅 성공 시 자동 해제', 'info');
