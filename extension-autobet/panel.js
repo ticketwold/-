@@ -1,9 +1,9 @@
 'use strict';
 
 const SNAP_TIMEOUT_MS = 20000;
-const ODDS_POLL_MS = 400;
-const AMOUNT_SYNC_INTERVAL_MS = 500;
-const ODDS_GAP_FILL_MS = 3000;
+const ODDS_POLL_MS = 250;
+const AMOUNT_SYNC_INTERVAL_MS = 200;
+const ODDS_GAP_FILL_MS = 5000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -215,18 +215,19 @@ async function getSnap(cfg, progressLabel) {
 
 function needsAmountResync(snap, cfg) {
   if (!snap?.polyUsd || !snap.btiO || !snap.polyO) return false;
-  if (Math.abs(snap.polyUsd - lastSynced.polyUsd) >= 0.05) return true;
+  if (Math.abs(snap.polyUsd - lastSynced.polyUsd) >= 0.01) return true;
   if (cfg.btiBetKrw !== lastSynced.btiKrw) return true;
-  if (Math.abs((snap.btiO || 0) - lastSynced.btiO) > 0.005) return true;
-  if (Math.abs((snap.polyO || 0) - lastSynced.polyO) > 0.005) return true;
-  return false;
+  if (Math.abs((snap.btiO || 0) - lastSynced.btiO) > 0.003) return true;
+  if (Math.abs((snap.polyO || 0) - lastSynced.polyO) > 0.003) return true;
+  return Date.now() - lastSynced.at > 1000;
 }
 
 async function liveAmountSync(force) {
   if (amountSyncLock || strikeLock) return;
   const cfg = getConfig();
-  if (!cfg.preSyncAmount && !armedLocal && !force) return;
-  if (!force && !amountSyncQueued) return;
+  const syncOn = cfg.preSyncAmount || armedLocal;
+  if (!syncOn && !force) return;
+  if (!force && !amountSyncQueued && !cfg.preSyncAmount) return;
 
   amountSyncLock = true;
   try {
@@ -241,10 +242,13 @@ async function liveAmountSync(force) {
 
     if (!snap.btiO || !snap.polyO) {
       if (!snap.btiO && !snap.polyO) polyPreSynced = false;
+      if (cfg.preSyncAmount && snap.btiO && !snap.polyO) {
+        $('statusHint').textContent = snap.reason || '예측 배당 읽는 중 — outcome/Amount 확인';
+      }
       return;
     }
 
-    if (!force && !needsAmountResync(snap, cfg)) {
+    if (!force && !needsAmountResync(snap, cfg) && polyPreSynced) {
       amountSyncQueued = false;
       return;
     }
@@ -439,7 +443,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'AUTOBET_LOG' && msg.entry) logLine(msg.entry.text, msg.entry.level);
   if (msg.type === 'ODDS_CHANGED') {
     applyInstantOdds(msg);
+    amountSyncQueued = true;
     refreshOddsLive();
+    if ($('preSync')?.checked) liveAmountSync(true);
   }
   if (msg.type === 'BTI_STAKE_CHANGED') {
     lastSynced.at = 0;
@@ -452,7 +458,7 @@ chrome.runtime.sendMessage({ type: 'AUTOBET_GET_STATE' }, (res) => {
   else if (res?.armed != null) setArmedUi(res.armed);
   amountSyncQueued = true;
   refreshOddsLive();
-  if (res?.armed) liveAmountSync(true);
+  liveAmountSync(true);
 });
 
 chrome.storage.local.get('autoBetLog', (data) => {
@@ -460,7 +466,9 @@ chrome.storage.local.get('autoBetLog', (data) => {
 });
 
 setInterval(refreshOddsLive, ODDS_POLL_MS);
-setInterval(() => liveAmountSync(false), AMOUNT_SYNC_INTERVAL_MS);
+setInterval(() => {
+  if ($('preSync')?.checked || armedLocal) liveAmountSync(false);
+}, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.1.2 — 배당 실시간 갱신', 'info');
+logLine('v1.2.0 — 배당인식·무장없이 금액동기화', 'info');

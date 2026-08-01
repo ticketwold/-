@@ -620,9 +620,83 @@ function selectionScore(btn) {
   return score;
 }
 
+function stripTeamFromOutcomeText(t) {
+  return String(t || '')
+    .replace(/\d+(?:\.\d+)?\s*¢/g, '')
+    .replace(/\d+(?:\.\d+)?\s*%/g, '')
+    .replace(/^(?:buy|구매|sell|매도)\s+/i, '')
+    .trim();
+}
+
+/** 선택된 outcome 버튼의 팀명 + ¢ (홈/원정·맵 마켓) */
+function readActiveMoneylineOutcome() {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const root of getOutcomeSearchRoots()) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 120 || seen.has(t)) continue;
+      seen.add(t);
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+      const team = stripTeamFromOutcomeText(t);
+      if (team.length < 2 || team.length > 72) continue;
+      if (/^(yes|no|over|under|draw|tie)$/i.test(team)) continue;
+
+      const sel = selectionScore(btn);
+      let score = sel;
+      if (sel >= 80) score += 220;
+      else if (sel >= 50) score += 100;
+      else if (sel >= 20) score += 40;
+      if (/^buy\s+/i.test(t)) score -= 60;
+      candidates.push({ team, cents, score, sel, t });
+    }
+  }
+
+  if (!candidates.length) return null;
+  const selected = candidates.filter((c) => c.sel >= 20).sort((a, b) => b.score - a.score);
+  if (selected.length) return selected[0];
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0];
+}
+
+function resolvePolyTeamAndCents(panel, stake, toWinDisplay) {
+  const buyTeam = readTeamLabel(panel);
+  const activeOutcome = readActiveMoneylineOutcome();
+  let team = buyTeam || activeOutcome?.team || '';
+
+  if (buyTeam && activeOutcome && !teamMatchesButton(buyTeam, activeOutcome.team)) {
+    team = buyTeam;
+  }
+
+  let boardCents = null;
+  if (team) {
+    boardCents = readCentsForBuyTeam(team)
+      || readOutcomeButtonCents(team)
+      || readSelectedOutcomeForTeam(team)
+      || readSelectedBoardCents(team);
+  }
+  if (!boardCents && activeOutcome) {
+    if (!team || teamMatchesButton(team, activeOutcome.team)) {
+      boardCents = activeOutcome.cents;
+      if (!team) team = activeOutcome.team;
+    }
+  }
+  if (!boardCents) {
+    boardCents = readLiveListedCents(panel, stake, toWinDisplay);
+  }
+  if (!boardCents && activeOutcome) {
+    boardCents = activeOutcome.cents;
+    if (!team) team = activeOutcome.team;
+  }
+  return { team, boardCents };
+}
+
 function readSelectedOutcomeForTeam(teamHint) {
   const candidates = [];
-  const minSel = teamHint ? 10 : 60;
+  const minSel = teamHint ? 10 : 20;
   for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
     if (!visible(btn) || isBuySellTab(btn)) continue;
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
@@ -812,7 +886,8 @@ function readPolymarketSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
   const toWinDisplay = readPayoutAmount(panel, stake);
-  const team = readTeamLabel(panel);
+  const resolved = resolvePolyTeamAndCents(panel, stake, toWinDisplay);
+  const team = resolved.team || readTeamLabel(panel);
   const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
 
   // Amount + To win 있으면 당첨금만으로 배당 (¢ 표시 가격 무시)
@@ -845,7 +920,8 @@ function readPolymarketSlip() {
 
   // Amount 있으나 To win 없음 — ¢/Avg 배당 유지 (금액 동기화 중 사라짐 방지)
   if (stake > 0 && !toWinDisplay) {
-    let listedCents = readLiveListedCents(panel, 0, 0);
+    let listedCents = resolved.boardCents;
+    if (!listedCents) listedCents = readLiveListedCents(panel, 0, 0);
     if (!listedCents) listedCents = readPageOutcomeCents(team);
     if (!listedCents && panel) {
       const avgM = (panel.innerText || '').match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
@@ -892,7 +968,8 @@ function readPolymarketSlip() {
   }
 
   // 금액 없을 때 보드 ¢ / Avg price 참고
-  let listedCents = readLiveListedCents(panel, 0, 0);
+  let listedCents = resolved.boardCents;
+  if (!listedCents) listedCents = readLiveListedCents(panel, 0, 0);
   if (!listedCents) listedCents = readPageOutcomeCents(team);
   if (!listedCents && panel) {
     const avgM = (panel.innerText || '').match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);

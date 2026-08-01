@@ -160,9 +160,11 @@ async function injectScrapePolyCents(tabId) {
           let s = 0;
           if (btn.getAttribute('aria-pressed') === 'true') s += 120;
           if (btn.getAttribute('aria-selected') === 'true') s += 110;
-          if (btn.getAttribute('data-state') === 'on') s += 110;
+          if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') s += 110;
           const cls = String(btn.className || '');
-          if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) s += 80;
+          if (/active|selected|checked|pressed|border-primary|ring-|bg-primary|text-primary/i.test(cls)) s += 80;
+          const style = window.getComputedStyle?.(btn);
+          if (style && parseFloat(style.borderWidth) >= 2) s += 30;
           return s;
         }
 
@@ -249,7 +251,21 @@ function mergePolySlipWithCache(tabId, slip) {
   };
 }
 
+function normalizePolySlip(slip) {
+  if (!slip) return slip;
+  if (slip.odds > 1) return slip;
+  const cents = slip.priceCents || (slip.price > 0 && slip.price < 1 ? slip.price * 100 : null);
+  if (cents > 0 && cents < 100) {
+    const odds = 100 / cents;
+    if (odds > 1.001 && odds < 100) {
+      return { ...slip, odds, priceCents: cents, liveCents: true };
+    }
+  }
+  return slip;
+}
+
 function scorePolySlip(slip) {
+  slip = normalizePolySlip(slip);
   if (!(slip?.odds > 1)) return -1;
   let score = slip.odds;
   if (slip.fromPayout && !slip.pendingToWin) score += 200;
@@ -284,42 +300,44 @@ async function readPolyOddsOnce(polyTab) {
     if (f.frameId !== 0 && !order.includes(f.frameId)) order.push(f.frameId);
   }
 
-  let best = null;
   const toProbe = order.slice(0, 12);
   await Promise.all(toProbe.map((fid) => ensurePolyScript(polyTab.id, fid)));
 
-  const slips = await Promise.all(toProbe.map(async (frameId) => {
-    try {
-      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 4000, 'Poly읽기');
-      return res?.slip || null;
-    } catch (_) {
-      return null;
-    }
-  }));
+  const [slipResults, injected, scraped, apiSlip] = await Promise.all([
+    Promise.all(toProbe.map(async (frameId) => {
+      try {
+        const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'Poly읽기');
+        return res?.slip || null;
+      } catch (_) {
+        return null;
+      }
+    })),
+    injectReadPoly(polyTab.id, siteKey).catch(() => null),
+    injectScrapePolyCents(polyTab.id).catch(() => null),
+    readPolySlipFromApi(polyTab).catch(() => null)
+  ]);
 
-  for (const slip of slips) {
+  let best = null;
+  for (const slip of slipResults) {
     if (!slip) continue;
-    const s = scorePolySlip(slip);
+    const norm = normalizePolySlip(slip);
+    const s = scorePolySlip(norm);
     if (s > (best?._score ?? -1)) {
-      best = slip;
+      best = norm;
       best._score = s;
-    } else if (!best && slip.needsStake) {
-      best = slip;
-      best._score = 0;
     }
   }
-  if (best?.odds > 1) return mergePolySlipWithCache(polyTab.id, best);
 
-  const injected = await injectReadPoly(polyTab.id, siteKey);
-  if (injected?.odds > 1) {
-    return mergePolySlipWithCache(polyTab.id, { ...injected, teamLabel: injected.teamLabel || polyTeamHintFromUrl(polyTab.url) });
+  for (const slip of [injected, scraped, apiSlip]) {
+    if (!slip?.odds || slip.odds <= 1) continue;
+    const merged = mergePolySlipWithCache(polyTab.id, slip);
+    const s = scorePolySlip(merged);
+    if (s > (best?._score ?? -1)) {
+      best = merged;
+      best._score = s;
+    }
   }
 
-  const scraped = await injectScrapePolyCents(polyTab.id);
-  if (scraped?.odds > 1) return mergePolySlipWithCache(polyTab.id, scraped);
-
-  const apiSlip = await readPolySlipFromApi(polyTab);
-  if (apiSlip?.odds > 1) return mergePolySlipWithCache(polyTab.id, apiSlip);
-
+  if (best?.odds > 1) return mergePolySlipWithCache(polyTab.id, best);
   return mergePolySlipWithCache(polyTab.id, best);
 }
