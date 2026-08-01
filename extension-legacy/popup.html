@@ -9,7 +9,7 @@
   <div class="header-row">
     <div>
       <h1>⚡ 양방 베팅 봇</h1>
-      <div class="sub">텐텐뱃 + Polymarket / BC.Game · v5.9.1</div>
+      <div class="sub">텐텐뱃 + Polymarket / BC.Game · v5.9.2</div>
     </div>
     <button id="openPanelBtn" class="btn-icon" title="별도 창으로 열기">⬜</button>
   </div>
@@ -133,7 +133,7 @@
   <div class="bet-box">
     <div class="row two-col bet-options">
       <label class="check-row">
-        <input type="checkbox" id="autoBet" />
+        <input type="checkbox" id="autoBet" checked />
         수익 구간 자동 배팅
       </label>
       <div>
@@ -148,11 +148,11 @@
       <input type="checkbox" id="ignoreProfit" />
       수익률 무시 (테스트만)
     </label>
-    <div class="hint" id="betHint">수익 구간일 때만 배팅 · 계산 시작 후 슬립 확인</div>
+    <div class="hint" id="betHint">모니터링 시작 → 수익 구간 시 자동 배팅</div>
   </div>
 
   <div class="btn-row">
-    <button id="botStart" class="btn primary">계산 시작</button>
+    <button id="botStart" class="btn primary">모니터링·자동배팅</button>
     <button id="botStop" class="btn" disabled>계산 정지</button>
     <button id="diagBtn" class="btn small">진단</button>
   </div>

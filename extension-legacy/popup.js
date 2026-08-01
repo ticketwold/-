@@ -30,6 +30,9 @@ let historyEntries = [];
 let lastHistoryKey = '';
 let betLock = false;
 let lastBetAt = 0;
+let autoBetScheduleTimer = null;
+let profitZoneSince = 0;
+const PROFIT_ZONE_SETTLE_MS = 500;
 const BET_PREF_KEY = 'betPrefs';
 
 function formatPolyOddsForHistory(slip) {
@@ -350,7 +353,11 @@ function updateSlipUI(bti, poly, arbBti = null) {
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
   else if (!poly?.odds) hint.textContent = lastStatus.poly || `${leg2FullLabel()}: Amount 입력 후 To win 확인`;
   else if (poly?.needsStake) hint.textContent = calcRunning ? `${leg2FullLabel()} Amount 입력 대기...` : 'Amount 입력 시 당첨금 기준 배당';
-  else if (profit !== null && profit >= getMinProfit()) hint.textContent = calcRunning ? `수익 구간 — ${leg2FullLabel()} 금액 자동 갱신 (${profit.toFixed(2)}%)` : '수익 구간 충족';
+  else if (profit !== null && profit >= getMinProfit()) {
+    hint.textContent = calcRunning && $('autoBet')?.checked
+      ? `수익 구간 — 자동 배팅 대기 (${profit.toFixed(2)}%)`
+      : `수익 구간 충족 (${profit.toFixed(2)}%)`;
+  }
   else if (profit !== null) hint.textContent = `수익 구간 밖 (최소 ${getMinProfit()}%)`;
   else hint.textContent = '배당 확인 중...';
 
@@ -440,7 +447,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   }
 
   maybeRecordHistory(bti, poly, arbBti);
-  maybeAutoBet(btiO, polyO, profit);
+  scheduleAutoBetCheck();
 }
 
 async function getAllFrames(tabId) {
@@ -1102,6 +1109,7 @@ function applySlipUpdate(source, slip) {
     cachedPoly = slipOdds(slip) ? mergeSlipCached(cachedPoly, slip) : null;
   }
   updateSlipUI(cachedBti, cachedPoly);
+  if (calcRunning) scheduleAutoBetCheck();
 }
 
 async function refreshSlips() {
@@ -1441,7 +1449,7 @@ async function executeBet(label, options = {}) {
       log(`  BTI: ${result.btiRes?.btnText || 'OK'}`, 'ok');
       log(`  ${leg2FullLabel()}: ${result.polyRes?.btnText || result.polyRes?.method || 'OK'}`, 'ok');
       if (hint) hint.textContent = '배팅 완료';
-      if ($('autoBet')?.checked) $('autoBet').checked = false;
+      if (label === '자동') stopCalc();
       saveBetPrefs();
     } else {
       log(`✗ 텐텐뱃: ${result.btiRes?.reason || '실패'}`, 'err');
@@ -1456,21 +1464,80 @@ async function executeBet(label, options = {}) {
   }
 }
 
+function isAutoBetEnabled() {
+  return calcRunning && !!$('autoBet')?.checked;
+}
+
+async function scheduleAutoBetCheck() {
+  if (!isAutoBetEnabled()) return;
+  if (autoBetScheduleTimer) clearTimeout(autoBetScheduleTimer);
+  autoBetScheduleTimer = setTimeout(() => {
+    autoBetScheduleTimer = null;
+    checkProfitZoneAndBet();
+  }, 200);
+}
+
+async function checkProfitZoneAndBet() {
+  if (!isAutoBetEnabled() || betLock) return;
+  if ($('ignoreProfit')?.checked) return;
+
+  const found = await findTabs();
+  let arbBti = null;
+  if (cachedPoly?.teamLabel && found.btiTab) {
+    arbBti = await readBtiArbOdds(found.btiTab, cachedPoly);
+  }
+  const polyO = cachedPoly?.odds > 1 ? cachedPoly.odds : null;
+  const btiO = arbBti?.odds > 1 ? arbBti.odds : (cachedBti?.odds > 1 ? cachedBti.odds : null);
+  const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
+  const minP = getMinProfit();
+  const betHint = $('betHint');
+
+  if (!btiO || !polyO || profit == null) {
+    profitZoneSince = 0;
+    if (betHint) betHint.textContent = '배당 모니터링 중…';
+    return;
+  }
+
+  if (profit < minP) {
+    profitZoneSince = 0;
+    if (betHint) betHint.textContent = `모니터링 중 — 수익률 ${profit.toFixed(2)}% (최소 ${minP}%)`;
+    return;
+  }
+
+  if (!profitZoneSince) profitZoneSince = Date.now();
+  const waited = Date.now() - profitZoneSince;
+  if (betHint) {
+    betHint.textContent = waited >= PROFIT_ZONE_SETTLE_MS
+      ? `⚡ 수익 구간 ${profit.toFixed(2)}% — 자동 배팅!`
+      : `수익 구간 ${profit.toFixed(2)}% — ${((PROFIT_ZONE_SETTLE_MS - waited) / 1000).toFixed(1)}초 후 배팅`;
+  }
+
+  if (waited < PROFIT_ZONE_SETTLE_MS) {
+    scheduleAutoBetCheck();
+    return;
+  }
+
+  profitZoneSince = 0;
+  executeBet('자동');
+}
+
 function maybeAutoBet(btiO, polyO, profit) {
-  if (!calcRunning || betLock || !$('autoBet')?.checked) return;
+  if (!isAutoBetEnabled() || betLock) return;
   if ($('ignoreProfit')?.checked) return;
   if (!btiO || !polyO || profit == null || profit < getMinProfit()) return;
   if (Date.now() - lastBetAt < getBetCooldownMs()) return;
-  executeBet('자동');
+  scheduleAutoBetCheck();
 }
 
 async function loadBetPrefs() {
   try {
     const data = await chrome.storage.local.get(BET_PREF_KEY);
     const prefs = data[BET_PREF_KEY] || {};
-    if ($('autoBet')) $('autoBet').checked = !!prefs.autoBet;
+    if ($('autoBet')) $('autoBet').checked = prefs.autoBet !== false;
     if (prefs.cooldownSec != null && $('betCooldown')) $('betCooldown').value = String(prefs.cooldownSec);
-  } catch (_) {}
+  } catch (_) {
+    if ($('autoBet')) $('autoBet').checked = true;
+  }
 }
 
 function saveBetPrefs() {
@@ -1537,6 +1604,7 @@ async function syncPolyAmount() {
     } else if (res?.reason) {
       log(`${leg2FullLabel()} 금액 입력: ${res.reason}`, 'err');
     }
+    scheduleAutoBetCheck();
   } finally {
     syncPolyPending = false;
   }
@@ -1568,15 +1636,28 @@ function startCalc() {
   lastSyncedPolyUsd = 0;
   lastSyncedPolyAt = 0;
   lastHistoryKey = '';
+  profitZoneSince = 0;
+  if ($('autoBet')) $('autoBet').checked = true;
   $('botStart').disabled = true;
   $('botStop').disabled = false;
-  log('계산 시작 — 배당 변경 시 히스토리에 기록', 'info');
-  refreshSlips().then(() => scheduleSyncPolyAmount());
+  const betHint = $('betHint');
+  if (betHint) betHint.textContent = '배당 모니터링 중 — 수익 구간 시 자동 배팅';
+  log('모니터링·자동배팅 시작 — 수익 구간 감지 시 배팅', 'strike');
+  saveBetPrefs();
+  refreshSlips().then(() => {
+    scheduleSyncPolyAmount();
+    scheduleAutoBetCheck();
+  });
   calcTimer = setInterval(calcPollLoop, 400);
 }
 
 function stopCalc() {
   calcRunning = false;
+  profitZoneSince = 0;
+  if (autoBetScheduleTimer) {
+    clearTimeout(autoBetScheduleTimer);
+    autoBetScheduleTimer = null;
+  }
   if (calcTimer) { clearInterval(calcTimer); calcTimer = null; }
   if (syncPolyTimer) { clearTimeout(syncPolyTimer); syncPolyTimer = null; }
   $('botStart').disabled = false;
@@ -1716,4 +1797,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.1 ${IS_PANEL ? '패널' : '팝업'} — BTI 우선 배팅`, 'info');
+log(`v5.9.2 ${IS_PANEL ? '패널' : '팝업'} — 수익 구간 자동배팅`, 'info');
