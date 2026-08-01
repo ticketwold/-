@@ -210,6 +210,48 @@ async function simulateStrike(btiFn, polyFn) {
   );
   assert(switched.teamSwitched && switched.priceCents === 35, '팀 전환 시 캐시 갱신');
 
+  // ── 배당 서치 로직 ──
+  console.log('\n[8] 배당 서치 (teams + poly parse)');
+  const teams = loadScript('teams.js', '{ teamMatch, matchupTeamsMatch }');
+  const polySandbox = {};
+  vm.runInNewContext(
+    fs.readFileSync(path.join(ROOT, 'odds.js'), 'utf8') + '\n' +
+    fs.readFileSync(path.join(ROOT, 'poly_api.js'), 'utf8') + '\n;({ isSettledPolyPricePair, polyEventToMatchup })',
+    polySandbox,
+    { filename: 'poly_api.js' }
+  );
+  polySandbox.SITE_CONFIG = { GAMMA_API: 'https://gamma-api.polymarket.com' };
+  const poly = polySandbox;
+  const oddsMod = loadScript('odds.js', '{ calcArb }');
+
+  assert(teams.teamMatch('T1', 'T1 Esports'), 'esports 약어 T1 매칭');
+  assert(teams.teamMatch('Gen.G', 'Gen.G Esports'), 'Gen.G 매칭');
+  assert(teams.teamMatch('LGD', 'LGD Gaming'), 'LGD 약어 매칭');
+
+  assert(poly.isSettledPolyPricePair(['1', '0']), '종료 마켓 1/0 감지');
+  assert(!poly.isSettledPolyPricePair(['0.46', '0.54']), '라이브 마켓 통과');
+
+  const fakeEvent = {
+    id: '1',
+    title: "LoL: T1 vs Gen.G (BO3)",
+    markets: [{
+      sportsMarketType: 'moneyline',
+      question: 'LoL: T1 vs Gen.G',
+      outcomes: '["T1","Gen.G"]',
+      outcomePrices: '["0.55","0.45"]',
+      closed: false
+    }]
+  };
+  const matchup = poly.polyEventToMatchup(fakeEvent);
+  assert(matchup && matchup.ml.length === 2, 'Poly 이벤트 → matchup 변환');
+  assert(teams.matchupTeamsMatch(
+    { home: 'T1', away: 'Gen.G' },
+    { home: 'T1', away: 'Gen.G Esports' }
+  ), 'matchupTeamsMatch esports');
+
+  const profit = oddsMod.calcArb(2.2, 2.0);
+  assert(profit > 0, '양방 수익 계산');
+
   // ── 결과 ──
   console.log(`\n═══ 결과: ${passed} passed, ${failed} failed ═══\n`);
   process.exit(failed > 0 ? 1 : 0);

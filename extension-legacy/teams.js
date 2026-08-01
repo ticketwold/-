@@ -1,5 +1,9 @@
 'use strict';
 
+const TEAM_STOPWORDS = new Set([
+  'team', 'gaming', 'esports', 'esport', 'club', 'fc', 'sc', 'the', 'of'
+]);
+
 function normTeam(name) {
   if (!name) return '';
   return String(name).toLowerCase()
@@ -13,11 +17,52 @@ function hasHangul(name) {
 }
 
 function latinWords(name) {
-  return (String(name || '').toLowerCase().match(/[a-z]{4,}/g) || []);
+  return (String(name || '').toLowerCase().match(/[a-z0-9]{2,}/g) || [])
+    .filter((w) => !TEAM_STOPWORDS.has(w));
 }
 
 function hangulChunks(name) {
   return (String(name || '').match(/[가-힣]{2,}/g) || []);
+}
+
+function teamTokens(name) {
+  const tokens = new Set();
+  const raw = String(name || '').trim();
+  if (!raw) return tokens;
+
+  const norm = normTeam(raw);
+  if (norm.length >= 2) tokens.add(norm);
+
+  for (const w of latinWords(raw)) tokens.add(w);
+  for (const h of hangulChunks(raw)) tokens.add(h);
+
+  const paren = raw.match(/\(([^)]+)\)/);
+  if (paren) {
+    for (const w of latinWords(paren[1])) tokens.add(w);
+    const pn = normTeam(paren[1]);
+    if (pn.length >= 2) tokens.add(pn);
+  }
+
+  const dotted = raw.match(/\b([A-Z]{2,6})\b/g);
+  if (dotted) dotted.forEach((d) => tokens.add(d.toLowerCase()));
+
+  return tokens;
+}
+
+function tokensMatch(a, b) {
+  const ta = teamTokens(a);
+  const tb = teamTokens(b);
+  if (!ta.size || !tb.size) return false;
+
+  for (const x of ta) {
+    for (const y of tb) {
+      if (x === y) return true;
+      const minLen = Math.min(x.length, y.length);
+      if (minLen >= 2 && (x.includes(y) || y.includes(x))) return true;
+      if (minLen >= 3 && x.slice(0, 3) === y.slice(0, 3)) return true;
+    }
+  }
+  return false;
 }
 
 function teamMatch(a, b) {
@@ -27,6 +72,7 @@ function teamMatch(a, b) {
   if (na === nb) return true;
   if (na.includes(nb) || nb.includes(na)) return true;
   if (na.length >= 4 && nb.length >= 4 && na.slice(0, 4) === nb.slice(0, 4)) return true;
+  if (tokensMatch(a, b)) return true;
   if (hasHangul(a) && hasHangul(b)) {
     for (const x of hangulChunks(a)) {
       for (const y of hangulChunks(b)) {
@@ -37,7 +83,7 @@ function teamMatch(a, b) {
   }
   for (const x of latinWords(a)) {
     for (const y of latinWords(b)) {
-      if (x === y || (x.length >= 5 && y.length >= 5 && (x.includes(y) || y.includes(x)))) return true;
+      if (x === y || (x.length >= 3 && y.length >= 3 && (x.includes(y) || y.includes(x)))) return true;
     }
   }
   return false;

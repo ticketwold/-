@@ -1857,7 +1857,7 @@ function renderSearchResults(data) {
   const leg2Pref = s.leg2Pref || getLeg2Pref();
   const btiOk = s.btiTabFound ? 'O' : 'X';
   const leg2TabOk = s.polyTabFound ? 'O' : 'X';
-  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · ${leg2Name} ${s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (A:${btiOk} / B:${leg2TabOk})`;
+  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · ${leg2Name} ${s.polyTotal || 0}경기 · 팀매칭 ${s.pairsMatched || 0} · 수익 ${s.matched || 0}건 (A:${btiOk} / B:${leg2TabOk})`;
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');
@@ -1868,12 +1868,18 @@ function renderSearchResults(data) {
     let hint = '조건 충족 기회 없음 — 팀명 매칭/최소 수익률 확인';
     if (!s.btiTabFound) {
       hint = '왼쪽(A) 텐텐뱃: x10x10s.com 스포츠 탭을 열어주세요';
+    } else if ((s.btiTotal || 0) === 0) {
+      hint = '텐텐뱃 경기 0건 — 스포츠 배당판을 열거나 라이브/프리매치 탭 확인';
     } else if (s.leg2ApiError) {
       hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} API 오류: ${s.leg2ApiError}`;
     } else if ((s.polyTotal || 0) === 0) {
       hint = `오른쪽(B) ${leg2PrefLabel(leg2Pref)} 경기 데이터 없음 — 확장 새로고침 후 재시도`;
+    } else if ((s.pairsMatched || 0) > 0) {
+      hint = `팀 매칭 ${s.pairsMatched}건 있으나 수익 ${minP}% 이상 없음 — 최소 수익률을 낮춰보세요`;
     } else if (!s.polyTabFound && (leg2Pref === 'bcgame' || leg2Pref === 'polymarket')) {
       hint = `서치 데이터 ${s.polyTotal}경기 로드됨 (탭 없음) — 슬립 비교는 ${leg2PrefLabel(leg2Pref)} 탭 필요`;
+    } else if ((s.btiTotal || 0) > 0 && (s.polyTotal || 0) > 0) {
+      hint = `텐텐뱃 ${s.btiTotal}경기 · ${leg2Name} ${s.polyTotal}경기 — 팀명 매칭 실패 (종목/팀명 확인)`;
     }
     el.innerHTML = `<div class="hint" style="padding:12px">${hint}</div>`;
     return;
@@ -1986,7 +1992,7 @@ async function bootApp() {
   bindSitePrefSelectors();
   updateLeg2UiLabels();
   await refreshSlips();
-  log(`v6.1.0 ${IS_PANEL ? '패널' : '팝업'} — 홈/원정·금액동기화`, 'info');
+  log(`v6.2.0 ${IS_PANEL ? '패널' : '팝업'} — 배당서치 강화`, 'info');
 }
 
 if (document.readyState === 'loading') {

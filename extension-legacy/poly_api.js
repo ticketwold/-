@@ -1,7 +1,7 @@
 'use strict';
 
-const POLY_LIVE_MIN = 0.03;
-const POLY_LIVE_MAX = 0.97;
+const POLY_LIVE_MIN = 0.02;
+const POLY_LIVE_MAX = 0.98;
 
 const POLY_PRIORITY_SPORTS = new Set([
   'cs2', 'lol', 'dota2', 'val', 'wildrift', 'rl',
@@ -36,6 +36,15 @@ function isLivePolyPrice(p) {
   return Number.isFinite(f) && f > POLY_LIVE_MIN && f < POLY_LIVE_MAX;
 }
 
+function isSettledPolyPricePair(prices) {
+  if (!Array.isArray(prices) || prices.length < 2) return true;
+  const pf = prices.map((p) => parseFloat(p)).filter(Number.isFinite);
+  if (pf.length < 2) return true;
+  const hi = Math.max(...pf);
+  const lo = Math.min(...pf);
+  return hi >= 0.995 && lo <= 0.005;
+}
+
 function isTeamOutcomeName(name) {
   const n = String(name || '').trim();
   if (!n) return false;
@@ -58,14 +67,20 @@ function scorePolyMoneylineMarket(market, outcomes, prices) {
   const smt = market.sportsMarketType || '';
   const q = String(market.question || '');
 
+  if (isSettledPolyPricePair(prices)) return -1;
+  if (market.closed) return -1;
+
   if (smt === 'moneyline') score += 120;
   else if (smt === 'child_moneyline') score += 50;
-  else if (!smt) score += 20;
-  else return -1;
+  else if (!smt && /moneyline|match winner|to win/i.test(q)) score += 40;
+  else if (!smt) score += 15;
+  else if (!/moneyline/i.test(smt)) return -1;
 
-  if (/game\s*\d|map\s*\d|kill handicap|odd\/even|o\/u|total/i.test(q)) score -= 80;
-  if (market.closed) score -= 200;
-  if (!prices.every(isLivePolyPrice)) score -= 150;
+  if (/game\s*\d|map\s*\d|kill handicap|odd\/even|o\/u|total|spread|handicap/i.test(q)) score -= 80;
+  const liveCount = prices.filter(isLivePolyPrice).length;
+  if (liveCount === 2) score += 40;
+  else if (liveCount === 1) score += 10;
+  else score -= 30;
   if (!outcomes.every(isTeamOutcomeName)) return -1;
 
   return score;
@@ -187,32 +202,73 @@ async function fetchPolySportsList() {
   return res.json();
 }
 
-async function getPolymarketMatchups(limitPerSeries = 35, maxSports = 28) {
-  const sports = await fetchPolySportsList();
-  const sorted = [...sports].sort((a, b) => {
-    const pa = POLY_PRIORITY_SPORTS.has(a.sport) ? 0 : 1;
-    const pb = POLY_PRIORITY_SPORTS.has(b.sport) ? 0 : 1;
-    if (pa !== pb) return pa - pb;
-    return String(a.sport).localeCompare(String(b.sport));
-  }).slice(0, maxSports);
+async function fetchPolyEventsByTag(tagId, limit = 120) {
+  if (!tagId) return [];
+  const url = `${SITE_CONFIG.GAMMA_API}/events?tag_id=${encodeURIComponent(tagId)}&active=true&closed=false&limit=${limit}&_t=${Date.now()}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+  if (!res.ok) throw new Error(`Polymarket tag API ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
 
+async function fetchPolyEventsBySeries(seriesId, limit = 35) {
+  if (!seriesId) return [];
+  const url = `${SITE_CONFIG.GAMMA_API}/events?series_id=${encodeURIComponent(seriesId)}&active=true&closed=false&limit=${limit}&_t=${Date.now()}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+function mergePolyEventLists(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const event of list || []) {
+      if (!event?.id || seen.has(event.id)) continue;
+      seen.add(event.id);
+      out.push(event);
+    }
+  }
+  return out;
+}
+
+async function getPolymarketMatchups(limitPerSeries = 35, maxSports = 28) {
+  const tagId = SITE_CONFIG.GAMMA_SPORTS_TAG || '100639';
   const allEvents = [];
   const seen = new Set();
 
-  await Promise.all(sorted.map(async (sp) => {
-    if (!sp.series) return;
-    try {
-      const url = `${SITE_CONFIG.GAMMA_API}/events?series_id=${sp.series}&active=true&closed=false&limit=${limitPerSeries}&_t=${Date.now()}`;
-      const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
-      if (!res.ok) return;
-      const events = await res.json();
-      for (const e of events || []) {
-        if (!e?.id || seen.has(e.id)) continue;
-        seen.add(e.id);
-        allEvents.push(e);
-      }
-    } catch (_) {}
-  }));
+  function addEvents(events) {
+    for (const e of events || []) {
+      if (!e?.id || seen.has(e.id)) continue;
+      seen.add(e.id);
+      allEvents.push(e);
+    }
+  }
+
+  try {
+    addEvents(await fetchPolyEventsByTag(tagId, 150));
+  } catch (e) {
+    console.warn('[Poly] tag fetch:', e.message);
+  }
+
+  try {
+    const sports = await fetchPolySportsList();
+    const sorted = [...sports].sort((a, b) => {
+      const pa = POLY_PRIORITY_SPORTS.has(a.sport) ? 0 : 1;
+      const pb = POLY_PRIORITY_SPORTS.has(b.sport) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return String(a.sport).localeCompare(String(b.sport));
+    }).slice(0, maxSports);
+
+    const seriesLists = await Promise.all(
+      sorted.filter((sp) => sp.series).map((sp) => fetchPolyEventsBySeries(sp.series, limitPerSeries))
+    );
+    for (const list of seriesLists) addEvents(list);
+  } catch (e) {
+    console.warn('[Poly] series fetch:', e.message);
+    if (!allEvents.length) throw e;
+  }
 
   return parsePolymarketEvents(allEvents);
 }

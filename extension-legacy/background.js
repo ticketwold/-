@@ -2,6 +2,11 @@
 importScripts('sites_config.js', 'teams.js', 'odds.js', 'poly_api.js');
 
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0';
+const BTI_SEARCH_API_PATHS = [
+  `/api/sportscenter/inplay/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`,
+  `/api/sportscenter/prematch/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`,
+  `/api/sportscenter/highlights/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`
+];
 const BTI_HOST_HINTS = ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'];
 const BTI_EXCLUDED = ['polymarket.com', 'google.com', 'youtube.com'];
 const INJECTABLE_SUFFIXES = [
@@ -209,6 +214,112 @@ async function findLeg2Tab(pref = 'auto') {
   return { id: best.id, url: best.url, site: leg2SiteKey(best.url) };
 }
 
+async function ensureBtiScript(tabId, frameId = null) {
+  try {
+    const target = frameId != null
+      ? { tabId, frameIds: [frameId] }
+      : { tabId, allFrames: true };
+    await chrome.scripting.executeScript({
+      target,
+      files: ['bti_content.js']
+    });
+    return true;
+  } catch (_) {
+    if (frameId == null) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['bti_content.js']
+        });
+        return true;
+      } catch (_2) {}
+    }
+    return false;
+  }
+}
+
+async function scrapeBtiBoardMatchups(tab) {
+  if (!tab?.id) return { matchups: [], source: '' };
+  await ensureBtiScript(tab.id);
+
+  const frames = await getAllTabFrames(tab.id);
+  let best = { matchups: [], source: '', buttonCount: 0 };
+
+  for (const frame of frames) {
+    if (frame.url && !isInjectableBtiFrame(frame.url) && frame.frameId !== 0) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_BOARD' }, { frameId: frame.frameId });
+      if (!res?.events?.length) continue;
+      const matchups = boardEventsToBtiMatchups(res.events);
+      if (matchups.length > best.matchups.length || (res.buttonCount || 0) > best.buttonCount) {
+        best = {
+          matchups,
+          source: 'BTI 배당판',
+          buttonCount: res.buttonCount || 0
+        };
+      }
+    } catch (_) {}
+  }
+
+  return best;
+}
+
+function boardEventsToBtiMatchups(events) {
+  const out = [];
+  const seen = new Set();
+
+  for (const ev of events || []) {
+    const home = ev.homeTeam || '';
+    const away = ev.awayTeam || '';
+    if (!home || !away) continue;
+
+    const key = `${home}|${away}`.toLowerCase();
+    if (seen.has(key)) continue;
+
+    const ml = (ev.moneyline || ev.selections || []).filter((s) => s.marketKind === 'ml' || s.side === 'home' || s.side === 'away');
+    let homeOdds = 0;
+    let awayOdds = 0;
+    for (const sel of ml) {
+      const odds = parseFloat(sel.odds);
+      if (!odds || odds <= 1) continue;
+      if (sel.side === 'home' || sel.side === 'h') homeOdds = odds;
+      if (sel.side === 'away' || sel.side === 'a') awayOdds = odds;
+    }
+    if (!homeOdds || !awayOdds) continue;
+
+    seen.add(key);
+    out.push({
+      id: ev.eventId || key,
+      home,
+      away,
+      source: 'board',
+      markets: [{
+        MarketType: { _id: 'ML0' },
+        Selections: [
+          { Side: 'H', Name: home, Price: homeOdds },
+          { Side: 'A', Name: away, Price: awayOdds }
+        ]
+      }]
+    });
+  }
+
+  return out;
+}
+
+function mergeBtiMatchupLists(primary, secondary) {
+  if (!secondary?.length) return primary || [];
+  if (!primary?.length) return secondary;
+  const out = [...primary];
+  const seen = new Set(primary.map((m) => `${m.home}|${m.away}`.toLowerCase()));
+  for (const row of secondary) {
+    const key = `${row.home}|${row.away}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
 async function ensurePredictionScript(tabId, frameId = null) {
   try {
     const target = frameId != null
@@ -333,22 +444,7 @@ function parseBtiOdds(markets) {
   return result;
 }
 
-async function getBtiLiveMatchups(tabId) {
-  const tab = tabId ? { id: tabId } : await pickBtiTab();
-  if (!tab?.id) return [];
-  let tabUrl = tab.url;
-  if (!tabUrl) {
-    try { tabUrl = (await chrome.tabs.get(tab.id)).url; } catch (_) {}
-  }
-
-  const liveUrl = `/api/sportscenter/inplay/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`;
-  let data = null;
-  try {
-    data = await fetchBtiViaTab(tab.id, liveUrl, tabUrl);
-  } catch (e) {
-    console.warn('[BTI] live API:', e.message);
-  }
-
+function btiEventsToMatchups(data, source = 'api') {
   if (!Array.isArray(data) || !data.length) return [];
 
   const result = [];
@@ -366,13 +462,68 @@ async function getBtiLiveMatchups(tabId) {
       const parts = m0.EventName.split(' vs ');
       if (parts.length >= 2) { home = parts[0].trim(); away = parts[1].trim(); }
     }
-    result.push({ id: event.id, home, away, markets: event.markets, sportId: m0.SportId || 0 });
+    if (!home || !away) continue;
+    result.push({
+      id: event.id,
+      home,
+      away,
+      markets: event.markets,
+      sportId: m0.SportId || 0,
+      source
+    });
   }
   return result;
 }
 
+async function getBtiMatchups(tabId) {
+  const tab = tabId ? { id: tabId } : await pickBtiTab();
+  if (!tab?.id) return { list: [], source: '' };
+
+  let tabUrl = tab.url;
+  if (!tabUrl) {
+    try { tabUrl = (await chrome.tabs.get(tab.id)).url; } catch (_) {}
+  }
+
+  let list = [];
+  const sources = [];
+
+  for (const path of BTI_SEARCH_API_PATHS) {
+    try {
+      const data = await fetchBtiViaTab(tab.id, path, tabUrl);
+      const parsed = btiEventsToMatchups(data, 'api');
+      if (parsed.length) {
+        list = mergeBtiMatchupLists(list, parsed);
+        sources.push(path.includes('inplay') ? '라이브' : path.includes('prematch') ? '프리매치' : '하이라이트');
+      }
+    } catch (e) {
+      console.warn('[BTI] API:', path.split('?')[0], e.message);
+    }
+  }
+
+  if (list.length < 5) {
+    try {
+      const board = await scrapeBtiBoardMatchups(tab);
+      if (board.matchups?.length) {
+        list = mergeBtiMatchupLists(list, board.matchups);
+        if (board.source) sources.push(board.source);
+      }
+    } catch (e) {
+      console.warn('[BTI] board:', e.message);
+    }
+  }
+
+  return { list, source: sources.length ? sources.join(' + ') : '없음' };
+}
+
+async function getBtiLiveMatchups(tabId) {
+  const { list } = await getBtiMatchups(tabId);
+  return list;
+}
+
 function findArbOpportunities(btiList, polyList) {
   const opps = [];
+  let pairsMatched = 0;
+
   for (const bti of btiList) {
     const btiOdds = parseBtiOdds(bti.markets);
     const mlH = btiOdds.ml.find((m) => m.side === 'H' || m.side === 'Home');
@@ -381,6 +532,9 @@ function findArbOpportunities(btiList, polyList) {
 
     for (const poly of polyList) {
       if (!matchupTeamsMatch(bti, poly)) continue;
+      pairsMatched++;
+
+      let best = null;
       for (const pm of poly.ml) {
         if (!pm.decimal) continue;
         const btiHome = teamMatch(pm.team, bti.home);
@@ -392,23 +546,34 @@ function findArbOpportunities(btiList, polyList) {
         else continue;
 
         const profit = calcArb(pm.decimal, oppOdds);
-        if (profit === null || profit < 0) continue;
-        opps.push({
+        const profitVal = profit == null ? -999 : profit;
+        const row = {
           home: bti.home, away: bti.away, league: bti.league || poly.league,
           polyTeam: pm.team, polyOdds: pm.decimal.toFixed(3), polyPrice: pm.price,
-          btiSide, btiOdds: oppOdds, profit: profit.toFixed(2)
-        });
+          btiSide, btiOdds: oppOdds, profit: profitVal.toFixed(2)
+        };
+        if (!best || profitVal > parseFloat(best.profit)) best = row;
       }
+      if (best && parseFloat(best.profit) >= 0) opps.push(best);
     }
   }
-  return opps.sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit));
+
+  return {
+    opportunities: opps.sort((a, b) => parseFloat(b.profit) - parseFloat(a.profit)),
+    pairsMatched
+  };
 }
 
 async function runSearchOnce(leg1Site = 'bti', leg2Pref = 'auto') {
   const btiTab = await pickBtiTab();
   let btiAll = [];
+  let btiSource = '';
   if (btiTab) {
-    try { btiAll = await getBtiLiveMatchups(btiTab.id); } catch (e) {
+    try {
+      const btiRes = await getBtiMatchups(btiTab.id);
+      btiAll = btiRes.list;
+      btiSource = btiRes.source;
+    } catch (e) {
       console.warn('[BTI]', e.message);
     }
   }
@@ -421,12 +586,13 @@ async function runSearchOnce(leg1Site = 'bti', leg2Pref = 'auto') {
     console.warn('[Prediction]', e.message);
   }
 
-  const opps = findArbOpportunities(btiAll, pred.list);
+  const arb = findArbOpportunities(btiAll, pred.list);
   return {
-    opportunities: opps,
+    opportunities: arb.opportunities,
     stats: {
       btiTotal: btiAll.length,
       btiTabFound: !!btiTab,
+      btiSource,
       polyTotal: pred.list.length,
       polyTabFound: !!leg2Tab,
       leg2Pref,
@@ -435,7 +601,8 @@ async function runSearchOnce(leg1Site = 'bti', leg2Pref = 'auto') {
       leg2ApiError: pred.apiError || '',
       bcBoardCount: pred.board?.matchups?.length || 0,
       bcCartFound: pred.cartFound || !!pred.board?.cartSlip?.odds,
-      matched: opps.length
+      pairsMatched: arb.pairsMatched,
+      matched: arb.opportunities.length
     }
   };
 }
