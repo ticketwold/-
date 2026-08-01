@@ -1306,35 +1306,69 @@ async function probePolyMain(tabId) {
   }
 }
 
+async function focusBetTab(tab) {
+  if (!tab?.id) return;
+  try {
+    await chrome.tabs.update(tab.id, { active: true });
+    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    await new Promise((r) => setTimeout(r, 180));
+  } catch (_) {}
+}
+
 async function placePolyBet(polyTab, amountUsd, opts = {}) {
   if (!polyTab?.id) return { success: false, reason: 'Polymarket 탭 없음' };
   const skipFill = !!opts.skipFill;
 
+  await focusBetTab(polyTab);
   await injectPolyMain(polyTab.id);
 
-  try {
+  const runMainBet = async (fast) => {
     const results = await chrome.scripting.executeScript({
       target: { tabId: polyTab.id },
       world: 'MAIN',
-      func: async (amount, fast) => {
+      func: async (amount, useFast) => {
         if (typeof window.__polyMainPlaceBet === 'function') {
-          return await window.__polyMainPlaceBet(amount, { skipFill: fast });
+          return await window.__polyMainPlaceBet(amount, { skipFill: useFast });
         }
         return { success: false, reason: 'MAIN 베팅 스크립트 로드 실패 — 탭 새로고침' };
       },
-      args: [amountUsd, skipFill]
+      args: [amountUsd, fast]
     });
-    const res = results?.[0]?.result;
+    return results?.[0]?.result;
+  };
+
+  let lastErr = null;
+  try {
+    const res = await runMainBet(skipFill);
     if (res?.success) return res;
-    if (res && !res.success && !skipFill) return res;
+    lastErr = res;
+    if (skipFill && res && !res.success) {
+      await setPolyAmount(polyTab, amountUsd);
+      await new Promise((r) => setTimeout(r, 220));
+      const retryRes = await runMainBet(false);
+      if (retryRes?.success) return retryRes;
+      lastErr = retryRes || res;
+    } else if (res && !res.success && !skipFill) {
+      return res;
+    }
   } catch (e) {
     if (!skipFill) return { success: false, reason: `MAIN 베팅 실패: ${e.message}` };
+    lastErr = { success: false, reason: e.message };
   }
 
   await ensurePolyScript(polyTab.id);
   const fallback = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd, skipFill });
   if (fallback?.success) return fallback;
-  return fallback || { success: false, reason: 'Polymarket MAIN 응답 없음' };
+
+  if (skipFill) {
+    await setPolyAmount(polyTab, amountUsd);
+    await new Promise((r) => setTimeout(r, 220));
+    const fallbackFull = await sendPoly(polyTab.id, { type: 'PLACE_BET', amount: amountUsd, skipFill: false });
+    if (fallbackFull?.success) return fallbackFull;
+    return fallbackFull || fallback || lastErr || { success: false, reason: 'Polymarket 배팅 실패' };
+  }
+
+  return fallback || lastErr || { success: false, reason: 'Polymarket MAIN 응답 없음' };
 }
 
 function getBetCooldownMs() {
@@ -1421,7 +1455,10 @@ async function strikeBothSides(ctx) {
   }
 
   log('텐텐뱃 OK → Polymarket 배팅…', 'info');
-  const polyRes = await placePolyBet(found.polyTab, polyUsd, { skipFill: prep.polyOk });
+  await focusBetTab(found.polyTab);
+  const polyResync = await setPolyAmount(found.polyTab, polyUsd);
+  const useSkipFill = prep.polyOk && polyResync?.ok;
+  const polyRes = await placePolyBet(found.polyTab, polyUsd, { skipFill: useSkipFill });
 
   return {
     ok: !!(btiRes.success && polyRes?.success),
@@ -1480,7 +1517,11 @@ async function executeBet(label, options = {}) {
       saveBetPrefs();
     } else {
       log(`✗ 텐텐뱃: ${result.btiRes?.reason || '실패'}`, 'err');
-      log(`✗ ${leg2FullLabel()}: ${result.polyRes?.reason || '실패'}`, 'err');
+      const polyProbe = result.polyRes?.probe;
+      const polyDetail = polyProbe
+        ? ` (${polyProbe.btnText || 'no-btn'} stake=$${polyProbe.stake ?? '?'})`
+        : '';
+      log(`✗ ${leg2FullLabel()}: ${result.polyRes?.reason || '실패'}${polyDetail}`, 'err');
       if (hint) hint.textContent = '배팅 실패 — 로그 확인';
     }
   } catch (e) {
@@ -1832,4 +1873,4 @@ loadBetPrefs();
 bindSitePrefSelectors();
 updateLeg2UiLabels();
 refreshSlips();
-log(`v5.9.4 ${IS_PANEL ? '패널' : '팝업'} — Poly ¢ 우선 배당`, 'info');
+log(`v5.9.5 ${IS_PANEL ? '패널' : '팝업'} — Poly 배팅 안정화`, 'info');

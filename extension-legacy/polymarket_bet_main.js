@@ -283,10 +283,10 @@
       }
 
       let buyBtn = null;
-      for (let i = 0; i < (skipFill ? 8 : 20); i++) {
+      for (let i = 0; i < (skipFill ? 18 : 20); i++) {
         buyBtn = findBuyTeamButton();
         if (buyBtn && !buyBtn.disabled) break;
-        await sleep(skipFill ? 25 : 80);
+        await sleep(skipFill ? 40 : 80);
         buyBtn = null;
       }
 
@@ -301,10 +301,8 @@
 
       const label = btnText(buyBtn);
       robustClick(buyBtn);
-      if (!skipFill) {
-        await sleep(100);
-        robustClick(buyBtn);
-      }
+      await sleep(skipFill ? 80 : 100);
+      robustClick(buyBtn);
 
       const result = await waitBetResult();
       if (!result.confirmed) {

@@ -1418,22 +1418,33 @@ function clickBuyButton(btn) {
   return true;
 }
 
-async function placePolymarketBet(amountUsd) {
+async function placePolymarketBet(amountUsd, opts = {}) {
+  const skipFill = !!opts.skipFill;
   const panel = findTradePanel();
   if (!panel) {
     return { success: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
   }
 
   ensureBuyTabSelected(panel);
-  await sleep(200);
+  if (!skipFill) await sleep(120);
 
   const amount = Math.max(1, Math.round(amountUsd * 100) / 100);
-  const fill = await fillTradeAmount(panel, amount);
+  let fill = { ok: true, method: 'presynced', stake: readAmountFromPanel(panel) };
+
+  if (!skipFill) {
+    fill = await fillTradeAmount(panel, amount);
+  } else {
+    const existing = readAmountFromPanel(panel);
+    if (!existing || Math.abs(existing - amount) > 0.2) {
+      fill = await setPolyTradeAmount(amount, true);
+    }
+  }
 
   let btn = null;
   let btnText = '';
-  for (let i = 0; i < 25; i++) {
-    await sleep(100);
+  const tries = skipFill ? 15 : 25;
+  for (let i = 0; i < tries; i++) {
+    await sleep(skipFill ? 50 : 100);
     btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
     if (btn) {
       btnText = (btn.textContent || '').trim();
@@ -1601,7 +1612,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return true;
   }
   if (msg.type === 'PLACE_BET') {
-    placePolymarketBet(msg.amount).then(sendResponse);
+    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill }).then(sendResponse);
     return true;
   }
 });
