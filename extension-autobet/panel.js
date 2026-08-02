@@ -223,6 +223,9 @@ function stabilizeSnap(snap, cfg) {
   if (snap.polyO > 1) {
     lastKnownOdds.polyO = snap.polyO;
     lastKnownOdds.polyAt = now;
+  } else if (snap.reason && /BC\.Game 배당 없음/.test(snap.reason)) {
+    lastKnownOdds.polyO = null;
+    lastKnownOdds.polyAt = 0;
   } else if (lastKnownOdds.polyO > 1 && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
   }
@@ -605,8 +608,9 @@ $('scanBtn')?.addEventListener('click', async () => {
     if (snap.btiO > 1) logLine(`${leg1Label()} ${snap.btiO.toFixed(3)}`, 'ok');
     else logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
     if (snap.polyO > 1) {
+      const kind = snap.poly?.sourceKind ? ` [${snap.poly.sourceKind}]` : '';
       const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
-      logLine(`BC.Game ${cents}${snap.polyO.toFixed(3)}`, 'ok');
+      logLine(`BC.Game${kind} ${cents}${snap.polyO.toFixed(3)}`, 'ok');
     } else {
       if (snap.found?.polyTab?.id) {
         try {
@@ -719,4 +723,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.4 — BC.Game 슬립 우선(iframe/¢ 스캔 제거)', 'info');
+logLine('v1.4.5 — BC 슬립 body텍스트 파싱(210/100→2.1)', 'info');

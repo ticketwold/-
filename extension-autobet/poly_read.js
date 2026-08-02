@@ -366,7 +366,7 @@ function scorePolySlip(slip) {
   else if (slip.fromPayout && !slip.pendingToWin) score += 200;
   else if (slip.sourceKind === 'sports-slip') score += 240;
   else if (slip.sourceKind === 'sports-board' || slip.sourceKind === 'sports-text') score += 180;
-  else if (slip.liveCents) score += 150;
+  else if (slip.liveCents || slip.source === 'poly-scrape') score += 40;
   if (slip.stake > 0) score += 30;
   if (slip.pendingToWin) score -= 40;
   return score;
@@ -378,27 +378,41 @@ async function readPolySlipFromApi(polyTab) {
 
 async function readBcSportsNativeSlip(polyTab) {
   if (!polyTab?.id) return null;
-  const frameId = 0;
-  await Promise.all([
-    ensurePolyScript(polyTab.id, frameId),
-    ensureBcScrapeScript(polyTab.id, frameId)
-  ]);
+  const frames = await getAllFrames(polyTab.id);
+  const frameIds = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)].slice(0, 8);
 
-  const [deep, msgRes] = await Promise.all([
-    injectReadBcSportsDeep(polyTab.id, frameId),
-    withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2500, 'BC슬립').catch(() => null)
-  ]);
+  let best = null;
+  for (const frameId of frameIds) {
+    await Promise.all([
+      ensurePolyScript(polyTab.id, frameId),
+      ensureBcScrapeScript(polyTab.id, frameId)
+    ]);
 
-  const candidates = [];
-  if (deep?.odds > 1.01 && !deep._fail) candidates.push(deep);
-  if (msgRes?.slip?.odds > 1.01) candidates.push(msgRes.slip);
-  if (!candidates.length) return null;
+    const [deep, msgRes] = await Promise.all([
+      injectReadBcSportsDeep(polyTab.id, frameId),
+      withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2500, 'BC슬립').catch(() => null)
+    ]);
 
-  candidates.sort((a, b) => scorePolySlip(b) - scorePolySlip(a));
-  const best = normalizePolySlip(candidates[0]);
-  if (best.sourceKind === 'bc-native-slip' || best.sourceKind === 'sports-slip' || best.fromPayout || best.stake > 0) {
-    lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-    return { ...best, frameId };
+    const candidates = [];
+    if (deep?.odds > 1.01 && !deep._fail) candidates.push(deep);
+    if (msgRes?.slip?.odds > 1.01) candidates.push(msgRes.slip);
+    if (!candidates.length) continue;
+
+    candidates.sort((a, b) => scorePolySlip(b) - scorePolySlip(a));
+    const pick = normalizePolySlip(candidates[0]);
+    const s = scorePolySlip(pick);
+    if (s > (best?._score ?? -1)) {
+      best = { ...pick, frameId, _score: s };
+    }
+    if (pick.sourceKind === 'bc-native-slip' || pick.fromPayout) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+      return best;
+    }
+  }
+
+  if (best?.odds > 1.01) {
+    lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
+    return best;
   }
   return null;
 }
@@ -415,7 +429,8 @@ async function readPolyOddsOnce(polyTab) {
     const iframeSlip = await readBcLeg2FromBtiFrames(polyTab).catch(() => null);
     if (iframeSlip?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, iframeSlip);
 
-    return mergePolySlipWithCache(polyTab.id, null);
+    polyOddsCache.delete(polyTab.id);
+    return null;
   }
 
   const frames = await getAllFrames(polyTab.id);
