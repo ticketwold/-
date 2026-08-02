@@ -10,7 +10,7 @@ let config = {
   leg2: 'bcgame',
   btiBetKrw: 10000,
   usdRate: 1400,
-  cooldownMs: 8000,
+  cooldownMs: 0,
   useArbBotBridge: true,
   preSyncAmount: true
 };

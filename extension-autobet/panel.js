@@ -2,7 +2,11 @@
 
 const SNAP_TIMEOUT_MS = 20000;
 const ODDS_POLL_MS = 250;
-const AMOUNT_SYNC_INTERVAL_MS = 200;
+const ODDS_POLL_ARMED_MS = 60;
+const AMOUNT_SYNC_INTERVAL_MS = 120;
+const AMOUNT_SYNC_ARMED_MS = 80;
+const PANEL_LOOP_MS = 400;
+const PANEL_LOOP_ARMED_MS = 16;
 const ODDS_GAP_FILL_MS = 5000;
 
 const $ = (id) => document.getElementById(id);
@@ -26,6 +30,7 @@ let btiSlipEverOpen = false;
 let pendingStrike = null;
 let liveSnap = { ok: false };
 let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0, polyTrusted: false };
+let lastProfitStrikeKey = '';
 
 function logLine(text, cls = '') {
   const el = $('log');
@@ -52,7 +57,7 @@ function getConfig() {
     btiBetKrw: parseInt($('btiBet').value, 10) || 10000,
     usdRate: parseFloat($('usdRate').value) || 1400,
     leg2: $('leg2Site').value || 'bcgame',
-    cooldownMs: parseInt($('cooldownMs').value, 10) || 8000,
+    cooldownMs: parseInt($('cooldownMs').value, 10) || 0,
     useArbBotBridge: $('useBridge').checked,
     preSyncAmount: $('preSync').checked
   };
@@ -125,7 +130,7 @@ async function retryPendingStrike() {
     return;
   }
 
-  const ready = await verifyStrikeReady(snap.found, snap.hint || {}, snap.poly);
+  const ready = await verifyStrikeReady(snap.found, snap.hint || {}, snap.poly, { fast: !!polyPreSynced });
   if (!ready.ok) return;
 
   const label = pendingStrike.label || 'panel';
@@ -304,6 +309,27 @@ async function updateBtiSlipPauseState() {
   }
 }
 
+async function maybeStrikeOnSnap(snap, cfg, label = 'instant') {
+  if (!armedLocal || strikeLock || haltAutoBet || panelLoopBusy || !snap?.ok) return false;
+  if (snap.profit == null || snap.btiO == null || snap.polyO == null) return false;
+  if (typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(snap.poly)) return false;
+  if (snap.profit < cfg.minProfit) return false;
+  if (btiSlipPaused) return false;
+  if (Date.now() - lastStrikeAt < cfg.cooldownMs) return false;
+
+  const strikeKey = `${snap.btiO.toFixed(3)}_${snap.polyO.toFixed(3)}_${cfg.minProfit}`;
+  if (strikeKey === lastProfitStrikeKey) return false;
+
+  if (cfg.preSyncAmount && !polyPreSynced && snap.polyUsd > 0) {
+    amountSyncQueued = true;
+    return false;
+  }
+
+  lastProfitStrikeKey = strikeKey;
+  executeStrike(snap, cfg, label);
+  return true;
+}
+
 async function refreshOddsLive() {
   if (oddsReadBusy || strikeLock) return;
   oddsReadBusy = true;
@@ -319,6 +345,9 @@ async function refreshOddsLive() {
     updateStatusFromSnap(snap, cfg);
     if (snap.btiO > 1 && snap.polyO > 1 && needsAmountResync(snap, cfg)) {
       amountSyncQueued = true;
+    }
+    if (armedLocal && !haltAutoBet && snap.profit != null && snap.profit >= cfg.minProfit) {
+      maybeStrikeOnSnap(snap, cfg, 'instant');
     }
   } catch (e) {
     if (e.message) $('statusHint').textContent = e.message;
@@ -429,6 +458,9 @@ async function liveAmountSync(force) {
     if (polyPreSynced) {
       $('statusHint').textContent = `동기화 OK — ${leg2PrefLabel(cfg.leg2)} $${snap.polyUsd.toFixed(2)} · ${leg1Label()} ${cfg.btiBetKrw.toLocaleString()}원`;
       lastPolySyncErr = '';
+      if (armedLocal && snap.profit != null && snap.profit >= cfg.minProfit) {
+        maybeStrikeOnSnap(snap, cfg, 'sync-ready');
+      }
     } else if (!polyRes?.ok) {
       const detail = polyRes?.inputVal && polyRes?.stake && Math.abs(polyRes.inputVal - polyRes.stake) > 0.2
         ? ` (입력 ${polyRes.inputVal} ≠ 총베팅 ${polyRes.stake})`
@@ -460,7 +492,7 @@ async function executeStrike(snap, cfg, label) {
     return;
   }
 
-  const ready = await verifyStrikeReady(snap.found, snap.hint || {}, snap.poly);
+  const ready = await verifyStrikeReady(snap.found, snap.hint || {}, snap.poly, { fast: polyPreSynced });
   if (!ready.ok) {
     if (ready.btiClosed || /슬립 닫힘|슬립 미준비/.test(ready.reason || '')) {
       queuePendingStrike(snap, cfg, label);
@@ -497,7 +529,9 @@ async function executeStrike(snap, cfg, label) {
         hint: snap.hint || {},
         poly: snap.poly,
         btiBetKrw: cfg.btiBetKrw,
-        polyPreSynced
+        polyPreSynced,
+        fastStrike: polyPreSynced,
+        gate: ready
       }),
       90000,
       '배팅'
@@ -508,6 +542,10 @@ async function executeStrike(snap, cfg, label) {
       logLine(`  ${leg1Label()}: ${result.btiRes?.btnText || result.btiRes?.reason || 'OK'}`, 'ok');
       logLine(`  ${leg2PrefLabel(cfg.leg2)}: ${result.polyRes?.btnText || result.polyRes?.method || result.polyRes?.reason || 'OK'}`, 'ok');
       disarmAfterStrike('배팅 성공 — 자동 해제');
+    } else if (result.oneSided) {
+      logLine(`⚠️ 한쪽만 배팅됨 — 수동 확인`, 'err');
+      logLine(`  ${leg1Label()}: ${result.btiRes?.success ? 'OK' : (result.btiRes?.reason || '실패')}`, 'err');
+      logLine(`  ${leg2PrefLabel(cfg.leg2)}: ${result.polyRes?.success ? 'OK' : (result.polyRes?.reason || '실패')}`, 'err');
     } else if (result.oneSidedPrevented) {
       logLine(`⛔ BC 실패 — 텐텐뱃 배팅 차단됨`, 'err');
       logLine(`  BC: ${result.polyRes?.reason || result.polyRes?.btnText || '실패'}`, 'err');
@@ -569,7 +607,9 @@ async function panelLoop() {
     if (btiSlipPaused) return;
 
     if (cfg.preSyncAmount && !polyPreSynced && snap.polyUsd > 0) {
+      amountSyncQueued = true;
       await liveAmountSync(true);
+      if (!polyPreSynced) return;
     }
 
     if (!armedLocal || haltAutoBet || strikeLock) return;
@@ -596,9 +636,15 @@ function arm(armed) {
       setArmedUi(res.armed);
       logLine(armed ? '무장 — 수익 구간 시 1회 배팅 후 자동 해제' : '해제', armed ? 'strike' : 'info');
       if (armed) {
+        lastProfitStrikeKey = '';
         amountSyncQueued = true;
         refreshOddsLive();
         liveAmountSync(true);
+        getSnap(getConfig()).then((snap) => {
+          if (!snap?.found) return;
+          const cfg = getConfig();
+          prewarmTabs(snap.found.btiTab, snap.found.polyTab, snap.hint, cfg.btiBetKrw, snap.polyUsd || 0).catch(() => {});
+        });
       }
     }
   });
@@ -741,6 +787,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     amountSyncQueued = true;
     refreshOddsLive();
     if ($('preSync')?.checked) liveAmountSync(true);
+    if (armedLocal && liveSnap?.ok) {
+      maybeStrikeOnSnap(liveSnap, getConfig(), 'odds-event');
+    }
   }
   if (msg.type === 'BTI_STAKE_CHANGED') {
     lastSynced.at = 0;
@@ -763,11 +812,16 @@ chrome.storage.local.get('autoBetLog', (data) => {
 
 setInterval(() => {
   if (armedLocal && !haltAutoBet) updateBtiSlipPauseState();
-}, 500);
-setInterval(refreshOddsLive, ODDS_POLL_MS);
+}, 200);
+setInterval(() => {
+  if (armedLocal) refreshOddsLive();
+}, ODDS_POLL_ARMED_MS);
+setInterval(() => {
+  if (!armedLocal) refreshOddsLive();
+}, ODDS_POLL_MS);
 setInterval(() => {
   if ($('preSync')?.checked || armedLocal) liveAmountSync(false);
-}, AMOUNT_SYNC_INTERVAL_MS);
-setInterval(panelLoop, 400);
+}, AMOUNT_SYNC_ARMED_MS);
+setInterval(panelLoop, PANEL_LOOP_ARMED_MS);
 
 logLine(`v${chrome.runtime.getManifest().version} — BetBy(sptsportscdn) 슬립 읽기`, 'info');

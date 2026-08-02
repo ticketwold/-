@@ -974,8 +974,8 @@ function findBtiConfirmButton() {
 
 function confirmBtiBet(fast = false) {
   return new Promise((resolve) => {
-    const MAX_WAIT = fast ? 3500 : 8000;
-    const INTERVAL = fast ? 80 : 150;
+    const MAX_WAIT = fast ? 2500 : 8000;
+    const INTERVAL = fast ? 35 : 150;
     let elapsed = 0;
     function slipRemaining() {
       return getRealSlipCards().length;
@@ -1167,8 +1167,8 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     }
 
     let betBtn = null;
-    const btnTries = hint.fastStrike ? 3 : (force ? 8 : 30);
-    const btnDelay = hint.fastStrike ? 10 : (force ? 25 : 50);
+    const btnTries = hint.fastStrike ? 2 : (force ? 8 : 30);
+    const btnDelay = hint.fastStrike ? 5 : (force ? 25 : 50);
     for (let i = 0; i < btnTries; i++) {
       await new Promise((r) => setTimeout(r, btnDelay));
       betBtn = findBtiBetButton();

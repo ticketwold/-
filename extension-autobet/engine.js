@@ -706,16 +706,21 @@ async function probePolyStrikeUi(polyTab) {
   return res?.probe || null;
 }
 
-async function verifyStrikeReady(found, hint = {}, poly = null) {
+async function verifyStrikeReady(found, hint = {}, poly = null, opts = {}) {
   if (!found?.btiTab?.id || !found?.polyTab?.id) {
     return { ok: false, reason: '탭 없음', btiClosed: false };
   }
+  const fast = !!opts.fast;
   const polyTeam = poly?.teamLabel || poly?.outcome || hint?.polyTeam || hint?.excludeTeam || '';
-  const [btiUi, polyProbe, freshPoly] = await Promise.all([
+  const probes = [
     checkBtiSlipUi(found.btiTab),
-    probePolyStrikeUi(found.polyTab),
-    readPolyOddsOnce(found.polyTab)
-  ]);
+    probePolyStrikeUi(found.polyTab)
+  ];
+  if (!fast) probes.push(readPolyOddsOnce(found.polyTab));
+  const results = await Promise.all(probes);
+  const btiUi = results[0];
+  const polyProbe = results[1];
+  const freshPoly = fast ? null : results[2];
 
   if (!btiUi?.strikeReady) {
     const closed = !btiUi?.probe?.hasInput || btiUi?.reason === '슬립 닫힘';
@@ -1045,13 +1050,15 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
 }
 
 async function strikeBothSides(ctx) {
-  const { found, btiO, polyO, polyUsd, hint, btiBetKrw, polyPreSynced, poly } = ctx;
+  const { found, btiO, polyO, polyUsd, hint, btiBetKrw, polyPreSynced, poly, gate: passedGate } = ctx;
   const t0 = performance.now();
   const polyTeam = poly?.teamLabel || poly?.outcome || hint?.polyTeam || hint?.excludeTeam || '';
-  const fast = !!polyPreSynced;
+  const fast = !!(polyPreSynced || ctx.fastStrike);
   const strikeHint = { ...hint, forArbPick: true };
 
-  const gate = await verifyStrikeReady(found, hint, poly);
+  const gate = passedGate?.ok
+    ? passedGate
+    : await verifyStrikeReady(found, hint, poly, { fast });
   if (!gate.ok) {
     return {
       ok: false,
@@ -1083,35 +1090,26 @@ async function strikeBothSides(ctx) {
   }
 
   const btiHint = { ...strikeHint, forceBet: true, skipEnsure: fast, fastStrike: fast };
-
-  // BC 먼저 — 실패 시 텐텐뱃 배팅 안 함 (한쪽 배팅 방지)
-  const polyRes = await withTimeout(
-    placePolyBet(found.polyTab, polyUsd, { skipFill: fast, fastStrike: fast, teamHint: polyTeam }),
-    25000,
-    'BC.Game 배팅'
-  ).catch((e) => ({ success: false, reason: e.message }));
-
-  if (!polyRes?.success) {
-    return {
-      ok: false,
-      btiRes: { success: false, reason: '텐텐뱃 배팅 안 함 (BC 실패)', skipped: true },
-      polyRes,
-      elapsedMs: Math.round((performance.now() - t0) * 100) / 100,
-      oneSidedPrevented: true
-    };
-  }
-
-  const btiRes = await withTimeout(
+  const polyOpts = { skipFill: fast, fastStrike: fast, teamHint: polyTeam };
+  const btiPromise = withTimeout(
     placeBtiBet(found.btiTab, btiBetKrw, btiO || strikePoly?.odds || null, btiHint),
     25000,
     '텐텐뱃 배팅'
   ).catch((e) => ({ success: false, reason: e.message }));
+  const polyPromise = withTimeout(
+    placePolyBet(found.polyTab, polyUsd, polyOpts),
+    25000,
+    'BC.Game 배팅'
+  ).catch((e) => ({ success: false, reason: e.message }));
+
+  const [btiRes, polyRes] = await Promise.all([btiPromise, polyPromise]);
 
   return {
     ok: !!(btiRes?.success && polyRes?.success),
     btiRes,
     polyRes,
-    elapsedMs: Math.round((performance.now() - t0) * 100) / 100
+    elapsedMs: Math.round((performance.now() - t0) * 100) / 100,
+    oneSided: !!(btiRes?.success !== polyRes?.success)
   };
 }
 

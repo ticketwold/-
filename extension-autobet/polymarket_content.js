@@ -630,6 +630,9 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
   const teamHint = opts.teamHint || '';
 
   if (!findBcSportsStakeInput()) {
+    if (fastStrike) {
+      return { success: false, reason: '베팅슬립 없음', probe: probeBcSportsUi() };
+    }
     const ready = await ensureBcSportsSlip(teamHint);
     if (!ready.ok) return { success: false, reason: ready.reason || '베팅슬립 없음', probe: ready.probe };
   }
@@ -638,6 +641,12 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
   if (!skipFill) {
     const fill = await setBcSportsAmount(amount, true);
     if (!fill.ok) return { success: false, reason: fill.reason || '금액 입력 실패', probe: probeBcSportsUi() };
+  } else if (fastStrike) {
+    const existing = readBcSportsStake();
+    if (!existing || Math.abs(existing - amount) > 0.2) {
+      const fill = await setBcSportsAmount(amount, true);
+      if (!fill.ok) return { success: false, reason: fill.reason || '금액 입력 실패' };
+    }
   } else {
     const existing = readBcSportsStake();
     if (!existing || Math.abs(existing - amount) > 0.2) {
@@ -647,9 +656,9 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
   }
 
   let btn = null;
-  const tries = (skipFill || fastStrike) ? 6 : 20;
+  const tries = fastStrike ? 4 : (skipFill ? 6 : 20);
   for (let i = 0; i < tries; i++) {
-    await sleep((skipFill || fastStrike) ? 25 : 100);
+    if (i > 0) await sleep(fastStrike ? 6 : (skipFill ? 25 : 100));
     btn = findBcSportsBetButton();
     if (btn && !btn.disabled) break;
     btn = null;
@@ -660,12 +669,12 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
 
   const btnText = (btn.textContent || '').trim();
   clickBuyButton(btn);
-  await sleep(fastStrike ? 150 : 350);
+  await sleep(fastStrike ? 20 : 350);
 
   const acceptBtn = findBcSportsBetButton();
   if (acceptBtn && acceptBtn !== btn && /배당|수락|accept/i.test(acceptBtn.textContent || '')) {
     clickBuyButton(acceptBtn);
-    await sleep(200);
+    await sleep(fastStrike ? 40 : 200);
   }
 
   const modalBtn = findModalActionButton();
@@ -673,7 +682,7 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
 
   const result = await waitAfterBuyClick(null, btn);
   result.btnText = btnText.slice(0, 60);
-  result.method = 'sports';
+  result.method = fastStrike ? 'sports-fast' : 'sports';
   return result;
 }
 
