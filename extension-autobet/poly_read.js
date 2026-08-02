@@ -454,7 +454,10 @@ function isTrustedBcSlip(slip) {
   if (!(slip?.odds > 1.01)) return false;
   const kind = slip.sourceKind || '';
   if (kind === 'sports-text') return false;
-  if (slip.fromPayout && slip.stake > 0) return true;
+  const confirmed = slip.fromPayout && slip.stake > 0;
+  if (slip.odds > 7 && !confirmed) return false;
+  if (slip.odds > 5.5 && !confirmed && (kind === 'sports-board-selected' || slip.method === 'board-selected')) return false;
+  if (confirmed) return true;
   if (kind === 'bc-native-slip' || kind === 'bc-api' || kind === 'sports-slip') return true;
   if (kind === 'sports-board-selected' || slip.method === 'board-selected') return true;
   if (kind === 'sports-board') return slip.selected === true;
@@ -464,7 +467,7 @@ function isTrustedBcSlip(slip) {
 function scorePolySlip(slip) {
   slip = normalizePolySlip(slip);
   if (!(slip?.odds > 1)) return -1;
-  let score = slip.odds;
+  let score = 0;
   if (slip.sourceKind === 'bc-native-slip') score += 300;
   else if (slip.sourceKind === 'bc-api') score += 280;
   else if (slip.sourceKind === 'sports-board-selected') score += 260;
@@ -473,8 +476,12 @@ function scorePolySlip(slip) {
   else if (slip.sourceKind === 'sports-board') score += 40;
   else if (slip.sourceKind === 'sports-text') score -= 500;
   else if (slip.liveCents || slip.source === 'poly-scrape') score += 40;
+  if (slip.fromPayout && slip.stake > 0) score += 150;
   if (slip.stake > 0) score += 30;
   if (slip.pendingToWin) score -= 40;
+  if (slip.odds > 8 && !slip.fromPayout) score -= 200;
+  else if (slip.odds > 5.5 && !slip.fromPayout) score -= 80;
+  if (slip.odds >= 1.05 && slip.odds <= 3.5) score += 15;
   return score;
 }
 

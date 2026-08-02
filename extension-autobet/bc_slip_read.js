@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 6;
+  const VER = 7;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -72,6 +72,36 @@
   function po(t) {
     const n = parseFloat(String(t || '').replace(/,/g, '').trim());
     return Number.isFinite(n) && n > 1.01 && n < 100 ? n : null;
+  }
+
+  /** 슬립 텍스트에서 단일 배당 추출 — 보드의 12.1 같은 오탐 대신 1.31 같은 실제 슬립 배당 우선 */
+  function pickBestSlipOdds(text, opts) {
+    const stake = opts?.stake || 0;
+    const payout = opts?.payout || 0;
+    const maxSingle = opts?.maxSingle ?? 5.5;
+    const t = String(text || '');
+
+    const labeled = [
+      t.match(/(?:total\s*odds?|combined\s*odds?)\s*[:@=]?\s*(\d+\.\d{2,3})/i),
+      t.match(/(?:^|[^\d])@\s*(\d+\.\d{2,3})\b/i),
+      t.match(/(?:coefficient|decimal\s*odds?)\s*[:@=]?\s*(\d+\.\d{2,3})/i),
+      t.match(/(?:odds?)\s*[:@]\s*(\d+\.\d{2,3})/i)
+    ].map((m) => (m ? po(m[1]) : null)).filter(Boolean);
+    if (labeled.length) return labeled[0];
+
+    const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
+    const nums = [...t.matchAll(/\b(\d+\.\d{1,3})\b/g)]
+      .map((x) => po(x[1]))
+      .filter((n) => n && !skip.has(n) && Math.abs(n - stake) > 0.4);
+    if (!nums.length) return null;
+
+    const plausible = nums.filter((n) => n >= 1.01 && n <= maxSingle);
+    if (plausible.length) return Math.min(...plausible);
+
+    const sportsRange = nums.filter((n) => n >= 1.01 && n < 20);
+    if (sportsRange.length) return Math.min(...sportsRange);
+
+    return nums[nums.length - 1];
   }
 
   function hasSlipMarkers(raw) {
@@ -158,13 +188,7 @@
         if (odds) break;
       }
     }
-    if (!odds) {
-      const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
-      const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-        .map((x) => po(x[1]))
-        .filter((n) => n && n < 20 && !skip.has(n) && Math.abs(n - stake) > 0.4);
-      if (nums.length) odds = nums[nums.length - 1];
-    }
+    if (!odds) odds = pickBestSlipOdds(text, { stake, payout });
 
     if (!(odds > 1.01)) return null;
 
@@ -335,7 +359,7 @@
       candidates.push({ odds, txt: txt.slice(0, 80), selected: true });
     }, 0);
     if (!candidates.length) return null;
-    candidates.sort((a, b) => b.odds - a.odds);
+    candidates.sort((a, b) => a.odds - b.odds);
     const sel = candidates[0];
     return {
       odds: sel.odds,
@@ -411,9 +435,7 @@
     if (!bestPanel) return null;
     const parsed = parseSlipText((bestPanel.innerText || bestPanel.textContent || '').replace(/\s+/g, ' '));
     if (!parsed) {
-      const nums = [...String(bestPanel.textContent || '').matchAll(/\b(\d+\.\d{2,3})\b/g)]
-        .map((m) => po(m[1])).filter(Boolean);
-      const odds = nums.find((n) => n > 1.15 && n < 20) || nums[nums.length - 1];
+      const odds = pickBestSlipOdds(bestPanel.textContent || '');
       if (!(odds > 1.01)) return null;
       return { odds, teamLabel: '', stake: null, payout: null, method: 'shadow-slip', sourceKind: 'bc-native-slip' };
     }

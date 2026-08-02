@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 10;
+  const SCRAPE_VER = 11;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -48,6 +48,35 @@
     const n = parseFloat(String(t || '').replace(/,/g, '').trim());
     if (!Number.isFinite(n) || n <= 1.01 || n >= 100) return null;
     return n;
+  }
+
+  function pickBestSlipOdds(text, opts) {
+    const stake = opts?.stake || 0;
+    const payout = opts?.payout || 0;
+    const maxSingle = opts?.maxSingle ?? 5.5;
+    const t = String(text || '');
+
+    const labeled = [
+      t.match(/(?:total\s*odds?|combined\s*odds?)\s*[:@=]?\s*(\d+\.\d{2,3})/i),
+      t.match(/(?:^|[^\d])@\s*(\d+\.\d{2,3})\b/i),
+      t.match(/(?:coefficient|decimal\s*odds?)\s*[:@=]?\s*(\d+\.\d{2,3})/i),
+      t.match(/(?:odds?)\s*[:@]\s*(\d+\.\d{2,3})/i)
+    ].map((m) => (m ? parseOdds(m[1]) : null)).filter(Boolean);
+    if (labeled.length) return labeled[0];
+
+    const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
+    const nums = [...t.matchAll(/\b(\d+\.\d{1,3})\b/g)]
+      .map((x) => parseOdds(x[1]))
+      .filter((n) => n && !skip.has(n) && Math.abs(n - stake) > 0.4);
+    if (!nums.length) return null;
+
+    const plausible = nums.filter((n) => n >= 1.01 && n <= maxSingle);
+    if (plausible.length) return Math.min(...plausible);
+
+    const sportsRange = nums.filter((n) => n >= 1.01 && n < 20);
+    if (sportsRange.length) return Math.min(...sportsRange);
+
+    return nums[nums.length - 1];
   }
 
   function parseMoney(t) {
@@ -176,13 +205,7 @@
     const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
     if (afterMap) teamLabel = afterMap[1].trim();
 
-    if (!odds) {
-      const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
-      const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-        .map((x) => parseOdds(x[1]))
-        .filter((n) => n && n < 20 && !skip.has(n) && Math.abs(n - stake) > 0.4);
-      if (nums.length) odds = nums[nums.length - 1];
-    }
+    if (!odds) odds = pickBestSlipOdds(text, { stake, payout });
 
     if (!(odds > 1.01)) return null;
     return { odds, teamLabel, eventText, stake: stake || null, payout: payout || null };
@@ -321,10 +344,7 @@
       let odds = null;
       const om = txt.match(/(?:total\s*odds?|@|odds?\s*[:=])\s*(\d+\.\d{2,3})/i);
       if (om) odds = parseOdds(om[1]);
-      if (!odds) {
-        const nums = [...txt.matchAll(/\b(\d+\.\d{2,3})\b/g)].map((x) => parseOdds(x[1])).filter(Boolean);
-        odds = nums.find((n) => n > 1.15 && n < 20) || nums[0];
-      }
+      if (!odds) odds = pickBestSlipOdds(txt);
       if (odds > 1.01) {
         return {
           odds,
@@ -415,10 +435,12 @@
       return { ok: false, reason: 'no-odds', href, bodyLen, boardCount: 0 };
     }
 
-    const sel = board.find((b) => b.selected);
-    if (!sel) {
+    const selected = board.filter((b) => b.selected);
+    if (!selected.length) {
       return { ok: false, reason: 'no-selection', href, bodyLen, boardCount: board.length };
     }
+    selected.sort((a, b) => a.odds - b.odds);
+    const sel = selected[0];
     return {
       ok: true,
       source: 'bcgame',
