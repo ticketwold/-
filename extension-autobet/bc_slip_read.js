@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 2;
+  const VER = 3;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -12,7 +12,7 @@
   }
 
   function walkNodes(node, visit, depth) {
-    if (!node || depth > 140) return;
+    if (!node || depth > 160) return;
     visit(node, depth);
     if (node.nodeType !== 1) return;
     const sr = openShadow(node);
@@ -20,49 +20,43 @@
     for (const c of node.childNodes) walkNodes(c, visit, depth + 1);
   }
 
-  function getDeepPageText() {
-    const chunks = [];
+  function stripHtml(html) {
+    return String(html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function collectAllText() {
+    const parts = [];
     walkNodes(document.documentElement, (node) => {
       if (node.nodeType === 3) {
         const t = node.textContent?.trim();
-        if (t) chunks.push(t);
+        if (t) parts.push(t);
       }
     }, 0);
-    const deep = chunks.join(' ').replace(/\s+/g, ' ').trim();
-    const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-    return (deep.length >= body.length ? deep : body).normalize('NFKC');
-  }
 
-  function collectStakeFields() {
-    const fields = [];
-    walkNodes(document.documentElement, (node) => {
-      if (node.nodeType !== 1) return;
-      const tag = node.tagName;
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(tag === 'DIV' && node.isContentEditable)) return;
-      const val = String(node.value || node.textContent || node.getAttribute?.('value') || '').trim();
-      const blob = `${val} ${node.placeholder || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''}`;
-      if (/search|검색|email|password/i.test(blob)) return;
-      if (/USDT|usdt|stake|amount|베팅|counter|bet/i.test(blob) || /\d/.test(val)) {
-        fields.push(node);
-      }
-    }, 0);
-    return fields;
-  }
+    const deep = parts.join(' ');
+    const body = document.body?.innerText || '';
+    let html = '';
+    try { html = stripHtml(document.documentElement.innerHTML); } catch (_) {}
 
-  function scopeTextFromField(field) {
-    let parts = [];
-    let el = field;
-    for (let i = 0; i < 18 && el; i++) {
-      const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t) parts.push(t);
-      const sr = openShadow(el);
-      if (sr) {
-        const st = (sr.textContent || '').replace(/\s+/g, ' ').trim();
-        if (st) parts.push(st);
-      }
-      el = el.parentElement || (el.getRootNode?.()?.host || null);
+    const vw = window.innerWidth || 1200;
+    const vh = window.innerHeight || 800;
+    const pointText = [];
+    for (const [x, y] of [[vw - 40, vh * 0.25], [vw - 80, vh * 0.5], [vw - 60, vh * 0.75], [vw - 120, 120], [vw - 100, vh - 80]]) {
+      try {
+        for (const el of document.elementsFromPoint(x, y) || []) {
+          const t = (el.innerText || el.textContent || '').trim();
+          if (t) pointText.push(t);
+        }
+      } catch (_) {}
     }
-    return parts.join(' ').normalize('NFKC');
+
+    const merged = [deep, body, html, pointText.join(' ')].join(' ');
+    return merged.replace(/\s+/g, ' ').normalize('NFKC').trim();
   }
 
   function pm(t) {
@@ -76,11 +70,43 @@
   }
 
   function hasSlipMarkers(raw) {
-    if (/베팅\s*슬립|bet\s*slip|betslip/i.test(raw)) return true;
-    if (/예상\s*당첨/.test(raw) && (/총\s*베팅|USDT/i.test(raw))) return true;
-    if (/베팅하기|place\s*bet/i.test(raw) && /USDT/i.test(raw)) return true;
-    if (/potential\s*win|to\s*win/i.test(raw) && /USDT|stake/i.test(raw)) return true;
+    const t = String(raw || '');
+    if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return true;
+    if (t.includes('당첨') && t.includes('USDT')) return true;
+    if (t.includes('베팅하기') && t.includes('USDT')) return true;
+    if (/예상\s*당첨/.test(t) && /총\s*베팅|USDT/i.test(t)) return true;
+    if (/potential\s*win|to\s*win/i.test(t) && /USDT|stake/i.test(t)) return true;
     return false;
+  }
+
+  function collectStakeFields() {
+    const fields = [];
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(tag === 'DIV' && node.isContentEditable)) return;
+      const val = String(node.value ?? node.textContent ?? node.getAttribute?.('value') ?? '').trim();
+      const blob = `${val} ${node.placeholder || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''}`;
+      if (/search|검색|email|password/i.test(blob)) return;
+      if (/USDT|usdt|stake|amount|베팅|counter|bet/i.test(blob) || /\d/.test(val)) fields.push(node);
+    }, 0);
+    return fields;
+  }
+
+  function scopeTextFromEl(start) {
+    const parts = [];
+    let el = start;
+    for (let i = 0; i < 20 && el; i++) {
+      const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) parts.push(t);
+      const sr = openShadow(el);
+      if (sr) {
+        const st = (sr.textContent || '').replace(/\s+/g, ' ').trim();
+        if (st) parts.push(st);
+      }
+      el = el.parentElement || el.getRootNode?.()?.host || null;
+    }
+    return parts.join(' ').normalize('NFKC');
   }
 
   function parseSlipText(raw) {
@@ -101,11 +127,25 @@
     m = text.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
     if (m) payout = pm(m[1]);
     if (!payout) {
-      m = text.match(/(?:potential\s*win|to\s*win)[^\d]{0,20}([\d,]+(?:\.\d+)?)/i);
+      m = text.match(/(?:potential\s*win|to\s*win)[^\d]{0,30}([\d,]+(?:\.\d+)?)/i);
       if (m) payout = pm(m[1]);
     }
 
     let odds = stake > 0 && payout > stake ? Math.round((payout / stake) * 1000) / 1000 : null;
+    if (!odds) {
+      const usdtAmounts = [...text.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)].map((x) => pm(x[1])).filter((n) => n >= 1);
+      for (const s of usdtAmounts) {
+        for (const p of usdtAmounts) {
+          if (p > s && p / s < 20) {
+            odds = Math.round((p / s) * 1000) / 1000;
+            if (!stake) stake = s;
+            if (!payout) payout = p;
+            break;
+          }
+        }
+        if (odds) break;
+      }
+    }
     if (!odds) {
       const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
       const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
@@ -120,68 +160,141 @@
     const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,40}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
     if (afterMap) teamLabel = afterMap[1].trim();
 
-    return {
-      odds,
-      stake: stake || null,
-      payout: payout || null,
-      teamLabel,
-      fromPayout: !!(stake > 0 && payout > stake)
-    };
+    return { odds, stake: stake || null, payout: payout || null, teamLabel, fromPayout: !!(stake > 0 && payout > stake) };
+  }
+
+  function readViaBetButton() {
+    let hit = null;
+    walkNodes(document.documentElement, (node) => {
+      if (hit || node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (tag !== 'BUTTON' && tag !== 'A' && node.getAttribute?.('role') !== 'button') return;
+      const t = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t !== '베팅하기' && !/^place\s*bet$/i.test(t)) return;
+      const parsed = parseSlipText(scopeTextFromEl(node));
+      if (parsed) hit = { ...parsed, method: 'bet-btn' };
+    }, 0);
+    return hit;
   }
 
   function readViaStakeInputs() {
-    const fields = collectStakeFields();
-    for (const field of fields) {
-      const scope = scopeTextFromField(field);
-      if (!hasSlipMarkers(scope) && !/USDT/i.test(scope)) continue;
-      const parsed = parseSlipText(scope);
+    for (const field of collectStakeFields()) {
+      const parsed = parseSlipText(scopeTextFromEl(field));
       if (parsed) return { ...parsed, method: 'stake-input' };
     }
     return null;
   }
 
+  function readFromStorage() {
+    for (const store of [localStorage, sessionStorage]) {
+      try {
+        for (let i = 0; i < store.length; i++) {
+          const v = store.getItem(store.key(i)) || '';
+          if (!/bet|slip|stake|odds|selection|betslip|USDT/i.test(v)) continue;
+          let stake = 0;
+          let payout = 0;
+          let odds = null;
+          const sm = v.match(/"(?:stake|betAmount|amount)"\s*:\s*([\d.]+)/i);
+          if (sm) stake = parseFloat(sm[1]);
+          const pm2 = v.match(/"(?:payout|win|toWin|potentialWin)"\s*:\s*([\d.]+)/i);
+          if (pm2) payout = parseFloat(pm2[1]);
+          const om = v.match(/"(?:odds|price|coefficient)"\s*:\s*([\d.]+)/i);
+          if (om) odds = po(om[1]);
+          if (!odds && stake > 0 && payout > stake) odds = Math.round((payout / stake) * 1000) / 1000;
+          if (odds > 1.01) return { odds, stake: stake || null, payout: payout || null, method: 'storage' };
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function scanWindowGlobals() {
+    try {
+      for (const key of Object.keys(window)) {
+        if (!/bet|slip|sport|stake|odd|wager/i.test(key)) continue;
+        let val = window[key];
+        if (val == null) continue;
+        let s = '';
+        try { s = typeof val === 'string' ? val : JSON.stringify(val); } catch (_) { continue; }
+        if (s.length > 20000) s = s.slice(0, 20000);
+        const parsed = parseSlipText(s) || (() => {
+          const om = s.match(/"odds"\s*:\s*([\d.]+)/);
+          const sm = s.match(/"stake"\s*:\s*([\d.]+)/);
+          const pm2 = s.match(/"payout"\s*:\s*([\d.]+)/);
+          if (!om) return null;
+          const odds = po(om[1]);
+          if (!odds) return null;
+          const stake = sm ? parseFloat(sm[1]) : 0;
+          const payout = pm2 ? parseFloat(pm2[1]) : 0;
+          return { odds, stake: stake || null, payout: payout || null, fromPayout: !!(stake && payout > stake) };
+        })();
+        if (parsed?.odds > 1.01) return { ...parsed, method: 'window-' + key };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function walkSameOriginIframes() {
+    for (const iframe of document.querySelectorAll('iframe')) {
+      try {
+        const doc = iframe.contentDocument;
+        if (!doc?.documentElement) continue;
+        const t = (doc.body?.innerText || doc.documentElement.innerText || '').replace(/\s+/g, ' ');
+        const parsed = parseSlipText(t);
+        if (parsed) return { ...parsed, method: 'same-origin-iframe' };
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function markerFlags(raw) {
+    const t = String(raw || '');
+    return {
+      slip: /베팅\s*슬립|betslip/i.test(t),
+      win: t.includes('당첨'),
+      usdt: t.includes('USDT'),
+      betBtn: t.includes('베팅하기')
+    };
+  }
+
   function readNativeSlip() {
     const fields = collectStakeFields();
-    const viaInput = readViaStakeInputs();
-    if (viaInput) {
-      return {
-        ok: true,
-        source: 'bcgame',
-        ...viaInput,
-        outcome: viaInput.teamLabel,
-        selectionText: viaInput.teamLabel,
-        displayLabel: `${viaInput.odds.toFixed(3)}${viaInput.stake > 0 ? ` · ${viaInput.stake} USDT` : ''}`,
-        sourceKind: 'bc-native-slip',
-        hasInput: true,
-        inputCount: fields.length,
-        href: location.href
-      };
+    const strategies = [
+      readViaBetButton,
+      readViaStakeInputs,
+      () => parseSlipText(collectAllText()) && { ...parseSlipText(collectAllText()), method: 'all-text' },
+      walkSameOriginIframes,
+      readFromStorage,
+      scanWindowGlobals
+    ];
+
+    for (const fn of strategies) {
+      const hit = fn();
+      if (hit?.odds > 1.01) {
+        return {
+          ok: true,
+          source: 'bcgame',
+          ...hit,
+          outcome: hit.teamLabel || '',
+          selectionText: hit.teamLabel || '',
+          displayLabel: `${hit.odds.toFixed(3)}${hit.stake > 0 ? ` · ${hit.stake} USDT` : ''}`,
+          sourceKind: 'bc-native-slip',
+          hasInput: fields.length > 0,
+          inputCount: fields.length,
+          href: location.href
+        };
+      }
     }
 
-    const raw = getDeepPageText();
-    const parsed = parseSlipText(raw);
-    if (parsed) {
-      return {
-        ok: true,
-        source: 'bcgame',
-        ...parsed,
-        outcome: parsed.teamLabel,
-        selectionText: parsed.teamLabel,
-        displayLabel: `${parsed.odds.toFixed(3)}${parsed.stake > 0 ? ` · ${parsed.stake} USDT` : ''}`,
-        sourceKind: 'bc-native-slip',
-        hasInput: fields.length > 0,
-        inputCount: fields.length,
-        textLen: raw.length,
-        href: location.href
-      };
-    }
-
+    const raw = collectAllText();
+    const flags = markerFlags(raw);
     return {
       ok: false,
       reason: hasSlipMarkers(raw) ? 'parse-fail' : 'no-slip-text',
       inputCount: fields.length,
       textLen: raw.length,
-      sample: raw.slice(0, 180),
+      flags,
+      sample: raw.slice(0, 200),
       href: location.href
     };
   }

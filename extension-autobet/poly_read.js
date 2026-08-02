@@ -424,17 +424,31 @@ async function injectBcSlipAllFrames(tabId) {
         delete slip.sample;
         delete slip.textLen;
         delete slip.inputCount;
+        delete slip.flags;
         delete slip.href;
         const s = scorePolySlip(slip);
         if (s > (best?._score ?? -1)) best = { ...slip, frameId, _score: s };
-      } else if (!best?.odds && hit?._debug) {
-        best = { _probe: hit, frameId, _score: -1 };
       }
     }
     return best?.odds > 1.01 ? best : null;
-  } catch (e) {
+  } catch (_) {
     return null;
   }
+}
+
+async function readBcSportsNativeSlip(polyTab) {
+  if (!polyTab?.id) return null;
+  await ensurePolyScript(polyTab.id);
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const hit = await injectBcSlipAllFrames(polyTab.id);
+    if (hit?.odds > 1.01) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
+      return hit;
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 350));
+  }
+  return null;
 }
 
 async function probeBcSlipFrames(polyTab) {
@@ -457,10 +471,19 @@ async function probeBcSlipFrames(polyTab) {
       const frame = frames.find((f) => f.frameId === frameId);
       const url = (frame?.url || hit?.href || '').replace(/^https?:\/\//, '').slice(0, 72);
       if (hit?.ok && hit.odds > 1.01) {
-        out.push({ frameId, url, odds: hit.odds, kind: hit.sourceKind || 'bc-native-slip', inputs: hit.inputCount });
+        out.push({ frameId, url, odds: hit.odds, kind: hit.sourceKind || hit.method || 'bc-native-slip', inputs: hit.inputCount });
       } else {
-        const kind = hit?.reason || 'miss';
-        out.push({ frameId, url, odds: null, kind, inputs: hit?.inputCount ?? 0, len: hit?.textLen ?? 0 });
+        const flags = hit?.flags ? ` slip${hit.flags.slip ? 1 : 0} win${hit.flags.win ? 1 : 0} usdt${hit.flags.usdt ? 1 : 0} btn${hit.flags.betBtn ? 1 : 0}` : '';
+        out.push({
+          frameId,
+          url,
+          odds: null,
+          kind: hit?.reason || 'miss',
+          inputs: hit?.inputCount ?? 0,
+          len: hit?.textLen ?? 0,
+          flags,
+          sample: hit?.sample || ''
+        });
       }
     }
     out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
