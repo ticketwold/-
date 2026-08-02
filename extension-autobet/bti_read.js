@@ -16,12 +16,28 @@ async function injectReadBtiFrame(tabId, frameId) {
           return n;
         }
         function isStruck(el) {
-          if (!el) return false;
-          try {
-            const cs = window.getComputedStyle(el);
-            if ((cs.textDecorationLine || '').includes('line-through')) return true;
-          } catch (_) {}
+          if (!el || el.nodeType !== 1) return false;
+          let node = el;
+          for (let depth = 0; depth < 6 && node; depth++) {
+            try {
+              const cs = window.getComputedStyle(node);
+              if ((cs.textDecorationLine || '').includes('line-through')) return true;
+              if ((cs.textDecoration || '').includes('line-through')) return true;
+            } catch (_) {}
+            const cn = String(node.className || '');
+            if (/old|previous|strike|strikethrough|deprecated|crossed|before|was/i.test(cn)) return true;
+            node = node.parentElement;
+          }
           return false;
+        }
+        function collectLeafOdds(el, out) {
+          if (!el || el.nodeType !== 1 || isStruck(el)) return;
+          if (el.children.length) {
+            for (const ch of el.children) collectLeafOdds(ch, out);
+            return;
+          }
+          const o = parseOdds(el.textContent);
+          if (o && o <= 15) out.push(o);
         }
 
         let hasInput = false;
@@ -51,15 +67,19 @@ async function injectReadBtiFrame(tabId, frameId) {
         const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
         const eventText = eventEl?.textContent?.trim() || '';
 
-        for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
-          if (isStruck(sp)) continue;
-          const o = parseOdds(sp.textContent);
-          if (o) return { odds: o, selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
+        const notifOdds = [];
+        for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
+          collectLeafOdds(notif, notifOdds);
         }
+        if (notifOdds.length) {
+          return { odds: notifOdds[notifOdds.length - 1], selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
+        }
+        const classOdds = [];
         for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"]')) {
-          if (isStruck(sp)) continue;
-          const o = parseOdds(sp.textContent);
-          if (o) return { odds: o, selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
+          collectLeafOdds(sp, classOdds);
+        }
+        if (classOdds.length) {
+          return { odds: classOdds[classOdds.length - 1], selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
         }
         const atM = txt.match(/@\s*(\d+(?:\.\d{1,4})?)/);
         if (atM) {

@@ -25,34 +25,60 @@ function parseOddsText(txt) {
 
 function isStruckThrough(el) {
   if (!el || el.nodeType !== 1) return false;
-  try {
-    const cs = window.getComputedStyle(el);
-    if ((cs.textDecorationLine || '').includes('line-through')) return true;
-    if ((cs.textDecoration || '').includes('line-through')) return true;
-  } catch (_) {}
-  const cn = String(el.className || '');
-  if (/old|previous|strike|strikethrough|deprecated|crossed/i.test(cn)) return true;
-  const parent = el.parentElement;
-  if (parent && parent !== el) return isStruckThrough(parent);
+  let node = el;
+  for (let depth = 0; depth < 6 && node; depth++) {
+    try {
+      const cs = window.getComputedStyle(node);
+      if ((cs.textDecorationLine || '').includes('line-through')) return true;
+      if ((cs.textDecoration || '').includes('line-through')) return true;
+      if (cs.opacity && parseFloat(cs.opacity) < 0.45) return true;
+    } catch (_) {}
+    const cn = String(node.className || '');
+    if (/old|previous|strike|strikethrough|deprecated|crossed|before|was|line-through/i.test(cn)) return true;
+    node = node.parentElement;
+  }
   return false;
+}
+
+function looksLikeLineTotal(n, txt) {
+  const t = String(txt || '').trim();
+  if (n > 15) return true;
+  if (n >= 10 && /\.5$/.test(t)) return true;
+  return false;
+}
+
+function collectLeafOdds(el, out, opts = {}) {
+  if (!el || el.nodeType !== 1 || isStruckThrough(el)) return;
+  const kids = el.children;
+  if (kids.length) {
+    for (const ch of kids) collectLeafOdds(ch, out, opts);
+    return;
+  }
+  const text = (el.textContent || '').trim();
+  if (!text) return;
+  const maxOdds = opts.maxOdds ?? 100;
+  const n = parseOddsText(text);
+  if (!n || n >= maxOdds) return;
+  if (opts.rejectLines && looksLikeLineTotal(n, text)) return;
+  out.push(n);
 }
 
 function readOddsFromSlipCard(card) {
   if (!card) return null;
 
-  // 배당 변경 알림 = 현재 적용 배당 (최우선)
-  for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
-    if (isStruckThrough(sp)) continue;
-    const n = parseOddsText(sp.textContent);
-    if (n) return n;
+  // 배당 변경 알림: 자식 노드별로 읽고 마지막(현재) 배당 사용
+  const notifOdds = [];
+  for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
+    collectLeafOdds(notif, notifOdds);
   }
+  if (notifOdds.length) return notifOdds[notifOdds.length - 1];
 
   for (const sel of ['[class*="odds"]', '[class*="Odds"]', '[class*="price"]', '[class*="Price"]']) {
+    const classOdds = [];
     for (const el of card.querySelectorAll(sel)) {
-      if (isStruckThrough(el)) continue;
-      const n = parseOddsText(el.textContent);
-      if (n) return n;
+      collectLeafOdds(el, classOdds);
     }
+    if (classOdds.length) return classOdds[classOdds.length - 1];
   }
 
   const atM = (card.textContent || '').match(/@\s*(\d+(?:\.\d{1,4})?)/);
@@ -64,8 +90,10 @@ function readOddsFromSlipCard(card) {
   const found = [];
   for (const sp of card.querySelectorAll('span')) {
     if (isStruckThrough(sp)) continue;
-    const n = parseOddsText(sp.textContent);
-    if (n) found.push(n);
+    const text = (sp.textContent || '').trim();
+    const n = parseOddsText(text);
+    if (!n || looksLikeLineTotal(n, text)) continue;
+    found.push(n);
   }
   if (found.length) return found[found.length - 1];
 
@@ -415,52 +443,18 @@ function readSlipOddsFromCardElement(card) {
   const mktType = detectMarketType(allText);
   if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') return null;
 
-  for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
-    if (isStruckThrough(sp)) continue;
-    const n = parseOddsText(sp.textContent);
-    if (n) {
-      return enrichBtiSlip({
-        odds: n,
-        selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
-        eventText,
-        mktText: marketTitleText,
-        source: 'slip-display',
-        fromSlip: true,
-        marketKind: mktType
-      });
-    }
-  }
-
-  for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"]')) {
-    if (isStruckThrough(sp)) continue;
-    const n = parseOddsText(sp.textContent);
-    if (n) {
-      return enrichBtiSlip({
-        odds: n,
-        selectionText,
-        eventText,
-        mktText: marketTitleText,
-        source: 'slip-display',
-        fromSlip: true,
-        marketKind: mktType
-      });
-    }
-  }
-
   const slipCardOdds = readOddsFromSlipCard(card);
-  if (slipCardOdds > 1.01) {
-    return enrichBtiSlip({
-      odds: slipCardOdds,
-      selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
-      eventText,
-      mktText: marketTitleText,
-      source: 'slip-card',
-      fromSlip: true,
-      marketKind: mktType
-    });
-  }
+  if (!(slipCardOdds > 1.01)) return null;
 
-  return null;
+  return enrichBtiSlip({
+    odds: slipCardOdds,
+    selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
+    eventText,
+    mktText: marketTitleText,
+    source: 'slip-card',
+    fromSlip: true,
+    marketKind: mktType
+  });
 }
 
 function readActiveSlipDisplayOdds() {
