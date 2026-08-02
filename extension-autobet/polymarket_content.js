@@ -355,7 +355,7 @@ async function clickBcSportsOutcome(teamHint) {
     const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
     if (!t || t.length > 140) continue;
     if (!teamMatchesButton(teamHint, t)) continue;
-    const odds = parseDecimalOdds(t.match(/(\d+\.\d{2,3})\s*$/)?.[1] || '');
+    const odds = parseDecimalOdds(t.match(/(\d+\.\d{1,3})\s*$/)?.[1] || '');
     let score = selectionScore(btn) + 80;
     if (odds) score += 40;
     if (score > bestScore) { bestScore = score; best = btn; }
