@@ -719,4 +719,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.2 — Shadow DOM + 전체 iframe 배당 스캔', 'info');
+logLine('v1.4.3 — BC.Game 네이티브 베팅슬립(1.7/USDT) 지원', 'info');

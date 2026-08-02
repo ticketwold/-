@@ -358,8 +358,9 @@ function scorePolySlip(slip) {
   slip = normalizePolySlip(slip);
   if (!(slip?.odds > 1)) return -1;
   let score = slip.odds;
-  if (slip.fromPayout && !slip.pendingToWin) score += 200;
-  else if (slip.sourceKind === 'sports-slip') score += 220;
+  if (slip.sourceKind === 'bc-native-slip') score += 300;
+  else if (slip.fromPayout && !slip.pendingToWin) score += 200;
+  else if (slip.sourceKind === 'sports-slip') score += 240;
   else if (slip.sourceKind === 'sports-board' || slip.sourceKind === 'sports-text') score += 180;
   else if (slip.liveCents) score += 150;
   if (slip.stake > 0) score += 30;

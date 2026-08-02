@@ -560,9 +560,9 @@ async function probeBcLeg2Frames(polyTab) {
           const slip = window.__bcScrapeOdds();
           if (!slip?.ok) return null;
           return {
-            hasPanel: !!(slip.hasInput || slip.sourceKind === 'sports-slip'),
+            hasPanel: !!(slip.hasInput || slip.sourceKind === 'sports-slip' || slip.sourceKind === 'bc-native-slip'),
             hasInput: !!slip.hasInput,
-            hasBtn: !!(slip.hasInput || slip.sourceKind === 'sports-slip'),
+            hasBtn: !!(slip.hasInput || slip.sourceKind === 'sports-slip' || slip.sourceKind === 'bc-native-slip'),
             stake: slip.stake || null,
             team: slip.teamLabel || '',
             mode: 'sports-deep',

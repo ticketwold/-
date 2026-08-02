@@ -1,4 +1,4 @@
-// bc_sports_scrape.js — BC.Game 스포츠북(Betby/BTi) MAIN world 스크랩
+// bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
   if (window.__bcScrapeOdds) return;
 
@@ -19,8 +19,15 @@
     return n;
   }
 
+  function parseMoney(t) {
+    const m = String(t || '').replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
+    if (!m) return 0;
+    const v = parseFloat(m[1]);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
   function collectRoots(node, out) {
-    if (!node || out.length > 5000) return;
+    if (!node || out.length > 8000) return;
     if (node.nodeType === 1) {
       out.push(node);
       if (node.shadowRoot) collectRoots(node.shadowRoot, out);
@@ -56,25 +63,123 @@
       || /selected|active|pressed|highlight|checked/i.test(cls);
   }
 
-  function findStakeInput() {
-    const inputs = queryDeep('input, textarea');
+  function findSlipRoot() {
+    let best = null;
+    let bestLen = Infinity;
+    for (const el of queryDeep('div, section, aside, form')) {
+      if (!vis(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/베팅\s*슬립|bet\s*slip/i.test(t)) continue;
+      const len = t.length;
+      if (len < 40 || len > 4000) continue;
+      if (len < bestLen) { bestLen = len; best = el; }
+    }
+    return best;
+  }
+
+  function findStakeInput(scope) {
+    const root = scope || document;
+    const inputs = scope ? Array.from(root.querySelectorAll('input, textarea')) : queryDeep('input, textarea');
     for (const inp of inputs) {
       if (!vis(inp)) continue;
-      const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''}`;
+      const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.value || ''}`;
       if (/search|검색|email|password/i.test(blob)) continue;
-      if (/counter|Counter|베팅|stake|amount|bet\s*amount|wager/i.test(blob)) return inp;
-      const type = (inp.getAttribute('type') || '').toLowerCase();
-      if ((type === 'number' || type === 'text' || type === '') && /stake|bet|금액/i.test(blob)) return inp;
+      if (/USDT|usdt|counter|Counter|베팅|stake|amount|bet/i.test(blob)) return inp;
+      const parentText = (inp.parentElement?.textContent || '').slice(0, 120);
+      if (/USDT|총\s*베팅|베팅\s*금액/i.test(parentText)) return inp;
+    }
+    const slip = findSlipRoot();
+    if (slip) {
+      for (const inp of slip.querySelectorAll('input, textarea')) {
+        if (vis(inp)) return inp;
+      }
     }
     return document.getElementById('counter') || null;
   }
 
-  function readStake() {
-    const inp = findStakeInput();
-    if (!inp) return 0;
-    const raw = String(inp.value || inp.getAttribute('value') || '').replace(/,/g, '').trim();
-    const v = parseFloat(raw);
-    return Number.isFinite(v) && v > 0 ? v : 0;
+  function readStake(scope) {
+    const inp = findStakeInput(scope);
+    if (inp) {
+      const v = parseMoney(inp.value || inp.getAttribute('value') || '');
+      if (v > 0 && v < 100000) return v;
+    }
+    const raw = ((scope || findSlipRoot() || document.body)?.innerText || '').replace(/\s+/g, ' ');
+    const m = raw.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+    if (m) return parseMoney(m[1]);
+    return 0;
+  }
+
+  function readNativeBcGameSlip() {
+    const slipRoot = findSlipRoot();
+    if (!slipRoot) return null;
+
+    const raw = (slipRoot.innerText || '').replace(/\s+/g, ' ');
+    const stake = readStake(slipRoot);
+    let payout = 0;
+    let m = raw.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+    if (m) payout = parseMoney(m[1]);
+
+    let odds = null;
+    if (stake > 0 && payout > stake) odds = Math.round((payout / stake) * 1000) / 1000;
+
+    let teamLabel = '';
+    let eventText = '';
+    const vsM = raw.match(/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40})/i);
+    if (vsM) eventText = `${vsM[1].trim()} vs ${vsM[2].trim()}`;
+
+    const lines = raw.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/맵|map|승자|winner|moneyline|승부/i.test(line) && i + 1 < lines.length) {
+        const next = lines[i + 1];
+        if (next && !/^\d+\.?\d*$/.test(next) && next.length < 60) teamLabel = next;
+      }
+    }
+    if (!teamLabel && vsM) {
+      for (const line of lines) {
+        if (line === vsM[1].trim() || line === vsM[2].trim()) continue;
+        if (vsM[1].trim().includes(line) || vsM[2].trim().includes(line)) {
+          if (line.length >= 3 && line.length < 48) { teamLabel = line; break; }
+        }
+      }
+    }
+    if (!teamLabel) {
+      const afterMap = raw.match(/(?:맵\s*[-–]\s*승자|승자|winner)[^\d]{0,40}?([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
+      if (afterMap) teamLabel = afterMap[1].trim();
+    }
+
+    if (!odds) {
+      const oddsCandidates = [];
+      for (const el of slipRoot.querySelectorAll('span, div, p, strong, b, button')) {
+        if (!vis(el)) continue;
+        if (el.children.length > 2) continue;
+        const t = (el.textContent || '').trim();
+        if (!/^\d+\.\d{1,3}$/.test(t)) continue;
+        const o = parseOdds(t);
+        if (o && o < 20) oddsCandidates.push(o);
+      }
+      if (oddsCandidates.length) odds = oddsCandidates[oddsCandidates.length - 1];
+    }
+
+    if (!odds) {
+      const nums = [...raw.matchAll(/\b(\d+\.\d{1,3})\b/g)]
+        .map((x) => parseOdds(x[1]))
+        .filter((n) => n && n < 20);
+      const filtered = nums.filter((n) => Math.abs(n - stake) > 0.5 && Math.abs(n - payout) > 0.5);
+      if (filtered.length) odds = filtered[filtered.length - 1];
+    }
+
+    if (!(odds > 1.01)) return null;
+
+    return {
+      odds,
+      teamLabel,
+      eventText,
+      stake: stake || null,
+      payout: payout || null,
+      hasInput: !!findStakeInput(slipRoot),
+      sourceKind: 'bc-native-slip'
+    };
   }
 
   function parseOddsFromEl(el) {
@@ -86,10 +191,11 @@
       const v = parseOdds(o.textContent);
       if (v) return v;
     }
-    let m = txt.match(/(\d+\.\d{2,3})\s*$/);
+    let m = txt.match(/(\d+\.\d{1,3})\s*$/);
     if (m) return parseOdds(m[1]);
-    m = txt.match(/\b(\d+\.\d{2,3})\b/);
+    m = txt.match(/\b(\d+\.\d{1,3})\b/);
     if (m) return parseOdds(m[1]);
+    if (/^\d+\.\d{1,3}$/.test(txt)) return parseOdds(txt);
     return null;
   }
 
@@ -116,7 +222,7 @@
         const odds = parseOddsFromEl(el);
         if (!odds) continue;
         const txt = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-        if (/login|sign\s*in|deposit|withdraw|cookie|menu/i.test(txt)) continue;
+        if (/login|sign\s*in|deposit|withdraw|cookie|menu|예약/i.test(txt)) continue;
         seen.add(el);
         out.push({ odds, txt, selected: isSelected(el), el });
       }
@@ -125,14 +231,18 @@
   }
 
   function readSlipFromPanel() {
+    const native = readNativeBcGameSlip();
+    if (native?.odds > 1.01) return native;
+
     const hasInput = !!findStakeInput();
     const cards = queryDeep('[class*="bet"], [class*="Bet"], [class*="betslip"], [class*="Betslip"], [class*="bet-slip"]');
     for (const card of cards) {
       if (!vis(card)) continue;
       const txt = (card.textContent || '').trim();
       if (txt.length < 8 || txt.length > 1200) continue;
-      if (card.querySelector('input') && !/betInformation|selection|outcome|W[12]/i.test(txt)) continue;
-      if (!/W[12]|betInformation|selection|outcome|winner|우승|vs|대|map|맵|team/i.test(txt)) continue;
+      const hasSlipMarkers = /W[12]|betInformation|selection|outcome|winner|우승|vs|대|map|맵|team|spirit|mouz|승자/i.test(txt);
+      if (card.querySelector('input') && !hasSlipMarkers) continue;
+      if (!hasSlipMarkers) continue;
 
       const titleEls = card.querySelectorAll('[class*="betInformation__title"], [class*="selection"], [class*="Selection"]');
       const selectionText = titleEls[0]?.textContent?.trim() || '';
@@ -140,7 +250,8 @@
       const eventText = eventEl?.textContent?.trim() || '';
 
       for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="coeff"], span, div, b, strong')) {
-        const o = parseOdds(sp.textContent);
+        const own = (sp.textContent || '').trim();
+        const o = /^\d+\.\d{1,3}$/.test(own) ? parseOdds(own) : parseOdds(sp.textContent);
         if (o) {
           return { odds: o, selectionText, eventText, hasInput, sourceKind: 'sports-slip' };
         }
@@ -157,7 +268,7 @@
 
     const slip = readSlipFromPanel();
     if (slip?.odds > 1.01) {
-      let teamLabel = slip.selectionText || '';
+      let teamLabel = slip.teamLabel || slip.selectionText || '';
       if (slip.eventText) {
         for (const sep of [' vs ', ' VS ', ' 대 ']) {
           if (slip.eventText.includes(sep)) {
@@ -168,7 +279,8 @@
           }
         }
       }
-      const stake = readStake();
+      const stake = slip.stake || readStake();
+      const fromPayout = !!(stake > 0 && slip.payout > stake);
       return {
         ok: true,
         source: 'bcgame',
@@ -176,10 +288,11 @@
         teamLabel,
         outcome: teamLabel,
         selectionText: teamLabel,
-        displayLabel: `${slip.odds.toFixed(3)}${stake > 0 ? ` · $${stake}` : ''}`,
+        displayLabel: `${slip.odds.toFixed(3)}${stake > 0 ? ` · ${stake} USDT` : ''}`,
         stake: stake || null,
-        sourceKind: 'sports-slip',
-        fromPayout: false,
+        payout: slip.payout || (fromPayout ? stake * slip.odds : null),
+        sourceKind: slip.sourceKind || 'sports-slip',
+        fromPayout,
         hasInput: slip.hasInput,
         href,
         frameTextLen: bodyLen
@@ -189,11 +302,11 @@
     const board = collectOddsCandidates();
     if (!board.length) {
       const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-      const nums = [...text.matchAll(/\b(\d+\.\d{2,3})\b/g)]
+      const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
         .map((m) => parseOdds(m[1]))
         .filter((n) => n && n > 1.01 && n < 20);
       if (nums.length >= 2) {
-        const odds = nums[0];
+        const odds = nums.find((n) => n < 15) || nums[0];
         return {
           ok: true,
           source: 'bcgame',
@@ -237,14 +350,22 @@
   }
 
   function setStakeAmount(amount) {
+    const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
     const inp = findStakeInput();
     if (!inp) return { ok: false, reason: 'stake-input-missing' };
-    const str = String(Math.max(0.01, Math.round(amount * 100) / 100));
+    const str = String(rounded);
     inp.focus?.();
     inp.value = str;
-    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
     inp.dispatchEvent(new Event('change', { bubbles: true }));
-    return { ok: true, stake: readStake(), method: 'deep-type' };
+    let stake = readStake();
+    if (!stake || Math.abs(stake - rounded) > 0.5) {
+      inp.value = `${str} USDT`;
+      inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      stake = readStake();
+    }
+    return { ok: stake > 0, stake, method: 'native-usdt', target: rounded };
   }
 
   function findBetButton() {
@@ -252,8 +373,13 @@
     for (const btn of btns) {
       if (!vis(btn) || btn.disabled) continue;
       const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      if (/배당\s*수락|place\s*bet|bet\s*now|베팅하기|^bet$/i.test(t)) return btn;
-      if ((btn.className || '').includes('sportsbook-Button') && /베팅|bet/i.test(t)) return btn;
+      if (t === '베팅하기' || /^place\s*bet$/i.test(t)) return btn;
+    }
+    for (const btn of btns) {
+      if (!vis(btn) || btn.disabled) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/배당\s*수락|bet\s*now|^bet$/i.test(t)) return btn;
+      if ((btn.className || '').includes('sportsbook-Button') && /베팅하기|베팅/i.test(t)) return btn;
     }
     return null;
   }
