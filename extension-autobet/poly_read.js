@@ -783,7 +783,8 @@ async function probeBcSlipFrames(polyTab) {
           apiOdds: apiOdds > 1.01 ? apiOdds : null,
           stake: diag?.stake || main.scraped?.stake || null,
           sample: hit?.sample || diag?.sample || '',
-          iframeHint
+          iframeHint,
+          shadowIframes: (diag?.shadowIframes || []).slice(0, 2).join('|')
         });
       }
     }

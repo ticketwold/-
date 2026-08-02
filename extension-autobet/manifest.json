@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "양방 자동배팅",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "양방배팅봇 수익 구간 감지 시 텐텐뱃·BC.Game 동시 자동 배팅",
-  "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows"],
+  "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom"],
   "host_permissions": [
     "*://*.x10x10s.com/*",
     "*://bc.game/*",
@@ -55,6 +55,25 @@
       "js": ["bc_api_hook.js"],
       "run_at": "document_start",
       "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_betby_bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_sports_scrape.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_slip_read.js"],
+      "run_at": "document_idle",
       "all_frames": true
     },
     {

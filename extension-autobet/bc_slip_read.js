@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 5;
+  const VER = 6;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -12,12 +12,15 @@
   }
 
   function walkNodes(node, visit, depth) {
-    if (!node || depth > 160) return;
+    if (!node || depth > 180) return;
     visit(node, depth);
-    if (node.nodeType !== 1) return;
-    const sr = openShadow(node);
-    if (sr) walkNodes(sr, visit, depth + 1);
-    for (const c of node.childNodes) walkNodes(c, visit, depth + 1);
+    if (node.nodeType === 1) {
+      const sr = openShadow(node);
+      if (sr) walkNodes(sr, visit, depth + 1);
+      for (const c of node.childNodes) walkNodes(c, visit, depth + 1);
+    } else if (node.nodeType === 11) {
+      for (const c of node.childNodes) walkNodes(c, visit, depth + 1);
+    }
   }
 
   function stripHtml(html) {
@@ -46,13 +49,15 @@
     const vw = window.innerWidth || 1200;
     const vh = window.innerHeight || 800;
     const pointText = [];
-    for (const [x, y] of [[vw - 40, vh * 0.25], [vw - 80, vh * 0.5], [vw - 60, vh * 0.75], [vw - 120, 120], [vw - 100, vh - 80]]) {
-      try {
-        for (const el of document.elementsFromPoint(x, y) || []) {
-          const t = (el.innerText || el.textContent || '').trim();
-          if (t) pointText.push(t);
-        }
-      } catch (_) {}
+    for (const x of [vw - 15, vw - 50, vw - 100, vw - 180, vw - 260]) {
+      for (const y of [vh * 0.15, vh * 0.35, vh * 0.55, vh * 0.75]) {
+        try {
+          for (const el of document.elementsFromPoint(x, y) || []) {
+            const t = (el.innerText || el.textContent || '').trim();
+            if (t) pointText.push(t);
+          }
+        } catch (_) {}
+      }
     }
 
     const merged = [deep, body, html, pointText.join(' ')].join(' ');
@@ -384,10 +389,52 @@
     return null;
   }
 
+  function readBetbyShadowSlip() {
+    let bestPanel = null;
+    let bestScore = -1;
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const t = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 12 || t.length > 5000) return;
+      const cls = String(node.className || '');
+      const slipLike = /simplebar|betslip|bet-slip|coupon|ticket|betby/i.test(cls)
+        || /place\s*(a\s*)?bet|total\s*stake|bet\s*slip|betslip|베팅\s*슬립/i.test(t);
+      if (!slipLike || !/\d+\.\d{2,3}/.test(t)) return;
+      let score = 0;
+      if (/simplebar/i.test(cls)) score += 90;
+      if (/place\s*(a\s*)?bet|베팅하기/i.test(t)) score += 110;
+      if (/total\s*stake|총\s*베팅/i.test(t)) score += 100;
+      if (node.querySelector?.('input, textarea')) score += 80;
+      if (t.length < 800) score += 40;
+      if (score > bestScore) { bestScore = score; bestPanel = node; }
+    }, 0);
+    if (!bestPanel) return null;
+    const parsed = parseSlipText((bestPanel.innerText || bestPanel.textContent || '').replace(/\s+/g, ' '));
+    if (!parsed) {
+      const nums = [...String(bestPanel.textContent || '').matchAll(/\b(\d+\.\d{2,3})\b/g)]
+        .map((m) => po(m[1])).filter(Boolean);
+      const odds = nums.find((n) => n > 1.15 && n < 20) || nums[nums.length - 1];
+      if (!(odds > 1.01)) return null;
+      return { odds, teamLabel: '', stake: null, payout: null, method: 'shadow-slip', sourceKind: 'bc-native-slip' };
+    }
+    return { ...parsed, method: 'shadow-slip', sourceKind: 'bc-native-slip' };
+  }
+
+  function collectShadowIframes() {
+    const out = [];
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1 || node.tagName !== 'IFRAME') return;
+      const src = node.src || node.getAttribute('src') || '';
+      if (src && !/hcaptcha|captcha|tracker/i.test(src)) out.push(src.replace(/^https?:\/\//, '').slice(0, 100));
+    }, 0);
+    return [...new Set(out)];
+  }
+
   function readNativeSlip() {
     const fields = collectStakeFields();
     const strategies = [
       readFromApiCache,
+      readBetbyShadowSlip,
       readViaBetButton,
       readViaStakeInputs,
       readSelectedBoardOdds,
@@ -480,6 +527,8 @@
       payout: raw.match(/예상\s*당첨\s*금액\s*([\d,.]+)/)?.[1] || null,
       stake: raw.match(/총\s*베팅\s*금액\s*([\d,.]+)/)?.[1] || inputs[0]?.v || null,
       apiSlip,
+      shadowIframes: collectShadowIframes(),
+      hasDomApi: !!(typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot),
       sample: raw.slice(0, 300)
     };
   }
