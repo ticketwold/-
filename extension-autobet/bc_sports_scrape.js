@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 7;
+  const SCRAPE_VER = 8;
 
   function collectPageText() {
     const parts = [];
@@ -73,6 +73,9 @@
 
   function isSelected(el) {
     if (!el) return false;
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    const looksLikeOdds = /\d+\.\d{1,3}/.test(txt);
+    if (!looksLikeOdds) return false;
     const cls = String(el.className || '');
     if (el.getAttribute('aria-pressed') === 'true') return true;
     if (el.getAttribute('aria-selected') === 'true') return true;
@@ -87,10 +90,8 @@
       if (m) {
         const g = parseInt(m[2], 10);
         const r = parseInt(m[1], 10);
-        if (g > 90 && g > r + 20) return true;
+        if (g > 100 && g > r + 30) return true;
       }
-      const outline = st.outlineColor || '';
-      if (/rgb\(\s*\d+\s*,\s*1\d{2}/.test(outline)) return true;
     } catch (_) {}
     return false;
   }
@@ -350,30 +351,13 @@
       if (onBcMain) {
         return { ok: false, reason: 'no-slip', href, bodyLen, boardCount: 0 };
       }
-      const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-      const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-        .map((m) => parseOdds(m[1]))
-        .filter((n) => n && n > 1.01 && n < 20);
-      if (nums.length >= 2) {
-        const odds = nums.find((n) => n < 15) || nums[0];
-        return {
-          ok: true,
-          source: 'bcgame',
-          odds,
-          teamLabel: '',
-          displayLabel: odds.toFixed(3),
-          sourceKind: 'sports-text',
-          fromPayout: false,
-          hasInput: !!findStakeInput(),
-          href,
-          frameTextLen: bodyLen
-        };
-      }
       return { ok: false, reason: 'no-odds', href, bodyLen, boardCount: 0 };
     }
 
-    board.sort((a, b) => (b.selected ? 200 : 0) + b.odds - ((a.selected ? 200 : 0) + a.odds));
-    const sel = board.find((b) => b.selected) || board[0];
+    const sel = board.find((b) => b.selected);
+    if (!sel) {
+      return { ok: false, reason: 'no-selection', href, bodyLen, boardCount: board.length };
+    }
     return {
       ok: true,
       source: 'bcgame',
@@ -382,7 +366,8 @@
       outcome: sel.txt,
       selectionText: sel.txt,
       displayLabel: sel.odds.toFixed(3),
-      sourceKind: 'sports-board',
+      sourceKind: 'sports-board-selected',
+      selected: true,
       fromPayout: false,
       hasInput: !!findStakeInput(),
       buttonCount: board.length,

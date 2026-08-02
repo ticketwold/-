@@ -23,7 +23,7 @@ let btiSlipPauseBusy = false;
 let btiSlipEverOpen = false;
 let pendingStrike = null;
 let liveSnap = { ok: false };
-let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0 };
+let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0, polyTrusted: false };
 
 function logLine(text, cls = '') {
   const el = $('log');
@@ -221,16 +221,21 @@ function stabilizeSnap(snap, cfg) {
   } else if (lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
     snap.btiO = lastKnownOdds.btiO;
   }
-  if (snap.polyO > 1) {
+  if (snap.polyO > 1 && (typeof isTrustedBcSlip !== 'function' || isTrustedBcSlip(snap.poly))) {
     lastKnownOdds.polyO = snap.polyO;
     lastKnownOdds.polyAt = now;
+    lastKnownOdds.polyTrusted = true;
   } else if (snap.reason && /BC\.Game 배당 없음/.test(snap.reason)) {
     lastKnownOdds.polyO = null;
     lastKnownOdds.polyAt = 0;
+    lastKnownOdds.polyTrusted = false;
     snap.polyO = null;
     snap.poly = null;
-  } else if (lastKnownOdds.polyO > 1 && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
+  } else if (lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
+  } else if (snap.polyO > 1 && typeof isTrustedBcSlip === 'function' && !isTrustedBcSlip(snap.poly)) {
+    snap.polyO = null;
+    snap.poly = null;
   }
 
   if (snap.btiO > 1 && snap.polyO > 1) {
@@ -575,9 +580,9 @@ $('disarmBtn')?.addEventListener('click', () => arm(false));
 
 $('scanBtn')?.addEventListener('click', async () => {
   const cfg = saveConfig();
-  logLine('배당 스캔… (BC 탭 활성화)', 'info');
+  logLine('배당 스캔…', 'info');
   try {
-    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 1600 });
+    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 1200 });
     liveSnap = snap;
     updateStatusFromSnap(snap, cfg);
 
@@ -626,6 +631,7 @@ $('scanBtn')?.addEventListener('click', async () => {
               if (p.selectedOdds) extra += ` sel[${p.selectedOdds}]`;
               if (p.scrapeOdds > 1.01) extra += ` scr${p.scrapeOdds.toFixed(3)}`;
               if (p.apiOdds > 1.01) extra += ` api${p.apiOdds.toFixed(3)}`;
+              if (p.stake) extra += ` stake${p.stake}`;
               logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0}${p.flags || ''}${extra} · ${p.url || '(main)'}`, 'info');
               if (p.frameId === 0 && p.sample) logLine(`    "${p.sample.slice(0, 80)}…"`, 'info');
             }

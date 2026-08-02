@@ -317,7 +317,7 @@ async function injectScrapePolyCents(tabId) {
 const polyOddsCache = new Map();
 
 function cachePolyOdds(tabId, slip) {
-  if (!tabId || !(slip?.odds > 1)) return;
+  if (!tabId || !isTrustedBcSlip(slip)) return;
   polyOddsCache.set(tabId, { slip: { ...slip }, at: Date.now() });
 }
 
@@ -329,7 +329,7 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 
 function mergePolySlipWithCache(tabId, slip) {
   slip = normalizePolySlip(slip);
-  if (slip?.odds > 1) {
+  if (slip?.odds > 1 && isTrustedBcSlip(slip)) {
     cachePolyOdds(tabId, slip);
     return slip;
   }
@@ -358,6 +358,17 @@ function normalizePolySlip(slip) {
   return slip;
 }
 
+function isTrustedBcSlip(slip) {
+  if (!(slip?.odds > 1.01)) return false;
+  const kind = slip.sourceKind || '';
+  if (kind === 'sports-text') return false;
+  if (slip.fromPayout && slip.stake > 0) return true;
+  if (kind === 'bc-native-slip' || kind === 'bc-api' || kind === 'sports-slip') return true;
+  if (kind === 'sports-board-selected' || slip.method === 'board-selected') return true;
+  if (kind === 'sports-board') return slip.selected === true;
+  return false;
+}
+
 function scorePolySlip(slip) {
   slip = normalizePolySlip(slip);
   if (!(slip?.odds > 1)) return -1;
@@ -367,7 +378,8 @@ function scorePolySlip(slip) {
   else if (slip.sourceKind === 'sports-board-selected') score += 260;
   else if (slip.fromPayout && !slip.pendingToWin) score += 200;
   else if (slip.sourceKind === 'sports-slip') score += 240;
-  else if (slip.sourceKind === 'sports-board' || slip.sourceKind === 'sports-text') score += 180;
+  else if (slip.sourceKind === 'sports-board') score += 40;
+  else if (slip.sourceKind === 'sports-text') score -= 500;
   else if (slip.liveCents || slip.source === 'poly-scrape') score += 40;
   if (slip.stake > 0) score += 30;
   if (slip.pendingToWin) score -= 40;
@@ -453,12 +465,11 @@ async function readBcApiSlipAllFrames(tabId) {
     let best = null;
     for (const row of results || []) {
       const hit = row?.result;
-      if (hit?.odds > 1.01) {
-        const s = scorePolySlip(hit);
-        if (s > (best?._score ?? -1)) best = { ...hit, frameId: row.frameId, _score: s };
-      }
+      if (!isTrustedBcSlip(hit)) continue;
+      const s = scorePolySlip(hit);
+      if (s > (best?._score ?? -1)) best = { ...hit, frameId: row.frameId, _score: s };
     }
-    return best?.odds > 1.01 ? best : null;
+    return isTrustedBcSlip(best) ? best : null;
   } catch (_) {
     return null;
   }
@@ -526,6 +537,7 @@ async function injectBcSlipAllFrames(tabId) {
         delete slip.inputCount;
         delete slip.flags;
         delete slip.href;
+        if (!isTrustedBcSlip(slip)) continue;
         let s = scorePolySlip(slip);
         const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
         if (/betby|sptpub|biahosted|bti-sports/i.test(frameUrl)) s += 120;
@@ -541,7 +553,7 @@ async function injectBcSlipAllFrames(tabId) {
     for (const v of byFrame.values()) {
       if (v._score > (best?._score ?? -1)) best = v;
     }
-    return best?.odds > 1.01 ? best : null;
+    return best?.odds > 1.01 && isTrustedBcSlip(best) ? best : null;
   } catch (_) {
     return null;
   }
@@ -564,34 +576,35 @@ async function autoOpenBcSportsSlip(tabId, teamHint) {
 
 async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
-  const focusTab = opts.focusTab !== false;
-  const waitMs = opts.waitMs || (focusTab ? 2000 : 500);
+  const focusTab = opts.focusTab === true;
+  const waitMs = opts.waitMs || (focusTab ? 1600 : 0);
   const teamHint = opts.teamHint || opts.excludeTeam || '';
+  const maxAttempts = focusTab ? 4 : 1;
 
-  if (focusTab) await focusBcTabForRead(polyTab.id, waitMs);
+  if (focusTab && waitMs > 0) await focusBcTabForRead(polyTab.id, waitMs);
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);
 
   let clicked = false;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const apiHit = await readBcApiSlipAllFrames(polyTab.id);
-    if (apiHit?.odds > 1.01) {
+    if (isTrustedBcSlip(apiHit)) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: apiHit.frameId ?? 0 };
       return apiHit;
     }
 
     const hit = await injectBcSlipAllFrames(polyTab.id);
-    if (hit?.odds > 1.01) {
+    if (isTrustedBcSlip(hit)) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
       return hit;
     }
 
-    if (!clicked && teamHint && attempt >= 1) {
+    if (!clicked && teamHint && focusTab && attempt >= 1) {
       clicked = await autoOpenBcSportsSlip(polyTab.id, teamHint);
-      if (clicked) await new Promise((r) => setTimeout(r, 1200));
+      if (clicked) await new Promise((r) => setTimeout(r, 800));
       continue;
     }
-    if (attempt < 5) await new Promise((r) => setTimeout(r, 400));
+    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 300));
   }
   return null;
 }
@@ -677,10 +690,10 @@ async function readPolyOddsOnce(polyTab, opts = {}) {
 
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab, opts);
-    if (native?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, native);
+    if (isTrustedBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
 
     const leg2 = await readBcLeg2FromBtiFrames(polyTab);
-    if (leg2?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, leg2);
+    if (isTrustedBcSlip(leg2)) return mergePolySlipWithCache(polyTab.id, leg2);
 
     polyOddsCache.delete(polyTab.id);
     return null;
