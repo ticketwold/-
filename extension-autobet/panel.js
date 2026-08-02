@@ -608,7 +608,18 @@ $('scanBtn')?.addEventListener('click', async () => {
       const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
       logLine(`BC.Game ${cents}${snap.polyO.toFixed(3)}`, 'ok');
     } else {
-      logLine(snap.reason || 'BC.Game 배당 없음 — 배당 클릭 또는 금액 입력', 'err');
+      if (snap.found?.polyTab?.id) {
+        try {
+          const frames = await getAllFrames(snap.found.polyTab.id);
+          const sportsFrames = frames.filter((f) => scoreBcLeg2FrameUrl(f.url || '', snap.found.polyTab.url) >= 15);
+          logLine(`BC iframe ${frames.length}개 (스포츠북 후보 ${sportsFrames.length}개)`, 'info');
+          for (const f of frames.slice(0, 6)) {
+            const url = (f.url || 'about:blank').replace(/^https?:\/\//, '').slice(0, 72);
+            logLine(`  · f${f.frameId}: ${url || '(blank)'}`, 'info');
+          }
+        } catch (_) {}
+      }
+      logLine(snap.reason || 'BC.Game 배당 없음 — 배당 클릭 후 슬립 열기', 'err');
     }
     if (snap.btiO > 1 && snap.polyO > 1) {
       logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · BC $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
@@ -708,4 +719,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.1 — BC.Game iframe(BTI) 배당 읽기 강화', 'info');
+logLine('v1.4.2 — Shadow DOM + 전체 iframe 배당 스캔', 'info');

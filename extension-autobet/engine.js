@@ -523,8 +523,8 @@ async function orderBcLeg2FrameIds(tabId, tabUrl) {
   }
   scored.sort((a, b) => b.score - a.score);
   const ids = scored.filter((s) => s.score >= 15).map((s) => s.frameId);
-  if (ids.length) return ids;
-  return frames.map((f) => f.frameId);
+  const allIds = frames.map((f) => f.frameId);
+  return [...new Set([...ids, ...allIds])];
 }
 
 function mapBtiProbeToPolyProbe(probe) {
@@ -549,17 +549,45 @@ async function probeBcLeg2Frames(polyTab) {
   let best = null;
 
   for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
-    await ensureBtiScript(polyTab.id, frameId);
-    const probe = await sendBti(polyTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+    let probe = null;
+    try {
+      await ensureBcScrapeScript(polyTab.id, frameId);
+      const deep = await chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, frameIds: [frameId] },
+        world: 'MAIN',
+        func: () => {
+          if (typeof window.__bcScrapeOdds !== 'function') return null;
+          const slip = window.__bcScrapeOdds();
+          if (!slip?.ok) return null;
+          return {
+            hasPanel: !!(slip.hasInput || slip.sourceKind === 'sports-slip'),
+            hasInput: !!slip.hasInput,
+            hasBtn: !!(slip.hasInput || slip.sourceKind === 'sports-slip'),
+            stake: slip.stake || null,
+            team: slip.teamLabel || '',
+            mode: 'sports-deep',
+            slipOdds: slip.odds || 0
+          };
+        }
+      });
+      probe = deep?.[0]?.result;
+    } catch (_) {}
+
+    if (!probe?.hasBtn) {
+      await ensureBtiScript(polyTab.id, frameId);
+      const btiProbe = await sendBti(polyTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+      if (btiProbe) probe = mapBtiProbeToPolyProbe(btiProbe);
+    }
     if (!probe) continue;
-    const score = (probe.hasInput ? 700 : 0) + (probe.hasBtn ? 500 : 0) + (probe.hasSlip ? 300 : 0)
-      + (probe.slipOdds > 1 ? Math.min(probe.slipOdds, 80) : 0) + (probe.slipCount > 0 ? 120 : 0);
+
+    const score = (probe.hasInput ? 700 : 0) + (probe.hasBtn ? 500 : 0) + (probe.hasPanel ? 200 : 0)
+      + (probe.slipOdds > 1 ? Math.min(probe.slipOdds, 80) : 0);
     if (!best || score > best.score) best = { probe, score, frameId };
   }
 
   if (best?.frameId != null) {
     lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
-    return mapBtiProbeToPolyProbe(best.probe);
+    return best.probe;
   }
   return null;
 }
@@ -649,6 +677,36 @@ async function injectPolyMain(tabId) {
   }
 }
 
+async function setPolyAmountViaDeep(polyTab, amountUsd, frameId) {
+  try {
+    await ensureBcScrapeScript(polyTab.id, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      world: 'MAIN',
+      func: (amount) => window.__bcSetStake?.(amount),
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || { ok: false, reason: 'deep-set-fail' };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+async function placePolyBetViaDeep(polyTab, amountUsd, frameId) {
+  try {
+    await ensureBcScrapeScript(polyTab.id, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      world: 'MAIN',
+      func: async (amount) => window.__bcPlaceSportsBet?.(amount),
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || { success: false, reason: 'deep-bet-fail' };
+  } catch (e) {
+    return { success: false, reason: e.message };
+  }
+}
+
 async function setPolyAmount(polyTab, amountUsd) {
   if (!polyTab?.id) return { ok: false, reason: '탭 없음' };
   if (isBcGameSportsUrl(polyTab.url)) {
@@ -657,6 +715,11 @@ async function setPolyAmount(polyTab, amountUsd) {
       frameIds.unshift(lastBcLeg2Frame.frameId);
     }
     for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+      const deep = await setPolyAmountViaDeep(polyTab, amountUsd, frameId);
+      if (deep?.ok) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return deep;
+      }
       await ensureBtiScript(polyTab.id, frameId);
       const res = await sendBti(polyTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountUsd });
       if (res?.ok) {
@@ -721,7 +784,13 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId };
       return { ...res, frameId, method: 'sports-bti' };
     }
-    return res || { success: false, reason: 'BC.Game 배팅 실패 — 슬립/iframe 확인' };
+    const deepFrame = lastBcLeg2Frame?.tabId === polyTab.id ? lastBcLeg2Frame.frameId : frameIds[0];
+    const deepRes = await placePolyBetViaDeep(polyTab, amountUsd, deepFrame);
+    if (deepRes?.success) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: deepFrame };
+      return { ...deepRes, frameId: deepFrame, method: 'sports-deep' };
+    }
+    return res || deepRes || { success: false, reason: 'BC.Game 배팅 실패 — 슬립/iframe 확인' };
   }
 
   if (!skipFill && !fastStrike) await ensurePolyPanel(polyTab, teamHint);
