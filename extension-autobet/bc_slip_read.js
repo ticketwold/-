@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 3;
+  const VER = 4;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -267,16 +267,128 @@
     return null;
   }
 
+  function isSelectedEl(el) {
+    if (!el) return false;
+    if (el.getAttribute('aria-pressed') === 'true') return true;
+    if (el.getAttribute('aria-selected') === 'true') return true;
+    if (el.getAttribute('data-selected') === 'true') return true;
+    if (el.getAttribute('data-state') === 'on' || el.getAttribute('data-state') === 'checked') return true;
+    const cls = String(el.className || '');
+    if (/selected|active|pressed|highlight|checked|is-active/i.test(cls)) return true;
+    try {
+      const st = getComputedStyle(el);
+      if (parseFloat(st.borderWidth) >= 2) return true;
+      const bg = st.backgroundColor || '';
+      const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (m) {
+        const g = parseInt(m[2], 10);
+        const r = parseInt(m[1], 10);
+        if (g > 90 && g > r + 20) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function parseOddsFromButton(node) {
+    const txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!txt || txt.length > 200) return null;
+    for (const el of [node, ...Array.from(node.querySelectorAll?.('[class*="odd"], [class*="Odds"], span, b') || [])]) {
+      const t = (el.textContent || '').trim();
+      if (/^\d+\.\d{1,3}$/.test(t)) {
+        const o = po(t);
+        if (o) return o;
+      }
+    }
+    const m = txt.match(/(\d+\.\d{1,3})\s*$/);
+    if (m) return po(m[1]);
+    const m2 = txt.match(/(\d+\.\d{1,3})/);
+    return m2 ? po(m[2] || m2[1]) : null;
+  }
+
+  function readSelectedBoardOdds() {
+    const candidates = [];
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      const role = node.getAttribute?.('role') || '';
+      if (tag !== 'BUTTON' && role !== 'button') return;
+      const r = node.getBoundingClientRect?.();
+      if (!r || r.width < 8 || r.height < 8) return;
+      const txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt || /login|deposit|menu|베팅하기|예약|cookie|sign/i.test(txt)) return;
+      const odds = parseOddsFromButton(node);
+      if (!odds) return;
+      const selected = isSelectedEl(node);
+      if (!selected) return;
+      candidates.push({ odds, txt: txt.slice(0, 80), selected: true });
+    }, 0);
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.odds - a.odds);
+    const sel = candidates[0];
+    return {
+      odds: sel.odds,
+      teamLabel: sel.txt,
+      method: 'board-selected',
+      sourceKind: 'sports-board-selected'
+    };
+  }
+
+  function readScriptJsonState() {
+    for (const s of document.querySelectorAll('script')) {
+      const t = s.textContent || '';
+      if (t.length < 20 || t.length > 2000000) continue;
+      if (!/bet|slip|betslip|selection|stake|coefficient|decimal/i.test(t)) continue;
+      const parsed = parseSlipText(t) || (() => {
+        try {
+          const j = JSON.parse(t);
+          return extractFromJson(j, 0);
+        } catch (_) { return null; }
+      })();
+      if (parsed?.odds > 1.01) return { ...parsed, method: 'script-json' };
+    }
+    return null;
+  }
+
+  function extractFromJson(obj, depth) {
+    if (!obj || depth > 14) return null;
+    if (typeof obj === 'string') {
+      try { return extractFromJson(JSON.parse(obj), depth + 1); } catch (_) { return null; }
+    }
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const h = extractFromJson(item, depth + 1);
+        if (h) return h;
+      }
+      return null;
+    }
+    if (typeof obj === 'object') {
+      const odds = po(obj.odds ?? obj.price ?? obj.coefficient ?? obj.decimalOdds);
+      const stake = pm(obj.stake ?? obj.amount ?? obj.betAmount);
+      const payout = pm(obj.payout ?? obj.potentialWin ?? obj.toWin);
+      if (odds && (stake > 0 || payout > 0)) {
+        const o = stake > 0 && payout > stake ? Math.round((payout / stake) * 1000) / 1000 : odds;
+        return { odds: o, stake: stake || null, payout: payout || null, fromPayout: payout > stake };
+      }
+      for (const k of Object.keys(obj)) {
+        const h = extractFromJson(obj[k], depth + 1);
+        if (h) return h;
+      }
+    }
+    return null;
+  }
+
   function readNativeSlip() {
     const fields = collectStakeFields();
     const strategies = [
       readFromApiCache,
       readViaBetButton,
       readViaStakeInputs,
+      readSelectedBoardOdds,
       () => {
         const p = parseSlipText(collectAllText());
         return p ? { ...p, method: 'all-text' } : null;
       },
+      readScriptJsonState,
       walkSameOriginIframes,
       readFromStorage,
       scanWindowGlobals
@@ -285,6 +397,7 @@
     for (const fn of strategies) {
       const hit = fn();
       if (hit?.odds > 1.01) {
+        const isBoard = hit.sourceKind === 'sports-board-selected' || hit.method === 'board-selected';
         return {
           ok: true,
           source: 'bcgame',
@@ -292,7 +405,7 @@
           outcome: hit.teamLabel || '',
           selectionText: hit.teamLabel || '',
           displayLabel: `${hit.odds.toFixed(3)}${hit.stake > 0 ? ` · ${hit.stake} USDT` : ''}`,
-          sourceKind: 'bc-native-slip',
+          sourceKind: isBoard ? 'sports-board-selected' : 'bc-native-slip',
           hasInput: fields.length > 0,
           inputCount: fields.length,
           href: location.href

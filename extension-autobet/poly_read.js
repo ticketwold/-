@@ -363,6 +363,8 @@ function scorePolySlip(slip) {
   if (!(slip?.odds > 1)) return -1;
   let score = slip.odds;
   if (slip.sourceKind === 'bc-native-slip') score += 300;
+  else if (slip.sourceKind === 'bc-api') score += 280;
+  else if (slip.sourceKind === 'sports-board-selected') score += 260;
   else if (slip.fromPayout && !slip.pendingToWin) score += 200;
   else if (slip.sourceKind === 'sports-slip') score += 240;
   else if (slip.sourceKind === 'sports-board' || slip.sourceKind === 'sports-text') score += 180;
@@ -496,16 +498,33 @@ async function injectBcSlipAllFrames(tabId) {
   }
 }
 
+async function autoOpenBcSportsSlip(tabId, teamHint) {
+  if (!tabId || !teamHint) return false;
+  try {
+    await ensurePolyScript(tabId);
+    const res = await withTimeout(
+      sendPoly(tabId, { type: 'ENSURE_POLY_PANEL', team: teamHint }),
+      5000,
+      'BC배당클릭'
+    );
+    return !!(res?.ok || res?.alreadyOpen);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const focusTab = opts.focusTab !== false;
   const waitMs = opts.waitMs || (focusTab ? 1400 : 400);
+  const teamHint = opts.teamHint || opts.excludeTeam || '';
 
   if (focusTab) await focusBcTabForRead(polyTab.id, waitMs);
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  let clicked = false;
+  for (let attempt = 0; attempt < 6; attempt++) {
     const apiHit = await readBcApiSlipAllFrames(polyTab.id);
     if (apiHit?.odds > 1.01) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: apiHit.frameId ?? 0 };
@@ -517,7 +536,13 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
       return hit;
     }
-    if (attempt < 4) await new Promise((r) => setTimeout(r, 400));
+
+    if (!clicked && teamHint && attempt >= 1) {
+      clicked = await autoOpenBcSportsSlip(polyTab.id, teamHint);
+      if (clicked) await new Promise((r) => setTimeout(r, 1200));
+      continue;
+    }
+    if (attempt < 5) await new Promise((r) => setTimeout(r, 400));
   }
   return null;
 }
@@ -558,7 +583,7 @@ async function probeBcSlipFrames(polyTab) {
       }
     }
     out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
-    return out;
+    return out.filter((p) => p.frameId === 0 || /bc\.game/i.test(p.url));
   } catch (e) {
     return [{ frameId: -1, url: '', odds: null, kind: e.message || 'probe-fail' }];
   }

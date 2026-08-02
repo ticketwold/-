@@ -331,7 +331,8 @@ function readBcSportsBoardOdds() {
   }
 
   if (!board.length) return null;
-  const sel = board.find((b) => b.selected) || board[0];
+  const sel = board.find((b) => b.selected);
+  if (!sel) return null;
   return {
     source: 'bcgame',
     odds: sel.odds,
@@ -340,7 +341,7 @@ function readBcSportsBoardOdds() {
     selectionText: sel.txt,
     displayLabel: sel.odds.toFixed(3),
     marketKind: 'ml',
-    sourceKind: 'sports-board',
+    sourceKind: 'sports-board-selected',
     fromPayout: false,
     buttonCount: board.length,
     hasInput: !!findBcSportsStakeInput()

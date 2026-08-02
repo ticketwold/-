@@ -628,8 +628,8 @@ $('scanBtn')?.addEventListener('click', async () => {
           }
         } catch (_) {}
       }
-      logLine(snap.reason || 'BC.Game 배당 없음 — BC 탭에서 슬립 열고 스캔', 'err');
-      logLine('  ※ 패널 클릭 시 BC 슬립이 DOM에서 사라질 수 있음 → 스캔 시 BC 탭으로 전환됨', 'info');
+      logLine(snap.reason || 'BC.Game 배당 없음 — BC에서 배당(초록) 클릭 후 스캔', 'err');
+      logLine('  ※ 슬립 없어도 초록 선택 배당에서 읽기 시도함', 'info');
     }
     if (snap.btiO > 1 && snap.polyO > 1) {
       logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · BC $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
@@ -729,4 +729,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.5.0 — BC탭 활성화 + API훅 (백그라운드 슬립 DOM)', 'info');
+logLine('v1.5.1 — 초록 선택 배당 + 텐텐뱃 팀 자동클릭', 'info');

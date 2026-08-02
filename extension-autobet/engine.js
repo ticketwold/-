@@ -904,8 +904,12 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
     return { ok: false, reason: 'BC.Game: 스포츠/예측 탭 없음', found };
   }
 
-  const multi = await readPolySlipAllBcTabs(leg2Pref, opts);
-  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab, opts);
+  const arbBtiPre = await readBtiOddsOnce(found.btiTab, null);
+  const teamHint = opts.teamHint || arbBtiPre?.teamLabel || arbBtiPre?.outcome || '';
+  const readOpts = { ...opts, teamHint, autoClick: opts.autoClick !== false };
+
+  const multi = await readPolySlipAllBcTabs(leg2Pref, readOpts);
+  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab, readOpts);
   if (multi?.tab) found.polyTab = multi.tab;
   const arbBti = await readBtiOddsOnce(found.btiTab, poly);
   const bti = arbBti;
@@ -917,7 +921,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
 
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — 경기 페이지에서 배당 클릭 후 슬립 열기';
+  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — BC에서 배당(초록) 클릭 후 스캔';
 
   return {
     ok: true,
