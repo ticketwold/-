@@ -170,9 +170,10 @@ function displayOdds(btiO, polyO, snapReason) {
 }
 
 function patchSnapFromKnown(snap, cfg) {
+  const bcMissing = snap.reason && /BC\.Game 배당 없음/.test(snap.reason);
   const partial = {
     btiO: lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO,
-    polyO: lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO
+    polyO: bcMissing ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO)
   };
   if (partial.btiO > 1 && partial.polyO > 1) {
     partial.profit = calcProfit(partial.btiO, partial.polyO);
@@ -226,6 +227,8 @@ function stabilizeSnap(snap, cfg) {
   } else if (snap.reason && /BC\.Game 배당 없음/.test(snap.reason)) {
     lastKnownOdds.polyO = null;
     lastKnownOdds.polyAt = 0;
+    snap.polyO = null;
+    snap.poly = null;
   } else if (lastKnownOdds.polyO > 1 && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
   }
@@ -617,9 +620,9 @@ $('scanBtn')?.addEventListener('click', async () => {
           const probes = await probeBcSlipFrames(snap.found.polyTab);
           for (const p of probes) {
             if (p.odds > 1.01) {
-              logLine(`  f${p.frameId}: ${p.odds.toFixed(3)} [${p.kind}] · ${p.url || '(main)'}`, 'ok');
+              logLine(`  f${p.frameId}: ${p.odds.toFixed(3)} [${p.kind}] in${p.inputs} · ${p.url || '(main)'}`, 'ok');
             } else {
-              logLine(`  f${p.frameId}: ${p.kind} · ${p.url || '(main)'}`, 'info');
+              logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0} · ${p.url || '(main)'}`, 'info');
             }
           }
         } catch (_) {}
@@ -724,4 +727,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.7 — CSP우회 isolated 슬립 파서', 'info');
+logLine('v1.4.8 — USDT 입력필드 탐색 + iframe 1.2 차단', 'info');

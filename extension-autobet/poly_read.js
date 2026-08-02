@@ -403,53 +403,92 @@ async function injectParseBcSlipInline(tabId, frameId) {
   }
 }
 
+async function injectBcSlipAllFrames(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['bc_slip_read.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+    });
+    let best = null;
+    for (const row of results || []) {
+      const hit = row?.result;
+      const frameId = row?.frameId ?? 0;
+      if (hit?.ok && hit.odds > 1.01) {
+        const slip = { ...hit };
+        delete slip.ok;
+        delete slip.reason;
+        delete slip.sample;
+        delete slip.textLen;
+        delete slip.inputCount;
+        delete slip.href;
+        const s = scorePolySlip(slip);
+        if (s > (best?._score ?? -1)) best = { ...slip, frameId, _score: s };
+      } else if (!best?.odds && hit?._debug) {
+        best = { _probe: hit, frameId, _score: -1 };
+      }
+    }
+    return best?.odds > 1.01 ? best : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function probeBcSlipFrames(polyTab) {
   if (!polyTab?.id) return [];
   const frames = await getAllFrames(polyTab.id);
   await ensurePolyScript(polyTab.id);
-  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])].slice(0, 12);
-  const out = [];
-  for (const frameId of frameIds) {
-    const inline = await injectParseBcSlipInline(polyTab.id, frameId);
-    const frame = frames.find((f) => f.frameId === frameId);
-    out.push({
-      frameId,
-      url: (frame?.url || '').replace(/^https?:\/\//, '').slice(0, 72),
-      odds: inline?.odds || null,
-      kind: inline?.sourceKind || inline?._debug || 'miss'
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, allFrames: true },
+      files: ['bc_slip_read.js']
     });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, allFrames: true },
+      func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+    });
+    const out = [];
+    for (const row of results || []) {
+      const hit = row?.result;
+      const frameId = row?.frameId ?? 0;
+      const frame = frames.find((f) => f.frameId === frameId);
+      const url = (frame?.url || hit?.href || '').replace(/^https?:\/\//, '').slice(0, 72);
+      if (hit?.ok && hit.odds > 1.01) {
+        out.push({ frameId, url, odds: hit.odds, kind: hit.sourceKind || 'bc-native-slip', inputs: hit.inputCount });
+      } else {
+        const kind = hit?.reason || 'miss';
+        out.push({ frameId, url, odds: null, kind, inputs: hit?.inputCount ?? 0, len: hit?.textLen ?? 0 });
+      }
+    }
+    out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
+    return out;
+  } catch (e) {
+    return [{ frameId: -1, url: '', odds: null, kind: e.message || 'probe-fail' }];
   }
-  return out;
 }
 
 async function readBcSportsNativeSlip(polyTab) {
   if (!polyTab?.id) return null;
-  const frames = await getAllFrames(polyTab.id);
-  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])].slice(0, 20);
-
   await ensurePolyScript(polyTab.id);
-  await ensureBcScrapeScript(polyTab.id, 0);
 
-  const probes = await Promise.all(frameIds.map(async (frameId) => {
-    const [inline, deep, msgRes] = await Promise.all([
-      injectParseBcSlipInline(polyTab.id, frameId),
-      injectReadBcSportsDeep(polyTab.id, frameId),
-      withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2000, 'BC슬립').catch(() => null)
-    ]);
-    const candidates = [];
-    if (inline?.odds > 1.01) candidates.push(inline);
-    if (deep?.odds > 1.01 && !deep._fail) candidates.push(deep);
-    if (msgRes?.slip?.odds > 1.01) candidates.push(msgRes.slip);
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => scorePolySlip(b) - scorePolySlip(a));
-    const pick = normalizePolySlip(candidates[0]);
-    return { ...pick, frameId, _score: scorePolySlip(pick) };
-  }));
+  const allFramesHit = await injectBcSlipAllFrames(polyTab.id);
+  if (allFramesHit?.odds > 1.01) {
+    lastBcLeg2Frame = { tabId: polyTab.id, frameId: allFramesHit.frameId };
+    return allFramesHit;
+  }
+
+  const frames = await getAllFrames(polyTab.id);
+  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])];
 
   let best = null;
-  for (const hit of probes) {
-    if (!hit?.odds) continue;
-    if (hit._score > (best?._score ?? -1)) best = hit;
+  for (const frameId of frameIds) {
+    const inline = await injectParseBcSlipInline(polyTab.id, frameId);
+    if (!(inline?.odds > 1.01)) continue;
+    const s = scorePolySlip(inline);
+    if (s > (best?._score ?? -1)) best = { ...inline, frameId, _score: s };
   }
 
   if (best?.odds > 1.01) {
@@ -467,9 +506,6 @@ async function readPolyOddsOnce(polyTab) {
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab);
     if (native?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, native);
-
-    const iframeSlip = await readBcLeg2FromBtiFrames(polyTab).catch(() => null);
-    if (iframeSlip?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, iframeSlip);
 
     polyOddsCache.delete(polyTab.id);
     return null;
