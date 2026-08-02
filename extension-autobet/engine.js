@@ -534,6 +534,75 @@ async function checkBtiSlipUi(btiTab) {
   };
 }
 
+async function orderBcAmountFrameIds(tabId, tabUrl) {
+  const ordered = await orderBcLeg2FrameIds(tabId, tabUrl);
+  const ids = [0];
+  if (lastBcLeg2Frame?.tabId === tabId && !ids.includes(lastBcLeg2Frame.frameId)) {
+    ids.push(lastBcLeg2Frame.frameId);
+  }
+  for (const id of ordered) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+async function probeBcMainFrame(polyTab) {
+  if (!polyTab?.id) return null;
+  try {
+    await ensurePolyScript(polyTab.id, 0);
+    const res = await sendPoly(polyTab.id, { type: 'PROBE_POLY' }, 0);
+    return res?.probe || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function setPolyAmountOnFrame(polyTab, amountUsd, frameId) {
+  const slipRead = await setPolyAmountViaSlipRead(polyTab, amountUsd, frameId);
+  if (slipRead?.ok) return slipRead;
+  const deep = await setPolyAmountViaDeep(polyTab, amountUsd, frameId);
+  if (deep?.ok) return deep;
+  await ensurePolyScript(polyTab.id, frameId);
+  const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true }, frameId);
+  if (res?.ok || res?.partial) return res;
+  return null;
+}
+
+async function placePolyBetOnFrame(polyTab, amountUsd, frameId, opts = {}) {
+  const skipFill = !!opts.skipFill;
+  const fastStrike = !!opts.fastStrike;
+  const teamHint = opts.teamHint || '';
+  if (!skipFill && !fastStrike) {
+    const fill = await setPolyAmountOnFrame(polyTab, amountUsd, frameId);
+    if (!fill?.ok && !fill?.partial) return { success: false, reason: fill?.reason || 'stake-fill-fail', frameId };
+  }
+  await ensurePolyScript(polyTab.id, frameId);
+  const res = await sendPoly(polyTab.id, {
+    type: 'PLACE_BET',
+    amount: amountUsd,
+    skipFill: skipFill || fastStrike,
+    fastStrike,
+    teamHint
+  }, frameId);
+  if (res?.success) return { ...res, frameId, method: 'poly-cs' };
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      files: ['bc_slip_read.js']
+    });
+    const slipBet = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      func: async (amount) => (typeof window.__bcPlaceBet === 'function' ? window.__bcPlaceBet(amount) : null),
+      args: [amountUsd]
+    });
+    const hit = slipBet?.[0]?.result;
+    if (hit?.success) return { ...hit, frameId, method: 'slip-read-bet' };
+  } catch (_) {}
+  const deepRes = await placePolyBetViaDeep(polyTab, amountUsd, frameId);
+  if (deepRes?.success) return { ...deepRes, frameId, method: 'sports-deep' };
+  return res || deepRes || { success: false, reason: 'bet-fail', frameId };
+}
+
 async function orderBcLeg2FrameIds(tabId, tabUrl) {
   const frames = await getAllFrames(tabId);
   const scored = frames.map((f) => ({
@@ -623,8 +692,14 @@ async function probeBcLeg2Frames(polyTab) {
 async function probePolyStrikeUi(polyTab) {
   if (!polyTab?.id) return null;
   if (isBcGameSportsUrl(polyTab.url)) {
+    const mainProbe = await probeBcMainFrame(polyTab);
+    if (mainProbe?.hasInput && mainProbe?.hasBtn) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+      return mainProbe;
+    }
     const btiProbe = await probeBcLeg2Frames(polyTab);
     if (btiProbe?.hasPanel || btiProbe?.hasBtn) return btiProbe;
+    if (mainProbe?.hasInput || mainProbe?.hasPanel) return mainProbe;
   }
   await ensurePolyScript(polyTab.id);
   const res = await sendPoly(polyTab.id, { type: 'PROBE_POLY' });
@@ -758,41 +833,21 @@ async function placePolyBetViaDeep(polyTab, amountUsd, frameId) {
 async function setPolyAmount(polyTab, amountUsd) {
   if (!polyTab?.id) return { ok: false, reason: '탭 없음' };
   if (isBcGameSportsUrl(polyTab.url)) {
-    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
-    if (lastBcLeg2Frame?.tabId === polyTab.id && !frameIds.includes(lastBcLeg2Frame.frameId)) {
-      frameIds.unshift(lastBcLeg2Frame.frameId);
-    } else if (lastBcLeg2Frame?.tabId === polyTab.id) {
-      const idx = frameIds.indexOf(lastBcLeg2Frame.frameId);
-      if (idx > 0) {
-        frameIds.splice(idx, 1);
-        frameIds.unshift(lastBcLeg2Frame.frameId);
-      }
-    }
+    const frameIds = await orderBcAmountFrameIds(polyTab.id, polyTab.url);
+    let bestPartial = null;
     for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
-      const slipRead = await setPolyAmountViaSlipRead(polyTab, amountUsd, frameId);
-      if (slipRead?.ok) {
+      const hit = await setPolyAmountOnFrame(polyTab, amountUsd, frameId);
+      if (hit?.ok) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-        return slipRead;
+        return hit;
       }
-      const deep = await setPolyAmountViaDeep(polyTab, amountUsd, frameId);
-      if (deep?.ok) {
-        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-        return deep;
-      }
-      await ensurePolyScript(polyTab.id, frameId);
-      const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true }, frameId);
-      if (res?.ok) {
-        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-        return res;
-      }
-      await ensureBtiScript(polyTab.id, frameId);
-      const btiRes = await sendBti(polyTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountUsd });
-      if (btiRes?.ok) {
-        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-        return btiRes;
-      }
+      if (hit?.partial && !bestPartial) bestPartial = { ...hit, frameId };
     }
-    return { ok: false, reason: 'BC.Game 금액 입력 실패 — 슬립 열기' };
+    if (bestPartial) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: bestPartial.frameId };
+      return bestPartial;
+    }
+    return { ok: false, reason: 'BC.Game 금액 입력 실패 — 슬립 금액란 클릭 후 재시도' };
   }
   await ensurePolyScript(polyTab.id);
   const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true });
@@ -802,18 +857,22 @@ async function setPolyAmount(polyTab, amountUsd) {
 async function ensurePolyPanel(polyTab, teamHint) {
   if (!polyTab?.id) return { ok: false, reason: '탭 없음' };
   if (isBcGameSportsUrl(polyTab.url)) {
-    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+    await ensurePolyScript(polyTab.id, 0);
+    const main = await sendPoly(polyTab.id, { type: 'ENSURE_POLY_PANEL', team: teamHint || '' }, 0);
+    if (main?.ok) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+      return { ...main, frameId: 0 };
+    }
+    const probe = await probeBcMainFrame(polyTab);
+    if (probe?.hasInput && probe?.hasBtn) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+      return { ok: true, alreadyOpen: true, frameId: 0 };
+    }
+    const frameIds = await orderBcAmountFrameIds(polyTab.id, polyTab.url);
     for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
-      await ensureBtiScript(polyTab.id, frameId);
-      const probe = await sendBti(polyTab.id, frameId, { type: 'PROBE_BET_FRAME' });
-      if (probe?.hasInput && probe?.hasSlip) {
-        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-        return { ok: true, alreadyOpen: true, frameId };
-      }
-      const res = await sendBti(polyTab.id, frameId, {
-        type: 'ENSURE_BTI_SLIP',
-        hint: { polyTeam: teamHint, excludeTeam: teamHint, forArbPick: true }
-      });
+      if (frameId === 0) continue;
+      await ensurePolyScript(polyTab.id, frameId);
+      const res = await sendPoly(polyTab.id, { type: 'ENSURE_POLY_PANEL', team: teamHint || '' }, frameId);
       if (res?.ok) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId };
         return { ...res, frameId };
@@ -834,28 +893,15 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
 
   if (isBcGameSportsUrl(polyTab.url)) {
     if (!skipFill && !fastStrike) await ensurePolyPanel(polyTab, teamHint);
-    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
-    if (lastBcLeg2Frame?.tabId === polyTab.id && !frameIds.includes(lastBcLeg2Frame.frameId)) {
-      frameIds.unshift(lastBcLeg2Frame.frameId);
+    const frameIds = await orderBcAmountFrameIds(polyTab.id, polyTab.url);
+    for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+      const res = await placePolyBetOnFrame(polyTab, amountUsd, frameId, { skipFill, fastStrike, teamHint });
+      if (res?.success) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId: res.frameId ?? frameId };
+        return res;
+      }
     }
-    const msg = {
-      type: 'PLACE_BET',
-      amount: amountUsd,
-      targetOdds: opts.targetOdds || null,
-      hint: { ...opts.hint, forceBet: true, skipEnsure: fastStrike, fastStrike, polyTeam: teamHint }
-    };
-    const { res, frameId } = await sendBtiToFrames(polyTab.id, frameIds.slice(0, BTI_MAX_FRAMES), msg);
-    if (res?.success) {
-      lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-      return { ...res, frameId, method: 'sports-bti' };
-    }
-    const deepFrame = lastBcLeg2Frame?.tabId === polyTab.id ? lastBcLeg2Frame.frameId : frameIds[0];
-    const deepRes = await placePolyBetViaDeep(polyTab, amountUsd, deepFrame);
-    if (deepRes?.success) {
-      lastBcLeg2Frame = { tabId: polyTab.id, frameId: deepFrame };
-      return { ...deepRes, frameId: deepFrame, method: 'sports-deep' };
-    }
-    return res || deepRes || { success: false, reason: 'BC.Game 배팅 실패 — 슬립/iframe 확인' };
+    return { success: false, reason: 'BC.Game 배팅 실패 — 슬립·금액·베팅하기 확인' };
   }
 
   if (!skipFill && !fastStrike) await ensurePolyPanel(polyTab, teamHint);

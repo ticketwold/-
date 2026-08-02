@@ -15,6 +15,8 @@ let lastStrikeAt = 0;
 let amountSyncLock = false;
 let oddsReadBusy = false;
 let amountSyncQueued = true;
+let lastPolySyncErr = '';
+let lastPolySyncErrAt = 0;
 let lastSynced = { polyUsd: 0, btiKrw: 0, btiO: 0, polyO: 0, at: 0 };
 let polyPreSynced = false;
 let tabCache = null;
@@ -419,12 +421,22 @@ async function liveAmountSync(force) {
     amountSyncQueued = false;
     if (polyPreSynced) {
       $('statusHint').textContent = `동기화 OK — ${leg2PrefLabel(cfg.leg2)} $${snap.polyUsd.toFixed(2)} · ${leg1Label()} ${cfg.btiBetKrw.toLocaleString()}원`;
+      lastPolySyncErr = '';
     } else if (!polyRes?.ok) {
       const detail = polyRes?.inputVal && polyRes?.stake && Math.abs(polyRes.inputVal - polyRes.stake) > 0.2
         ? ` (입력 ${polyRes.inputVal} ≠ 총베팅 ${polyRes.stake})`
         : '';
-      $('statusHint').textContent = (polyRes?.reason || 'BC.Game 금액 동기화 실패 — 슬립 금액란 확인') + detail;
-      logLine((polyRes?.reason || 'BC.Game 금액 동기화 실패') + detail, 'err');
+      const msg = (polyRes?.reason || 'BC.Game 금액 동기화 실패 — 슬립 금액란 확인') + detail;
+      $('statusHint').textContent = msg;
+      const now = Date.now();
+      if (msg !== lastPolySyncErr || now - lastPolySyncErrAt > 12000) {
+        logLine(msg, 'err');
+        lastPolySyncErr = msg;
+        lastPolySyncErrAt = now;
+      }
+    } else if (polyRes?.partial) {
+      polyPreSynced = !!btiRes?.ok;
+      $('statusHint').textContent = `BC 입력됨(총베팅 미반영) — 슬립 금액란 탭 후 확인 · $${snap.polyUsd.toFixed(2)}`;
     }
     setTimeout(() => refreshOddsLive(), 120);
   } catch (e) {

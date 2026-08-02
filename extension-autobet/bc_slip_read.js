@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 10;
+  const VER = 11;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -303,9 +303,16 @@
         const totals = readSlipTotals();
         return { ok: true, stake: accepted, payout: totals.payout || null, method: ['exec', 'native', 'chars', 'usdt'][i], target: rounded };
       }
+      const inputVal = readStakeValue(inp);
+      if (inputVal > 0 && Math.abs(inputVal - rounded) < 0.2) {
+        return { ok: true, partial: true, stake: accepted || inputVal, inputVal, target: rounded, method: ['exec', 'native', 'chars', 'usdt'][i] };
+      }
     }
     const accepted = readAcceptedStake(inp);
     const inputVal = readStakeValue(inp);
+    if (inputVal > 0 && Math.abs(inputVal - rounded) < 0.25) {
+      return { ok: true, partial: true, stake: accepted || inputVal, inputVal, target: rounded, reason: 'input-only' };
+    }
     return {
       ok: accepted > 0 && Math.abs(accepted - rounded) < 0.5,
       stake: accepted || inputVal,
@@ -803,9 +810,38 @@
     };
   }
 
+  function findBetButton() {
+    let hit = null;
+    walkNodes(document.documentElement, (node) => {
+      if (hit || node.nodeType !== 1) return;
+      const tag = node.tagName;
+      const role = node.getAttribute?.('role') || '';
+      if (tag !== 'BUTTON' && role !== 'button') return;
+      if (node.disabled) return;
+      const t = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 80) return;
+      if (/베팅하기|place\s*(a\s*)?bet|배당\s*수락|bet\s*now/i.test(t) && !/슬립|로그인|정리/i.test(t)) {
+        const r = node.getBoundingClientRect?.();
+        if (r && r.width > 20 && r.height > 8) hit = node;
+      }
+    }, 0);
+    return hit;
+  }
+
+  async function placeBcBet(amount) {
+    const fill = await setStakeAmount(amount);
+    if (!fill?.ok && !fill?.partial) return { success: false, reason: fill?.reason || 'stake-fill-fail', fill };
+    const btn = findBetButton();
+    if (!btn) return { success: false, reason: 'bet-btn-missing', fill };
+    try { btn.scrollIntoView?.({ block: 'center' }); } catch (_) {}
+    try { btn.click?.(); } catch (_) {}
+    return { success: true, fill, btnText: (btn.textContent || '').trim().slice(0, 60) };
+  }
+
   window.__bcSlipReadVer = VER;
   window.__bcReadNativeSlip = readNativeSlip;
   window.__bcDiagReport = diagReport;
   window.__bcSetStake = setStakeAmount;
-  window.__bcReadStake = () => readStakeValue(findBestStakeInput());
+  window.__bcReadStake = () => readAcceptedStake(findBestStakeInput());
+  window.__bcPlaceBet = placeBcBet;
 })();

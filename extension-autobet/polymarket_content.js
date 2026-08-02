@@ -254,12 +254,34 @@ function isBcSportsBetButtonText(txt) {
 }
 
 function findBcSportsBetButton() {
-  const allBtns = Array.from(document.querySelectorAll('button, [role="button"]')).filter((b) => !b.disabled);
-  for (const btn of allBtns) {
+  const candidates = [];
+  function walk(node, depth) {
+    if (!node || depth > 120) return;
+    if (node.nodeType === 1) {
+      const tag = node.tagName;
+      const role = node.getAttribute?.('role') || '';
+      if ((tag === 'BUTTON' || role === 'button') && !node.disabled && visible(node)) {
+        candidates.push(node);
+      }
+      let sr = node.shadowRoot;
+      if (!sr && typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot) {
+        try { sr = chrome.dom.openOrClosedShadowRoot(node); } catch (_) {}
+      }
+      if (sr) walk(sr, depth + 1);
+      for (const c of node.childNodes) walk(c, depth + 1);
+      return;
+    }
+    if (node.nodeType === 11) {
+      for (const c of node.childNodes) walk(c, depth + 1);
+    }
+  }
+  walk(document.documentElement, 0);
+
+  for (const btn of candidates) {
     const txt = (btn.textContent || '').trim();
     if (txt.includes('배당 수락') || txt.includes('배당수락')) return btn;
   }
-  for (const btn of allBtns) {
+  for (const btn of candidates) {
     const txt = (btn.textContent || '').trim();
     if (isBcSportsBetButtonText(txt)) return btn;
     if ((btn.className || '').includes('sportsbook-Button') && /베팅|bet/i.test(txt)) return btn;
@@ -496,6 +518,9 @@ async function setBcSportsAmount(amountUsd, force = true) {
   })();
   if (stake > 0 && Math.abs(stake - rounded) < 0.5) {
     return { ok: true, stake, method: 'type', target: rounded, inputVal };
+  }
+  if (inputVal > 0 && Math.abs(inputVal - rounded) < 0.25) {
+    return { ok: true, partial: true, stake: stake || inputVal, inputVal, target: rounded, method: 'type-input-only' };
   }
   return {
     ok: false,
