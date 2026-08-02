@@ -6,10 +6,20 @@ function predictionSiteId() {
 
 function isBcSportsPage() {
   try {
+    if (/bti-sports\.(io|com)/i.test(location.hostname)) return true;
+    if (hasBcSportsUi()) return true;
     return /bc\.game/i.test(location.hostname) && /\/sports\//i.test(location.pathname);
   } catch (_) {
     return false;
   }
+}
+
+function hasBcSportsUi() {
+  if (findBcSportsStakeInput()) return true;
+  if (document.querySelector('[class*="betslip"], [class*="Betslip"], [class*="bet-slip"]')) return true;
+  if (document.querySelector('button[class*="master_fe_Selections_selection"], button[class*="Selections_selection"], button.sportsbook-Button')) return true;
+  if (document.querySelector('.button__bet__odds, [class*="eventSelection"], [class*="betInformation__title"]')) return true;
+  return false;
 }
 
 function parseDecimalOdds(t) {
@@ -142,23 +152,43 @@ function readBcSportsSlipFromPanel() {
 }
 
 function readBcSportsBoardOdds() {
+  const selectors = [
+    'button[class*="master_fe_Selections_selection"]',
+    'button[class*="Selections_selection"]',
+    'button.sportsbook-Button',
+    '.button__bet__odds',
+    '[class*="eventSelection"]',
+    'button, [role="button"]'
+  ];
+  const seen = new Set();
   const board = [];
-  for (const btn of document.querySelectorAll('button, [role="button"]')) {
-    if (!visible(btn)) continue;
-    const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!txt) continue;
-    let odds = null;
-    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
-    if (oddsEl) odds = parseDecimalOdds(oddsEl.textContent);
-    if (!odds) {
-      const m = txt.match(/(\d+\.\d{2,3})\s*$/);
-      if (m) odds = parseDecimalOdds(m[1]);
+
+  for (const sel of selectors) {
+    for (const btn of document.querySelectorAll(sel)) {
+      if (!visible(btn) || seen.has(btn)) continue;
+      seen.add(btn);
+      const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt || txt.length > 160) continue;
+      let odds = null;
+      const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"], [class*="Selections_odds"]');
+      if (oddsEl) odds = parseDecimalOdds(oddsEl.textContent);
+      if (!odds) {
+        const m = txt.match(/(\d+\.\d{2,3})\s*$/);
+        if (m) odds = parseDecimalOdds(m[1]);
+      }
+      if (!odds) {
+        const m2 = txt.match(/(\d+\.\d{2,3})/);
+        if (m2) odds = parseDecimalOdds(m2[1]);
+      }
+      if (!odds) continue;
+      const selected = btn.getAttribute('aria-pressed') === 'true'
+        || btn.getAttribute('aria-selected') === 'true'
+        || /selected|active|pressed|highlight/i.test(btn.className || '');
+      board.push({ odds, txt, selected });
     }
-    if (!odds) continue;
-    const selected = btn.getAttribute('aria-pressed') === 'true'
-      || /selected|active|pressed|highlight/i.test(btn.className || '');
-    board.push({ odds, txt, selected });
+    if (board.length >= 2) break;
   }
+
   if (!board.length) return null;
   const sel = board.find((b) => b.selected) || board[0];
   return {
@@ -305,7 +335,9 @@ async function placeBcSportsBet(amountUsd, opts = {}) {
 }
 
 function readLeg2Slip() {
-  if (isBcSportsPage()) return readBcSportsSlip();
+  if (isBcSportsPage() || hasBcSportsUi()) return readBcSportsSlip();
+  const sports = readBcSportsSlip();
+  if (sports?.odds > 1.01) return sports;
   return readPolymarketSlip();
 }
 

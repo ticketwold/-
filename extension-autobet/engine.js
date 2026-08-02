@@ -4,6 +4,7 @@
 let lastBtiFrame = null;
 let lastBtiSlipFrame = null;
 let lastBtiBoardFrame = null;
+let lastBcLeg2Frame = null;
 let polyScriptReady = new Set();
 let btiScriptReady = new Set();
 
@@ -509,8 +510,66 @@ async function checkBtiSlipUi(btiTab) {
   };
 }
 
+async function orderBcLeg2FrameIds(tabId, tabUrl) {
+  const frames = await getAllFrames(tabId);
+  const scored = frames.map((f) => ({
+    frameId: f.frameId,
+    score: scoreBcLeg2FrameUrl(f.url || '', tabUrl) + (f.frameId === 0 ? 2 : 0),
+    url: f.url || ''
+  }));
+  if (lastBcLeg2Frame?.tabId === tabId) {
+    const hit = scored.find((s) => s.frameId === lastBcLeg2Frame.frameId);
+    if (hit) hit.score += 120;
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const ids = scored.filter((s) => s.score >= 15).map((s) => s.frameId);
+  if (ids.length) return ids;
+  return frames.map((f) => f.frameId);
+}
+
+function mapBtiProbeToPolyProbe(probe) {
+  if (!probe) return null;
+  return {
+    hasPanel: !!(probe.hasInput || probe.hasSlip || probe.slipOpen),
+    hasInput: !!probe.hasInput,
+    hasBtn: !!probe.hasBtn,
+    stake: probe.stake || null,
+    btnText: probe.btnText || '',
+    btnDisabled: probe.btnDisabled ?? null,
+    team: probe.team || '',
+    mode: 'sports-bti',
+    slipCount: probe.slipCount || 0,
+    slipOdds: probe.slipOdds || 0
+  };
+}
+
+async function probeBcLeg2Frames(polyTab) {
+  if (!polyTab?.id) return null;
+  const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+  let best = null;
+
+  for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(polyTab.id, frameId);
+    const probe = await sendBti(polyTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+    if (!probe) continue;
+    const score = (probe.hasInput ? 700 : 0) + (probe.hasBtn ? 500 : 0) + (probe.hasSlip ? 300 : 0)
+      + (probe.slipOdds > 1 ? Math.min(probe.slipOdds, 80) : 0) + (probe.slipCount > 0 ? 120 : 0);
+    if (!best || score > best.score) best = { probe, score, frameId };
+  }
+
+  if (best?.frameId != null) {
+    lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
+    return mapBtiProbeToPolyProbe(best.probe);
+  }
+  return null;
+}
+
 async function probePolyStrikeUi(polyTab) {
   if (!polyTab?.id) return null;
+  if (isBcGameSportsUrl(polyTab.url)) {
+    const btiProbe = await probeBcLeg2Frames(polyTab);
+    if (btiProbe?.hasPanel || btiProbe?.hasBtn) return btiProbe;
+  }
   await ensurePolyScript(polyTab.id);
   const res = await sendPoly(polyTab.id, { type: 'PROBE_POLY' });
   return res?.probe || null;
@@ -592,6 +651,21 @@ async function injectPolyMain(tabId) {
 
 async function setPolyAmount(polyTab, amountUsd) {
   if (!polyTab?.id) return { ok: false, reason: '탭 없음' };
+  if (isBcGameSportsUrl(polyTab.url)) {
+    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+    if (lastBcLeg2Frame?.tabId === polyTab.id && !frameIds.includes(lastBcLeg2Frame.frameId)) {
+      frameIds.unshift(lastBcLeg2Frame.frameId);
+    }
+    for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+      await ensureBtiScript(polyTab.id, frameId);
+      const res = await sendBti(polyTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountUsd });
+      if (res?.ok) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return res;
+      }
+    }
+    return { ok: false, reason: 'BC.Game 금액 입력 실패 — 슬립 열기' };
+  }
   await ensurePolyScript(polyTab.id);
   const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true });
   return res || { ok: false, reason: '응답 없음' };
@@ -599,6 +673,26 @@ async function setPolyAmount(polyTab, amountUsd) {
 
 async function ensurePolyPanel(polyTab, teamHint) {
   if (!polyTab?.id) return { ok: false, reason: '탭 없음' };
+  if (isBcGameSportsUrl(polyTab.url)) {
+    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+    for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+      await ensureBtiScript(polyTab.id, frameId);
+      const probe = await sendBti(polyTab.id, frameId, { type: 'PROBE_BET_FRAME' });
+      if (probe?.hasInput && probe?.hasSlip) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return { ok: true, alreadyOpen: true, frameId };
+      }
+      const res = await sendBti(polyTab.id, frameId, {
+        type: 'ENSURE_BTI_SLIP',
+        hint: { polyTeam: teamHint, excludeTeam: teamHint, forArbPick: true }
+      });
+      if (res?.ok) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return { ...res, frameId };
+      }
+    }
+    return { ok: false, reason: 'BC.Game 슬립 없음 — 배당 클릭' };
+  }
   await ensurePolyScript(polyTab.id);
   const res = await sendPoly(polyTab.id, { type: 'ENSURE_POLY_PANEL', team: teamHint || '' });
   return res || { ok: false, reason: '응답 없음' };
@@ -609,6 +703,27 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
   const skipFill = !!opts.skipFill;
   const fastStrike = !!opts.fastStrike;
   const teamHint = opts.teamHint || '';
+
+  if (isBcGameSportsUrl(polyTab.url)) {
+    if (!skipFill && !fastStrike) await ensurePolyPanel(polyTab, teamHint);
+    const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+    if (lastBcLeg2Frame?.tabId === polyTab.id && !frameIds.includes(lastBcLeg2Frame.frameId)) {
+      frameIds.unshift(lastBcLeg2Frame.frameId);
+    }
+    const msg = {
+      type: 'PLACE_BET',
+      amount: amountUsd,
+      targetOdds: opts.targetOdds || null,
+      hint: { ...opts.hint, forceBet: true, skipEnsure: fastStrike, fastStrike, polyTeam: teamHint }
+    };
+    const { res, frameId } = await sendBtiToFrames(polyTab.id, frameIds.slice(0, BTI_MAX_FRAMES), msg);
+    if (res?.success) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+      return { ...res, frameId, method: 'sports-bti' };
+    }
+    return res || { success: false, reason: 'BC.Game 배팅 실패 — 슬립/iframe 확인' };
+  }
+
   if (!skipFill && !fastStrike) await ensurePolyPanel(polyTab, teamHint);
   await injectPolyMain(polyTab.id);
   try {
@@ -703,7 +818,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
 
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — 배당 클릭 또는 금액 입력';
+  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — 경기 페이지에서 배당 클릭 후 슬립 열기';
 
   return {
     ok: true,

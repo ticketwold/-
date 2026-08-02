@@ -148,3 +148,14 @@ function scoreBtiFrameUrl(url) {
   if (isWrapperUrl(url)) score += 5;
   return score;
 }
+
+function scoreBcLeg2FrameUrl(url, tabUrl) {
+  if (!url) return 0;
+  let score = scoreBtiFrameUrl(url);
+  if (/bti-sports\.(io|com)/i.test(url)) score += 90;
+  if (/betby|sptpub|sportradar|invisiblesport/i.test(url)) score += 70;
+  if (/sportsbook|master_fe|Selections_selection/i.test(url)) score += 40;
+  if (tabUrl && isBcGameSportsUrl(tabUrl) && score > 0) score += 25;
+  if (isBcGameUrl(url) && /\/sports/i.test(url || '')) score += 15;
+  return score;
+}

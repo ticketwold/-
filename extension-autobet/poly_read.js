@@ -1,10 +1,11 @@
 // poly_read.js — Polymarket DOM 스크랩 + Gamma API 폴백
 'use strict';
 
-async function injectReadBcSports(tabId) {
+async function injectReadBcSports(tabId, frameId = 0) {
   try {
+    const target = frameId ? { tabId, frameIds: [frameId] } : { tabId, allFrames: true };
     const results = await chrome.scripting.executeScript({
-      target: { tabId },
+      target,
       world: 'MAIN',
       func: () => {
         function vis(el) {
@@ -16,12 +17,35 @@ async function injectReadBcSports(tabId) {
           if (!n || n <= 1.01 || n >= 100) return null;
           return n;
         }
+        function isSelected(btn) {
+          if (!btn) return false;
+          const cls = String(btn.className || '');
+          return btn.getAttribute('aria-pressed') === 'true'
+            || btn.getAttribute('aria-selected') === 'true'
+            || /selected|active|pressed|highlight/i.test(cls);
+        }
+        function parseBtn(btn) {
+          const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          let odds = null;
+          const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"], [class*="Selections_odds"]');
+          if (oddsEl) odds = parseOdds(oddsEl.textContent);
+          if (!odds) {
+            const m = txt.match(/(\d+\.\d{2,3})\s*$/);
+            if (m) odds = parseOdds(m[1]);
+          }
+          if (!odds) {
+            const m2 = txt.match(/(\d+\.\d{2,3})/);
+            if (m2) odds = parseOdds(m2[1]);
+          }
+          return odds > 1.01 ? { odds, txt, selected: isSelected(btn) } : null;
+        }
 
         let hasInput = false;
         for (const inp of document.querySelectorAll('input, textarea')) {
           if (!vis(inp)) continue;
           const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
-          if (/counter|Counter|베팅|stake/i.test(blob)) { hasInput = true; break; }
+          if (/search|검색/i.test(blob)) continue;
+          if (/counter|Counter|베팅|stake|amount/i.test(blob)) { hasInput = true; break; }
         }
 
         function readSlipPanel() {
@@ -41,7 +65,7 @@ async function injectReadBcSports(tabId) {
               const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
               const eventText = eventEl?.textContent?.trim() || '';
 
-              for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]')) {
+              for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"], [class*="Selections_odds"]')) {
                 const o = parseOdds(sp.textContent);
                 if (o) return { odds: o, selectionText, eventText, source: 'bc-sports-scrape', hasInput: true, marketKind: 'ml' };
               }
@@ -76,6 +100,7 @@ async function injectReadBcSports(tabId) {
           return {
             ...slipPanel,
             source: 'bcgame',
+            sourceKind: 'sports-slip',
             teamLabel,
             outcome: teamLabel,
             displayLabel: slipPanel.odds.toFixed(3),
@@ -84,22 +109,23 @@ async function injectReadBcSports(tabId) {
           };
         }
 
+        const selectors = [
+          'button[class*="master_fe_Selections_selection"]',
+          'button[class*="Selections_selection"]',
+          'button.sportsbook-Button',
+          '.button__bet__odds',
+          '[class*="eventSelection"]',
+          'button'
+        ];
+        const seen = new Set();
         const board = [];
-        for (const btn of document.querySelectorAll('button')) {
-          if (!vis(btn)) continue;
-          const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-          if (!txt) continue;
-          let odds = null;
-          const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
-          if (oddsEl) odds = parseOdds(oddsEl.textContent);
-          if (!odds) {
-            const m = txt.match(/(\d+\.\d{2,3})\s*$/);
-            if (m) odds = parseOdds(m[1]);
+        for (const sel of selectors) {
+          for (const btn of document.querySelectorAll(sel)) {
+            if (seen.has(btn) || !vis(btn)) continue;
+            seen.add(btn);
+            const parsed = parseBtn(btn);
+            if (parsed) board.push(parsed);
           }
-          if (!odds) continue;
-          const selected = btn.getAttribute('aria-pressed') === 'true'
-            || /selected|active|pressed|highlight/i.test(btn.className || '');
-          board.push({ odds, txt, selected });
         }
         if (!board.length) return null;
         const sel = board.find((b) => b.selected) || board[0];
@@ -118,10 +144,55 @@ async function injectReadBcSports(tabId) {
         };
       }
     });
-    return results?.[0]?.result || null;
+    const hits = (results || []).map((r) => r?.result).filter((r) => r?.odds > 1.01);
+    if (!hits.length) return null;
+    hits.sort((a, b) => {
+      const sa = (a.sourceKind === 'sports-slip' ? 200 : 0) + (a.hasInput ? 50 : 0) + a.odds;
+      const sb = (b.sourceKind === 'sports-slip' ? 200 : 0) + (b.hasInput ? 50 : 0) + b.odds;
+      return sb - sa;
+    });
+    return hits[0];
   } catch (_) {
     return null;
   }
+}
+
+async function readBcLeg2FromBtiFrames(polyTab) {
+  if (!polyTab?.id) return null;
+  const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+  let best = null;
+
+  for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+    await ensureBtiScript(polyTab.id, frameId);
+    let slip = null;
+    try {
+      const res = await withTimeout(
+        sendBti(polyTab.id, frameId, { type: 'READ_BTI_ODDS', hint: { preferActiveSlip: true } }),
+        BTI_PROBE_MS,
+        'BC iframe 읽기'
+      );
+      slip = res?.slip || null;
+    } catch (_) {}
+    if (!(slip?.odds > 1.01)) {
+      try {
+        const scraped = await injectReadBtiFrame(polyTab.id, frameId);
+        if (scraped?.odds > 1.01) slip = scraped;
+      } catch (_) {}
+    }
+    if (!(slip?.odds > 1.01)) continue;
+    const norm = normalizePolySlip({
+      ...slip,
+      source: 'bcgame',
+      sourceKind: slip.source === 'slip-display' ? 'sports-slip' : 'sports-board'
+    });
+    const s = scorePolySlip(norm);
+    if (s > (best?._score ?? -1)) {
+      best = { ...norm, frameId, _score: s };
+    }
+  }
+
+  if (best?.frameId != null) lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
+  return best;
 }
 
 async function injectReadPoly(tabId, siteKey = 'bcgame') {
@@ -410,15 +481,24 @@ async function readPolyOddsOnce(polyTab) {
   const isSports = typeof isBcGameSportsUrl === 'function' && isBcGameSportsUrl(polyTab.url);
 
   const frames = await getAllFrames(polyTab.id);
-  const order = [0];
-  for (const f of frames) {
-    if (f.frameId !== 0 && !order.includes(f.frameId)) order.push(f.frameId);
+  let order = [0];
+  if (isSports && typeof orderBcLeg2FrameIds === 'function') {
+    order = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+  } else {
+    for (const f of frames) {
+      if (f.frameId !== 0 && !order.includes(f.frameId)) order.push(f.frameId);
+    }
   }
 
-  const toProbe = order.slice(0, 12);
+  const toProbe = order.slice(0, 16);
   await Promise.all(toProbe.map((fid) => ensurePolyScript(polyTab.id, fid)));
 
-  const [slipResults, injected, scraped, sportsScraped] = await Promise.all([
+  const btiSlipP = isSports ? readBcLeg2FromBtiFrames(polyTab).catch(() => null) : Promise.resolve(null);
+  const scrapeJobs = isSports
+    ? toProbe.map((frameId) => injectReadBcSports(polyTab.id, frameId).catch(() => null))
+    : [injectReadBcSports(polyTab.id, 0).catch(() => null)];
+
+  const [slipResults, injected, scraped, sportsScrapedList, btiSlip] = await Promise.all([
     Promise.all(toProbe.map(async (frameId) => {
       try {
         const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'BC읽기');
@@ -429,7 +509,8 @@ async function readPolyOddsOnce(polyTab) {
     })),
     injectReadPoly(polyTab.id, siteKey).catch(() => null),
     injectScrapePolyCents(polyTab.id).catch(() => null),
-    isSports ? injectReadBcSports(polyTab.id).catch(() => null) : Promise.resolve(null)
+    Promise.all(scrapeJobs),
+    btiSlipP
   ]);
 
   let best = null;
@@ -443,7 +524,10 @@ async function readPolyOddsOnce(polyTab) {
     }
   }
 
-  for (const slip of [injected, scraped, sportsScraped]) {
+  const sportsScraped = (sportsScrapedList || []).filter((s) => s?.odds > 1.01)
+    .sort((a, b) => scorePolySlip(b) - scorePolySlip(a))[0] || null;
+
+  for (const slip of [btiSlip, injected, scraped, sportsScraped]) {
     if (!slip?.odds || slip.odds <= 1) continue;
     const merged = mergePolySlipWithCache(polyTab.id, slip);
     const s = scorePolySlip(merged);

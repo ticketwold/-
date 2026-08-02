@@ -708,4 +708,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.0 — Polymarket 제거 · BC.Game 스포츠 지원', 'info');
+logLine('v1.4.1 — BC.Game iframe(BTI) 배당 읽기 강화', 'info');
