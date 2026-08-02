@@ -1,6 +1,25 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  if (window.__bcScrapeOdds) return;
+  const SCRAPE_VER = 6;
+
+  function collectPageText() {
+    const parts = [];
+    function walk(node, depth) {
+      if (!node || depth > 100) return;
+      if (node.nodeType === 3) {
+        const t = node.textContent?.trim();
+        if (t) parts.push(t);
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.shadowRoot) walk(node.shadowRoot, depth + 1);
+      for (const c of node.childNodes) walk(c, depth + 1);
+    }
+    walk(document.documentElement, 0);
+    const deep = parts.join(' ').replace(/\s+/g, ' ').trim();
+    const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    return deep.length >= body.length ? deep : body;
+  }
 
   function vis(el) {
     if (!el) return false;
@@ -129,7 +148,7 @@
   }
 
   function readNativeBcGameSlip() {
-    const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    const bodyText = collectPageText();
     let parsed = parseNativeSlipText(bodyText);
     if (parsed) {
       return {
@@ -406,6 +425,7 @@
     return { success: true, btnText: (btn.textContent || '').trim().slice(0, 60), fillMethod: fill.method || 'deep' };
   }
 
+  window.__bcScrapeVer = SCRAPE_VER;
   window.__bcScrapeOdds = scrapeBcSportsOdds;
   window.__bcSetStake = setStakeAmount;
   window.__bcPlaceSportsBet = placeBcSportsBet;

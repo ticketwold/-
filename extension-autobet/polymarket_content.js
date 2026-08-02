@@ -29,6 +29,31 @@ function parseDecimalOdds(t) {
   return n;
 }
 
+function getDeepPageText() {
+  const chunks = [];
+  const seen = new WeakSet();
+  function walk(node, depth) {
+    if (!node || depth > 100) return;
+    if (node.nodeType === 3) {
+      const t = node.textContent?.trim();
+      if (t) chunks.push(t);
+      return;
+    }
+    if (node.nodeType !== 1 || seen.has(node)) return;
+    seen.add(node);
+    let sr = node.shadowRoot;
+    if (!sr && typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot) {
+      try { sr = chrome.dom.openOrClosedShadowRoot(node); } catch (_) {}
+    }
+    if (sr) walk(sr, depth + 1);
+    for (const c of node.childNodes) walk(c, depth + 1);
+  }
+  walk(document.documentElement, 0);
+  const deep = chunks.join(' ').replace(/\s+/g, ' ').trim();
+  const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  return deep.length >= body.length ? deep : body;
+}
+
 function findBcSportsStakeInput() {
   const direct = document.getElementById('counter')
     || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[placeholder*="Stake"], input[class*="counter"], input[class*="Counter"]');
@@ -128,7 +153,7 @@ function parseBcNativeSlipText(raw) {
 }
 
 function readNativeBcGameSlip() {
-  const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  const bodyText = getDeepPageText();
   let parsed = parseBcNativeSlipText(bodyText);
   if (parsed) {
     return {
@@ -325,6 +350,10 @@ function readBcSportsBoardOdds() {
 function readBcSportsSlip() {
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return panelSlip;
+  const pageText = getDeepPageText();
+  if (/베팅\s*슬립|bet\s*slip/i.test(pageText) && /예상\s*당첨|총\s*베팅|베팅하기/i.test(pageText)) {
+    return null;
+  }
   return readBcSportsBoardOdds();
 }
 

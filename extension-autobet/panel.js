@@ -614,12 +614,13 @@ $('scanBtn')?.addEventListener('click', async () => {
     } else {
       if (snap.found?.polyTab?.id) {
         try {
-          const frames = await getAllFrames(snap.found.polyTab.id);
-          const sportsFrames = frames.filter((f) => scoreBcLeg2FrameUrl(f.url || '', snap.found.polyTab.url) >= 15);
-          logLine(`BC iframe ${frames.length}개 (스포츠북 후보 ${sportsFrames.length}개)`, 'info');
-          for (const f of frames.slice(0, 6)) {
-            const url = (f.url || 'about:blank').replace(/^https?:\/\//, '').slice(0, 72);
-            logLine(`  · f${f.frameId}: ${url || '(blank)'}`, 'info');
+          const probes = await probeBcSlipFrames(snap.found.polyTab);
+          for (const p of probes) {
+            if (p.odds > 1.01) {
+              logLine(`  f${p.frameId}: ${p.odds.toFixed(3)} [${p.kind}] · ${p.url || '(main)'}`, 'ok');
+            } else {
+              logLine(`  f${p.frameId}: ${p.kind} · ${p.url || '(main)'}`, 'info');
+            }
           }
         } catch (_) {}
       }
@@ -723,4 +724,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.5 — BC 슬립 body텍스트 파싱(210/100→2.1)', 'info');
+logLine('v1.4.6 — BC 전 frame 텍스트 파싱 + shadow DOM', 'info');

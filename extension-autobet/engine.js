@@ -121,14 +121,15 @@ async function ensureBtiScript(tabId, frameId) {
   } catch (_) {}
 }
 
-async function ensurePolyScript(tabId, frameId = 0) {
-  const key = frameId ? `${tabId}:${frameId}` : String(tabId);
+async function ensurePolyScript(tabId, frameId) {
+  const allFrames = frameId === undefined || frameId === null;
+  const key = allFrames ? String(tabId) : `${tabId}:${frameId}`;
   if (polyScriptReady.has(key)) return;
   try {
-    const target = frameId ? { tabId, frameIds: [frameId] } : { tabId, allFrames: true };
+    const target = allFrames ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] };
     await chrome.scripting.executeScript({ target, files: ['polymarket_content.js'] });
     polyScriptReady.add(key);
-    if (!frameId) polyScriptReady.add(String(tabId));
+    if (allFrames) polyScriptReady.add(String(tabId));
   } catch (_) {}
 }
 

@@ -376,38 +376,146 @@ async function readPolySlipFromApi(polyTab) {
   return null;
 }
 
+async function injectParseBcSlipInline(tabId, frameId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => {
+        function collectText() {
+          const parts = [];
+          function walk(n, d) {
+            if (!n || d > 100) return;
+            if (n.nodeType === 3) {
+              const t = n.textContent?.trim();
+              if (t) parts.push(t);
+              return;
+            }
+            if (n.nodeType !== 1) return;
+            if (n.shadowRoot) walk(n.shadowRoot, d + 1);
+            for (const c of n.childNodes) walk(c, d + 1);
+          }
+          walk(document.documentElement, 0);
+          const deep = parts.join(' ').replace(/\s+/g, ' ').trim();
+          const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+          return deep.length >= body.length ? deep : body;
+        }
+        function pm(t) {
+          const m = String(t || '').replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
+          return m ? parseFloat(m[1]) : 0;
+        }
+        function po(t) {
+          const n = parseFloat(String(t || '').replace(/,/g, '').trim());
+          return Number.isFinite(n) && n > 1.01 && n < 100 ? n : null;
+        }
+
+        const raw = collectText();
+        if (!/베팅\s*슬립|bet\s*slip/i.test(raw)) {
+          return { _debug: 'no-slip-text', _len: raw.length };
+        }
+        if (!/예상\s*당첨|총\s*베팅|베팅하기/i.test(raw)) {
+          return { _debug: 'no-slip-markers', _len: raw.length };
+        }
+
+        let stake = 0;
+        let m = raw.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+        if (m) stake = pm(m[1]);
+        if (!stake) {
+          for (const hit of raw.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
+            const v = pm(hit[1]);
+            if (v >= 1 && v <= 50000) { stake = v; break; }
+          }
+        }
+
+        let payout = 0;
+        m = raw.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+        if (m) payout = pm(m[1]);
+
+        let odds = stake > 0 && payout > stake ? Math.round((payout / stake) * 1000) / 1000 : null;
+        if (!odds) {
+          const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
+          const nums = [...raw.matchAll(/\b(\d+\.\d{1,3})\b/g)]
+            .map((x) => po(x[1]))
+            .filter((n) => n && n < 20 && !skip.has(n));
+          if (nums.length) odds = nums[nums.length - 1];
+        }
+
+        if (!(odds > 1.01)) {
+          return { _debug: 'parse-fail', stake, payout, _len: raw.length, _sample: raw.slice(0, 140) };
+        }
+
+        let teamLabel = '';
+        const afterMap = raw.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
+        if (afterMap) teamLabel = afterMap[1].trim();
+
+        return {
+          source: 'bcgame',
+          odds,
+          stake: stake || null,
+          payout: payout || null,
+          teamLabel,
+          outcome: teamLabel,
+          selectionText: teamLabel,
+          displayLabel: `${odds.toFixed(3)}${stake > 0 ? ` · ${stake} USDT` : ''}`,
+          sourceKind: 'bc-native-slip',
+          fromPayout: !!(stake > 0 && payout > stake),
+          hasInput: true
+        };
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (e) {
+    return { _debug: e.message || 'inject-err' };
+  }
+}
+
+async function probeBcSlipFrames(polyTab) {
+  if (!polyTab?.id) return [];
+  const frames = await getAllFrames(polyTab.id);
+  await ensurePolyScript(polyTab.id);
+  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])].slice(0, 12);
+  const out = [];
+  for (const frameId of frameIds) {
+    const inline = await injectParseBcSlipInline(polyTab.id, frameId);
+    const frame = frames.find((f) => f.frameId === frameId);
+    out.push({
+      frameId,
+      url: (frame?.url || '').replace(/^https?:\/\//, '').slice(0, 72),
+      odds: inline?.odds || null,
+      kind: inline?.sourceKind || inline?._debug || 'miss'
+    });
+  }
+  return out;
+}
+
 async function readBcSportsNativeSlip(polyTab) {
   if (!polyTab?.id) return null;
   const frames = await getAllFrames(polyTab.id);
-  const frameIds = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)].slice(0, 8);
+  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])].slice(0, 20);
 
-  let best = null;
-  for (const frameId of frameIds) {
-    await Promise.all([
-      ensurePolyScript(polyTab.id, frameId),
-      ensureBcScrapeScript(polyTab.id, frameId)
-    ]);
+  await ensurePolyScript(polyTab.id);
+  await ensureBcScrapeScript(polyTab.id, 0);
 
-    const [deep, msgRes] = await Promise.all([
+  const probes = await Promise.all(frameIds.map(async (frameId) => {
+    const [inline, deep, msgRes] = await Promise.all([
+      injectParseBcSlipInline(polyTab.id, frameId),
       injectReadBcSportsDeep(polyTab.id, frameId),
-      withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2500, 'BC슬립').catch(() => null)
+      withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2000, 'BC슬립').catch(() => null)
     ]);
-
     const candidates = [];
+    if (inline?.odds > 1.01) candidates.push(inline);
     if (deep?.odds > 1.01 && !deep._fail) candidates.push(deep);
     if (msgRes?.slip?.odds > 1.01) candidates.push(msgRes.slip);
-    if (!candidates.length) continue;
-
+    if (!candidates.length) return null;
     candidates.sort((a, b) => scorePolySlip(b) - scorePolySlip(a));
     const pick = normalizePolySlip(candidates[0]);
-    const s = scorePolySlip(pick);
-    if (s > (best?._score ?? -1)) {
-      best = { ...pick, frameId, _score: s };
-    }
-    if (pick.sourceKind === 'bc-native-slip' || pick.fromPayout) {
-      lastBcLeg2Frame = { tabId: polyTab.id, frameId };
-      return best;
-    }
+    return { ...pick, frameId, _score: scorePolySlip(pick) };
+  }));
+
+  let best = null;
+  for (const hit of probes) {
+    if (!hit?.odds) continue;
+    if (hit._score > (best?._score ?? -1)) best = hit;
   }
 
   if (best?.odds > 1.01) {
