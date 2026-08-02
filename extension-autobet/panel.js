@@ -8,7 +8,13 @@ const AMOUNT_SYNC_ARMED_MS = 80;
 const PANEL_LOOP_MS = 400;
 const PANEL_LOOP_ARMED_MS = 16;
 const ODDS_GAP_FILL_MS = 5000;
-const ODDS_STABLE_EPS = typeof ODDS_MIN_CHANGE === 'number' ? ODDS_MIN_CHANGE : 0.02;
+const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
+
+function isScanPolySlip(slip) {
+  if (typeof isScanBcSlip === 'function') return isScanBcSlip(slip);
+  if (typeof isTrustedBcSlip === 'function') return isTrustedBcSlip(slip);
+  return !!(slip?.odds > 1.01);
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -218,7 +224,7 @@ function applyInstantOdds(msg) {
     else clearKnownOdds('poly');
     return false;
   }
-  if (msg.source !== 'bti' && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(msg.slip)) return false;
+  if (msg.source !== 'bti' && typeof isScanPolySlip === 'function' && !isScanPolySlip(msg.slip)) return false;
   const cfg = getConfig();
   const o = normalizeSportsOdds(msg.slip.odds);
   if (!o) return false;
@@ -275,7 +281,7 @@ function stabilizeSnap(snap, cfg) {
     snap.btiO = null;
   }
 
-  if (snap.polyO > 1 && (typeof isStrikeBcSlip === 'function' ? isStrikeBcSlip(snap.poly) : isTrustedBcSlip(snap.poly))) {
+  if (snap.polyO > 1 && isScanPolySlip(snap.poly)) {
     const next = normalizeSportsOdds(snap.polyO);
     if (lastKnownOdds.polyO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.polyO, next, ODDS_STABLE_EPS)) {
       snap.polyO = lastKnownOdds.polyO;
@@ -291,7 +297,7 @@ function stabilizeSnap(snap, cfg) {
     snap.poly = null;
   } else if (!bcMissing && lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
-  } else if (snap.polyO > 1 && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(snap.poly)) {
+  } else if (snap.polyO > 1 && !isScanPolySlip(snap.poly)) {
     snap.polyO = null;
     snap.poly = null;
   } else if (!snap.polyO) {
@@ -389,6 +395,7 @@ async function refreshOddsLive() {
       if (snap.reason) $('statusHint').textContent = snap.reason;
       return;
     }
+    if (!snap.polyO || isBcSlipMissingReason(snap.reason)) polyPreSynced = false;
     updateStatusFromSnap(snap, cfg);
     if (snap.btiO > 1 && snap.polyO > 1 && needsAmountResync(snap, cfg)) {
       amountSyncQueued = true;

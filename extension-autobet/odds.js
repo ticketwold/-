@@ -99,20 +99,20 @@ function krwToUsd(krw, rate) {
   return Math.round((krw / r) * 100) / 100;
 }
 
-/** 스포츠 배당 최소 유의 변동 — 이보다 작으면 노이즈로 간주 */
-const ODDS_MIN_CHANGE = 0.02;
+/** 파싱 노이즈 — 이보다 작으면 동일 배당으로 간주 */
+const ODDS_NOISE_EPS = 0.008;
 
 function normalizeSportsOdds(o) {
   const n = parseFloat(o);
   if (!Number.isFinite(n) || n <= 1.01 || n >= 100) return null;
-  return Math.round(n * 100) / 100;
+  return Math.round(n * 1000) / 1000;
 }
 
 function oddsDelta(a, b) {
   return Math.abs((normalizeSportsOdds(a) || 0) - (normalizeSportsOdds(b) || 0));
 }
 
-function oddsChangedSignificantly(prev, next, eps = ODDS_MIN_CHANGE) {
+function oddsChangedSignificantly(prev, next, eps = ODDS_NOISE_EPS) {
   const n = normalizeSportsOdds(next);
   if (!n) return false;
   const p = normalizeSportsOdds(prev);
@@ -120,13 +120,16 @@ function oddsChangedSignificantly(prev, next, eps = ODDS_MIN_CHANGE) {
   return oddsDelta(p, n) >= eps;
 }
 
-function stabilizeSportsOdds(prev, next, eps = ODDS_MIN_CHANGE) {
+function stabilizeSportsOdds(prev, next, eps = ODDS_NOISE_EPS) {
   const n = normalizeSportsOdds(next);
   if (!n) return normalizeSportsOdds(prev);
   const p = normalizeSportsOdds(prev);
   if (!p) return n;
   return oddsDelta(p, n) < eps ? p : n;
 }
+
+/** @deprecated use ODDS_NOISE_EPS */
+const ODDS_MIN_CHANGE = ODDS_NOISE_EPS;
 
 function resolveTotalPayout(stake, toWinDisplay) {
   if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;

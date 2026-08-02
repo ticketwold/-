@@ -470,10 +470,14 @@ function readBcSportsBoardOdds() {
 
 function isBcSlipClosed() {
   if (isBcSlipEmpty()) return true;
-  const input = findBcSportsStakeInput();
-  const btn = findBcSportsBetButton();
-  if (!input && !btn) return true;
-  if (btn && btn.disabled) return true;
+  const slipText = slipRootScopeText();
+  const hasSelectionText = /vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(slipText)
+    && !isBcHistoryText(slipText.slice(0, 240));
+  const root = findBcNativeSlipRoot();
+  const hasSelectionEl = root?.querySelector?.(
+    '[class*="betInformation__title"], [class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]'
+  );
+  if (!hasSelectionEl && !hasSelectionText) return true;
   return false;
 }
 
@@ -491,6 +495,8 @@ function readBcSportsSlip() {
   if (isBcSlipClosed()) return null;
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return panelSlip;
+  const native = readNativeBcGameSlip();
+  if (native?.odds > 1.01) return native;
   return null;
 }
 
@@ -2414,8 +2420,8 @@ try {
 
   function stabilizeObservedOdds(slip) {
     if (!slip?.odds || slip.odds <= 1) return slip;
-    let o = Math.round(slip.odds * 100) / 100;
-    if (lastStableOdds > 1 && Math.abs(o - lastStableOdds) < 0.02) {
+    let o = Math.round(slip.odds * 1000) / 1000;
+    if (lastStableOdds > 1 && Math.abs(o - lastStableOdds) < 0.008) {
       o = lastStableOdds;
     } else {
       lastStableOdds = o;

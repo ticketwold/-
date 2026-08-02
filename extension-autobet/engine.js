@@ -403,13 +403,16 @@ async function readBtiOddsOnce(btiTab, poly) {
   if (merged.slip?.odds > 1.01) return merged.slip;
 
   merged = await scrapeBtiFromAllFrames(btiTab.id);
-  if (merged.slip?.odds > 1.01 && merged.slip.source === 'slip-display') return merged.slip;
-
-  if (!ui.strikeReady) return null;
+  if (merged.slip?.odds > 1.01) return merged.slip;
 
   const arbHint = { ...btiHintFromPoly(poly), forArbPick: true };
   merged = await readBtiFromAllFrames(btiTab.id, arbHint, true);
   if (merged.slip?.odds > 1.01) return merged.slip;
+
+  if (ui.strikeReady) {
+    const boardSlip = await readBtiBoardOddsFromFrames(btiTab, arbHint);
+    if (boardSlip?.odds > 1.01) return boardSlip;
+  }
 
   return null;
 }
@@ -1026,7 +1029,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   const arbBti = await readBtiOddsOnce(found.btiTab, poly);
   const bti = arbBti;
 
-  const polyO = poly?.odds > 1 && isStrikeBcSlip(poly) ? normalizeSportsOdds(poly.odds) : null;
+  const polyO = poly?.odds > 1 && isScanBcSlip(poly) ? normalizeSportsOdds(poly.odds) : null;
   const btiO = arbBti?.odds > 1 ? normalizeSportsOdds(arbBti.odds) : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
@@ -1034,7 +1037,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
   else if (btiO && !polyO) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
-  else if (btiO && poly?.odds > 1 && !isStrikeBcSlip(poly)) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
+  else if (btiO && poly?.odds > 1 && !isScanBcSlip(poly)) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
 
   return {
     ok: true,

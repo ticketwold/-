@@ -87,7 +87,7 @@
     const n = roundOdds(next);
     if (!n) return null;
     const p = roundOdds(lastPickStableOdds);
-    if (p && Math.abs(n - p) < 0.02) return p;
+    if (p && Math.abs(n - p) < 0.008) return p;
     lastPickStableOdds = n;
     return n;
   }
@@ -196,7 +196,13 @@
   }
 
   function isBcSlipClosed() {
-    return isBcSlipEmpty() || !collectStakeFields().length;
+    if (isBcSlipEmpty()) return true;
+    const slipText = slipRootScopeText();
+    const hasSelectionText = /vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(slipText)
+      && !isBcHistoryText(slipText.slice(0, 240));
+    const root = findSlipRoot();
+    const hasSelectionEl = root?.querySelector?.('[class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]');
+    return !hasSelectionEl && !hasSelectionText;
   }
 
   function hasSlipMarkers(raw) {

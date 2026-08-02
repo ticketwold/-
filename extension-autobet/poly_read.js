@@ -427,13 +427,15 @@ function mergePolySlipWithCache(tabId, slip) {
   }
   if (slip?.odds > 1) {
     const cached = getCachedPolyOdds(tabId, 8000);
-    if (cached?.odds > 1 && isStrikeBcSlip(cached) && isStrikeBcSlip(slip) && typeof stabilizeSportsOdds === 'function') {
+    if (cached?.odds > 1 && isScanBcSlip(cached) && isScanBcSlip(slip)
+      && typeof stabilizeSportsOdds === 'function'
+      && oddsDelta(cached.odds, slip.odds) < ODDS_NOISE_EPS) {
       slip = { ...slip, odds: stabilizeSportsOdds(cached.odds, slip.odds) };
     } else if (typeof normalizeSportsOdds === 'function') {
       slip = { ...slip, odds: normalizeSportsOdds(slip.odds) || slip.odds };
     }
   }
-  if (slip?.odds > 1 && isStrikeBcSlip(slip)) {
+  if (slip?.odds > 1 && isScanBcSlip(slip)) {
     cachePolyOdds(tabId, slip);
     return slip;
   }
@@ -479,7 +481,7 @@ function isTrustedBcSlip(slip) {
   const hasSelection = !!(slip.teamLabel || slip.outcome || slip.selectionText || slip.eventText);
   if (slip.odds > 7 && !confirmed) return false;
   if (slip.odds > 5.5 && !confirmed && (kind === 'sports-board-selected' || slip.method === 'board-selected')) return false;
-  if (kind === 'bc-native-slip' && !confirmed && !hasSelection) return false;
+  if (kind === 'bc-native-slip' && !confirmed && !hasSelection && !(slip.hasInput || slip.inputCount > 0 || slip.method)) return false;
   if (confirmed) return true;
   if (kind === 'bc-native-slip' || kind === 'bc-api' || kind === 'sports-slip') return true;
   if (kind === 'sports-board-selected' || slip.method === 'board-selected') return true;
@@ -487,6 +489,10 @@ function isTrustedBcSlip(slip) {
   if ((slip.hasInput || slip.inputCount > 0 || slip.stake > 0) && slip.odds >= 1.01 && slip.odds <= 8) return true;
   if (slip.method && /near-stake|betby-outcome|shadow-slip|bet-btn|stake-input|coupon|api-cache|scrape-main/i.test(slip.method)) return true;
   return false;
+}
+
+function isScanBcSlip(slip) {
+  return isTrustedBcSlip(slip);
 }
 
 /** 자동배팅용 — 슬립 카트에 실제 선택이 있을 때만 (보드/내역/캐시 오탐 제외) */

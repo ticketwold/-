@@ -2029,8 +2029,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function stabilizeBtiSlip(slip) {
     if (!slip?.odds || slip.odds <= 1) return slip;
-    let o = Math.round(slip.odds * 100) / 100;
-    if (lastStableBtiOdds > 1 && Math.abs(o - lastStableBtiOdds) < 0.02) {
+    let o = Math.round(slip.odds * 1000) / 1000;
+    if (lastStableBtiOdds > 1 && Math.abs(o - lastStableBtiOdds) < 0.008) {
       o = lastStableBtiOdds;
     } else {
       lastStableBtiOdds = o;
