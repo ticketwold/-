@@ -112,8 +112,10 @@ function findBcNativeSlipRoot() {
 
 function parseBcNativeSlipText(raw) {
   const text = String(raw || '').replace(/\s+/g, ' ').trim();
-  if (!/베팅\s*슬립|bet\s*slip/i.test(text)) return null;
-  if (!/예상\s*당첨|총\s*베팅|베팅하기/i.test(text)) return null;
+  const hasSlip = /베팅\s*슬립|bet\s*slip|betslip/i.test(text);
+  const hasCtx = /예상\s*당첨|총\s*베팅|베팅하기|place\s*(a\s*)?bet|total\s*stake|potential\s*win/i.test(text);
+  if (!hasSlip && !hasCtx) return null;
+  if (hasSlip && !hasCtx && !/\d+\.\d{2,3}/.test(text)) return null;
 
   let stake = 0;
   let m = text.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
@@ -144,8 +146,10 @@ function parseBcNativeSlipText(raw) {
     const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
     const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
       .map((x) => parseDecimalOdds(x[1]))
-      .filter((n) => n && n < 20 && !skip.has(n) && Math.abs(n - stake) > 0.4);
-    if (nums.length) odds = nums[nums.length - 1];
+      .filter((n) => n && !skip.has(n) && Math.abs(n - stake) > 0.4);
+    const plausible = nums.filter((n) => n >= 1.01 && n <= 5.5);
+    if (plausible.length) odds = Math.min(...plausible);
+    else if (nums.length) odds = Math.min(...nums.filter((n) => n < 20));
   }
 
   if (!(odds > 1.01)) return null;
@@ -331,8 +335,10 @@ function readBcSportsBoardOdds() {
   }
 
   if (!board.length) return null;
-  const sel = board.find((b) => b.selected);
-  if (!sel) return null;
+  const selected = board.filter((b) => b.selected);
+  if (!selected.length) return null;
+  selected.sort((a, b) => a.odds - b.odds);
+  const sel = selected[0];
   return {
     source: 'bcgame',
     odds: sel.odds,

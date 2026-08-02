@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 7;
+  const VER = 8;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -107,13 +107,15 @@
   function hasSlipMarkers(raw) {
     const t = String(raw || '');
     if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return true;
-    if (/place\s*(a\s*)?bet/i.test(t) && /stake|odds|total|win/i.test(t)) return true;
+    if (/place\s*(a\s*)?bet/i.test(t) && /stake|odds|total|win|USDT/i.test(t)) return true;
     if (/total\s*(stake|odds)|potential\s*win|to\s*win/i.test(t) && /\d+\.\d{1,3}/.test(t)) return true;
     if (t.includes('당첨') && (t.includes('USDT') || /\d/.test(t))) return true;
     if (t.includes('베팅하기') && (t.includes('USDT') || /\d/.test(t))) return true;
     if (/예상\s*당첨/.test(t) && /총\s*베팅|USDT/i.test(t)) return true;
     if (/potential\s*win|to\s*win/i.test(t) && /USDT|stake/i.test(t)) return true;
     if (/bet\s*slip|betslip/i.test(t) && /\d+\.\d{2,3}/.test(t)) return true;
+    if (/single\s*bet|combo\s*bet|accumulator|parlay/i.test(t) && /\d+\.\d{2,3}/.test(t)) return true;
+    if (/coupon|ticket/i.test(t) && /stake|odds|USDT|place/i.test(t) && /\d+\.\d{2,3}/.test(t)) return true;
     return false;
   }
 
@@ -304,24 +306,27 @@
   }
 
   function isSelectedEl(el) {
-    if (!el) return false;
-    if (el.getAttribute('aria-pressed') === 'true') return true;
-    if (el.getAttribute('aria-selected') === 'true') return true;
-    if (el.getAttribute('data-selected') === 'true') return true;
-    if (el.getAttribute('data-state') === 'on' || el.getAttribute('data-state') === 'checked') return true;
-    const cls = String(el.className || '');
-    if (/selected|active|pressed|highlight|checked|is-active/i.test(cls)) return true;
-    try {
-      const st = getComputedStyle(el);
-      if (parseFloat(st.borderWidth) >= 2) return true;
-      const bg = st.backgroundColor || '';
-      const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-      if (m) {
-        const g = parseInt(m[2], 10);
-        const r = parseInt(m[1], 10);
-        if (g > 90 && g > r + 20) return true;
-      }
-    } catch (_) {}
+    let node = el;
+    for (let depth = 0; depth < 8 && node; depth++) {
+      if (node.getAttribute?.('aria-pressed') === 'true') return true;
+      if (node.getAttribute?.('aria-selected') === 'true') return true;
+      if (node.getAttribute?.('data-selected') === 'true') return true;
+      if (node.getAttribute?.('data-state') === 'on' || node.getAttribute?.('data-state') === 'checked') return true;
+      const cls = String(node.className || '');
+      if (/selected|active|pressed|highlight|checked|is-active|is-selected|chosen|picked/i.test(cls)) return true;
+      try {
+        const st = getComputedStyle(node);
+        if (parseFloat(st.borderWidth) >= 2) return true;
+        const bg = st.backgroundColor || '';
+        const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (m) {
+          const g = parseInt(m[2], 10);
+          const r = parseInt(m[1], 10);
+          if (g > 90 && g > r + 20) return true;
+        }
+      } catch (_) {}
+      node = node.parentElement || node.getRootNode?.()?.host || null;
+    }
     return false;
   }
 
@@ -339,6 +344,61 @@
     if (m) return po(m[1]);
     const m2 = txt.match(/(\d+\.\d{1,3})/);
     return m2 ? po(m2[1]) : null;
+  }
+
+  function readNearStakeSlip() {
+    const fields = collectStakeFields();
+    if (!fields.length) return null;
+    for (const field of fields) {
+      const stake = pm(field.value ?? field.textContent ?? '');
+      let el = field;
+      for (let i = 0; i < 28 && el; i++) {
+        const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length >= 12 && t.length <= 3000) {
+          const hasCtx = /place\s*(a\s*)?bet|total\s*stake|potential|to\s*win|베팅|bet\s*slip|coupon|single|combo|odds|USDT|당첨|stake/i.test(t);
+          if (hasCtx || fields.length === 1) {
+            const odds = pickBestSlipOdds(t, { stake });
+            if (odds > 1.01) {
+              return {
+                odds,
+                stake: stake || null,
+                payout: null,
+                teamLabel: '',
+                method: 'near-stake',
+                sourceKind: 'sports-slip',
+                fromPayout: false
+              };
+            }
+          }
+        }
+        el = el.parentElement || el.getRootNode?.()?.host || null;
+      }
+    }
+    return null;
+  }
+
+  function readBetbyOutcomeSlip() {
+    let best = null;
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const cls = String(node.className || '');
+      const testId = node.getAttribute?.('data-testid') || '';
+      if (!/outcome|selection|coupon|bet-item|betslip|bet-slip|ticket|odd-item|coefficient/i.test(`${cls} ${testId}`)) return;
+      const t = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 5 || t.length > 700) return;
+      const odds = pickBestSlipOdds(t);
+      if (!(odds > 1.01)) return;
+      let score = 0;
+      if (/betslip|bet-slip|coupon/i.test(cls)) score += 80;
+      if (node.querySelector?.('input, textarea')) score += 60;
+      if (/vs|winner|map|맵|승|team/i.test(t)) score += 40;
+      if (score > (best?._score ?? -1)) {
+        best = { odds, teamLabel: t.slice(0, 70), method: 'betby-outcome', sourceKind: 'sports-slip', fromPayout: false, _score: score };
+      }
+    }, 0);
+    if (!best) return null;
+    delete best._score;
+    return best;
   }
 
   function readSelectedBoardOdds() {
@@ -457,6 +517,8 @@
     const strategies = [
       readFromApiCache,
       readBetbyShadowSlip,
+      readNearStakeSlip,
+      readBetbyOutcomeSlip,
       readViaBetButton,
       readViaStakeInputs,
       readSelectedBoardOdds,

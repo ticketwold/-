@@ -130,4 +130,20 @@
     if (!e.key || !/bet|slip|sport|wager/i.test(e.key)) return;
     try { capture(JSON.parse(e.newValue), 'storage:' + e.key); } catch (_) {}
   });
+
+  window.addEventListener('message', (e) => {
+    try {
+      const d = e?.data;
+      if (d == null) return;
+      if (typeof d === 'string') {
+        if (d.length < 4 || d.length > 500000) return;
+        try { capture(JSON.parse(d), 'postMessage'); } catch (_) {}
+        return;
+      }
+      if (typeof d === 'object') {
+        const slip = extractSlip(d, 0);
+        if (slip) saveSlip(slip, 'postMessage');
+      }
+    } catch (_) {}
+  }, true);
 })();

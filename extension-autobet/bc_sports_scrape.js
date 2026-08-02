@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 11;
+  const SCRAPE_VER = 12;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -117,26 +117,30 @@
 
   function isSelected(el) {
     if (!el) return false;
-    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
-    const looksLikeOdds = /\d+\.\d{1,3}/.test(txt);
-    if (!looksLikeOdds) return false;
-    const cls = String(el.className || '');
-    if (el.getAttribute('aria-pressed') === 'true') return true;
-    if (el.getAttribute('aria-selected') === 'true') return true;
-    if (el.getAttribute('data-selected') === 'true') return true;
-    if (el.getAttribute('data-state') === 'on' || el.getAttribute('data-state') === 'checked') return true;
-    if (/selected|active|pressed|highlight|checked|is-active|is-selected/i.test(cls)) return true;
-    try {
-      const st = getComputedStyle(el);
-      if (parseFloat(st.borderWidth) >= 2) return true;
-      const bg = st.backgroundColor || '';
-      const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-      if (m) {
-        const g = parseInt(m[2], 10);
-        const r = parseInt(m[1], 10);
-        if (g > 100 && g > r + 30) return true;
-      }
-    } catch (_) {}
+    let node = el;
+    for (let depth = 0; depth < 8 && node; depth++) {
+      const txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      const looksLikeOdds = depth === 0 && /\d+\.\d{1,3}/.test(txt);
+      if (depth > 0 && !looksLikeOdds && txt.length > 200) break;
+      const cls = String(node.className || '');
+      if (node.getAttribute?.('aria-pressed') === 'true') return true;
+      if (node.getAttribute?.('aria-selected') === 'true') return true;
+      if (node.getAttribute?.('data-selected') === 'true') return true;
+      if (node.getAttribute?.('data-state') === 'on' || node.getAttribute?.('data-state') === 'checked') return true;
+      if (/selected|active|pressed|highlight|checked|is-active|is-selected|chosen|picked/i.test(cls)) return true;
+      try {
+        const st = getComputedStyle(node);
+        if (parseFloat(st.borderWidth) >= 2) return true;
+        const bg = st.backgroundColor || '';
+        const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (m) {
+          const g = parseInt(m[2], 10);
+          const r = parseInt(m[1], 10);
+          if (g > 100 && g > r + 30) return true;
+        }
+      } catch (_) {}
+      node = node.parentElement || node.getRootNode?.()?.host || null;
+    }
     return false;
   }
 
@@ -322,13 +326,13 @@
   }
 
   function findBetbySlipPanel() {
-    for (const el of queryDeep('aside, section, div, form, [class*="betslip"], [class*="BetSlip"], [data-testid*="betslip"]')) {
+    for (const el of queryDeep('aside, section, div, form, [class*="betslip"], [class*="BetSlip"], [data-testid*="betslip"], [class*="coupon"]')) {
       if (!vis(el)) continue;
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t.length < 12 || t.length > 5000) continue;
-      if (!/place\s*(a\s*)?bet|total\s*stake|bet\s*slip|betslip|베팅|stake/i.test(t)) continue;
+      if (t.length < 8 || t.length > 5000) continue;
+      if (!/place\s*(a\s*)?bet|total\s*stake|bet\s*slip|betslip|베팅|stake|coupon|single|combo/i.test(t)) continue;
       if (!/\d+\.\d{2,3}/.test(t)) continue;
-      if (!el.querySelector('input, textarea, [contenteditable="true"]')) continue;
+      if (!el.querySelector('input, textarea, [contenteditable="true"]') && !/total\s*stake|place\s*bet/i.test(t)) continue;
       return el;
     }
     return null;

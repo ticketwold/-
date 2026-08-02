@@ -47,5 +47,50 @@
     });
   };
 
+  function hookBtRenderer() {
+    if (window.__bcBtRendererHooked) return;
+    const Orig = window.BTRenderer;
+    if (typeof Orig !== 'function') return;
+    window.__bcBtRendererHooked = true;
+    window.BTRenderer = function (...args) {
+      const inst = new Orig(...args);
+      window.__bcBtRenderer = inst;
+      try {
+        window.dispatchEvent(new CustomEvent('__bcBtRendererReady', { detail: inst }));
+      } catch (_) {}
+      return inst;
+    };
+    window.BTRenderer.prototype = Orig.prototype;
+    Object.keys(Orig).forEach((k) => { window.BTRenderer[k] = Orig[k]; });
+  }
+
+  hookBtRenderer();
+  const poll = setInterval(() => {
+    hookBtRenderer();
+    if (window.__bcBtRendererHooked) clearInterval(poll);
+  }, 200);
+  setTimeout(() => clearInterval(poll), 15000);
+
+  window.addEventListener('message', (e) => {
+    try {
+      const d = e?.data;
+      if (!d || typeof d !== 'object') return;
+      const slip = window.__bcApiSlip;
+      if (typeof window.__bcApiHooked === 'undefined') return;
+      const odds = parseFloat(d.odds ?? d.price ?? d.coefficient ?? d.decimalOdds);
+      if (!(odds > 1.01 && odds < 100)) return;
+      window.__bcApiSlip = {
+        odds,
+        stake: parseFloat(d.stake ?? d.amount) || null,
+        payout: parseFloat(d.payout ?? d.potentialWin ?? d.toWin) || null,
+        source: 'bcgame',
+        sourceKind: 'bc-api',
+        fromPayout: false,
+        capturedAt: Date.now(),
+        via: 'postMessage-bridge'
+      };
+    } catch (_) {}
+  }, true);
+
   console.log('[BC.Game BetBy bridge] loaded');
 })();

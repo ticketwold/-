@@ -461,7 +461,15 @@ function isTrustedBcSlip(slip) {
   if (kind === 'bc-native-slip' || kind === 'bc-api' || kind === 'sports-slip') return true;
   if (kind === 'sports-board-selected' || slip.method === 'board-selected') return true;
   if (kind === 'sports-board') return slip.selected === true;
+  if ((slip.hasInput || slip.inputCount > 0 || slip.stake > 0) && slip.odds >= 1.01 && slip.odds <= 8) return true;
+  if (slip.method && /near-stake|betby-outcome|shadow-slip|bet-btn|stake-input|coupon|api-cache|scrape-main/i.test(slip.method)) return true;
   return false;
+}
+
+function isRelaxedBcSlip(slip) {
+  if (!(slip?.odds > 1.01 && slip.odds <= 8)) return false;
+  if (slip.sourceKind === 'sports-text') return false;
+  return !!(slip.hasInput || slip.inputCount > 0 || slip.stake > 0 || slip.fromPayout || slip.method);
 }
 
 function scorePolySlip(slip) {
@@ -616,7 +624,7 @@ async function injectBcSlipAllFrames(tabId) {
             }
           } catch (_) {}
           if (!hits.length) return null;
-          hits.sort((a, b) => (b.stake > 0 ? 50 : 0) + b.odds - ((a.stake > 0 ? 50 : 0) + a.odds));
+          hits.sort((a, b) => scorePolySlip(normalizePolySlip(b)) - scorePolySlip(normalizePolySlip(a)));
           return hits[0];
         }
       })
@@ -649,10 +657,17 @@ async function injectBcSlipAllFrames(tabId) {
     absorb(mainRows);
 
     let best = null;
+    let relaxed = null;
     for (const v of byFrame.values()) {
       if (v._score > (best?._score ?? -1)) best = v;
+      if (isRelaxedBcSlip(v)) {
+        const rs = scorePolySlip(v);
+        if (rs > (relaxed?._rscore ?? -1)) relaxed = { ...v, _rscore: rs };
+      }
     }
-    return best?.odds > 1.01 && isTrustedBcSlip(best) ? best : null;
+    if (best?.odds > 1.01 && isTrustedBcSlip(best)) return best;
+    if (relaxed?.odds > 1.01) return relaxed;
+    return null;
   } catch (_) {
     return null;
   }
@@ -676,14 +691,14 @@ async function autoOpenBcSportsSlip(tabId, teamHint) {
 async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const focusTab = opts.focusTab === true;
-  const waitMs = opts.waitMs || (focusTab ? 1600 : 0);
+  const waitMs = opts.waitMs || (focusTab ? 2000 : 0);
   const teamHint = opts.teamHint || opts.excludeTeam || '';
-  const maxAttempts = focusTab ? 4 : 1;
+  const maxAttempts = focusTab ? 6 : 2;
 
   if (focusTab && waitMs > 0) await focusBcTabForRead(polyTab.id, waitMs);
   if (focusTab) {
-    await waitForBetbyRenderer(polyTab.id, 5000);
-    await waitForBcSportsFrame(polyTab.id, 4000);
+    await waitForBetbyRenderer(polyTab.id, 8000);
+    await waitForBcSportsFrame(polyTab.id, 6000);
   }
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);
@@ -701,6 +716,10 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
       return hit;
     }
+    if (isRelaxedBcSlip(hit) && attempt >= maxAttempts - 2) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
+      return hit;
+    }
 
     const perFrame = await readBcSportsPerFrameDeep(polyTab);
     if (isTrustedBcSlip(perFrame)) {
@@ -708,12 +727,25 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
       return perFrame;
     }
 
-    if (!clicked && teamHint && focusTab && attempt >= 1) {
+    const frames = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+    for (const frameId of frames.slice(0, 8)) {
+      try {
+        await ensurePolyScript(polyTab.id, frameId);
+        const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'BC cs-read');
+        const slip = res?.slip;
+        if (isTrustedBcSlip(slip)) {
+          lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+          return { ...slip, frameId };
+        }
+      } catch (_) {}
+    }
+
+    if (!clicked && teamHint && focusTab && attempt >= 2) {
       clicked = await autoOpenBcSportsSlip(polyTab.id, teamHint);
-      if (clicked) await new Promise((r) => setTimeout(r, 800));
+      if (clicked) await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
-    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 300));
+    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, focusTab ? 500 : 300));
   }
   return null;
 }
