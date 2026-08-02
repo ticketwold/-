@@ -240,6 +240,7 @@ function applyInstantOdds(msg) {
   if (msg.source === 'bti') {
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched';
+    if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.btiO = o;
     lastKnownOdds.btiAt = now;
