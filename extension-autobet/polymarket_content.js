@@ -137,7 +137,7 @@ function parseBcNativeSlipText(raw) {
   const vsM = text.match(/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40})/i);
   if (vsM) eventText = `${vsM[1].trim()} vs ${vsM[2].trim()}`;
 
-  const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
+  const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
   if (afterMap) teamLabel = afterMap[1].trim();
 
   if (!odds) {

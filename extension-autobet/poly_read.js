@@ -378,92 +378,26 @@ async function readPolySlipFromApi(polyTab) {
 
 async function injectParseBcSlipInline(tabId, frameId) {
   try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      files: ['bc_slip_read.js']
+    });
     const results = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
-      world: 'MAIN',
-      func: () => {
-        function collectText() {
-          const parts = [];
-          function walk(n, d) {
-            if (!n || d > 100) return;
-            if (n.nodeType === 3) {
-              const t = n.textContent?.trim();
-              if (t) parts.push(t);
-              return;
-            }
-            if (n.nodeType !== 1) return;
-            if (n.shadowRoot) walk(n.shadowRoot, d + 1);
-            for (const c of n.childNodes) walk(c, d + 1);
-          }
-          walk(document.documentElement, 0);
-          const deep = parts.join(' ').replace(/\s+/g, ' ').trim();
-          const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-          return deep.length >= body.length ? deep : body;
-        }
-        function pm(t) {
-          const m = String(t || '').replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
-          return m ? parseFloat(m[1]) : 0;
-        }
-        function po(t) {
-          const n = parseFloat(String(t || '').replace(/,/g, '').trim());
-          return Number.isFinite(n) && n > 1.01 && n < 100 ? n : null;
-        }
-
-        const raw = collectText();
-        if (!/베팅\s*슬립|bet\s*slip/i.test(raw)) {
-          return { _debug: 'no-slip-text', _len: raw.length };
-        }
-        if (!/예상\s*당첨|총\s*베팅|베팅하기/i.test(raw)) {
-          return { _debug: 'no-slip-markers', _len: raw.length };
-        }
-
-        let stake = 0;
-        let m = raw.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
-        if (m) stake = pm(m[1]);
-        if (!stake) {
-          for (const hit of raw.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
-            const v = pm(hit[1]);
-            if (v >= 1 && v <= 50000) { stake = v; break; }
-          }
-        }
-
-        let payout = 0;
-        m = raw.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
-        if (m) payout = pm(m[1]);
-
-        let odds = stake > 0 && payout > stake ? Math.round((payout / stake) * 1000) / 1000 : null;
-        if (!odds) {
-          const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
-          const nums = [...raw.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-            .map((x) => po(x[1]))
-            .filter((n) => n && n < 20 && !skip.has(n));
-          if (nums.length) odds = nums[nums.length - 1];
-        }
-
-        if (!(odds > 1.01)) {
-          return { _debug: 'parse-fail', stake, payout, _len: raw.length, _sample: raw.slice(0, 140) };
-        }
-
-        let teamLabel = '';
-        const afterMap = raw.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
-        if (afterMap) teamLabel = afterMap[1].trim();
-
-        return {
-          source: 'bcgame',
-          odds,
-          stake: stake || null,
-          payout: payout || null,
-          teamLabel,
-          outcome: teamLabel,
-          selectionText: teamLabel,
-          displayLabel: `${odds.toFixed(3)}${stake > 0 ? ` · ${stake} USDT` : ''}`,
-          sourceKind: 'bc-native-slip',
-          fromPayout: !!(stake > 0 && payout > stake),
-          hasInput: true
-        };
-      }
+      func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
     });
-    return results?.[0]?.result || null;
+    const hit = results?.[0]?.result;
+    if (hit?.ok && hit.odds > 1.01) {
+      const slip = { ...hit };
+      delete slip.ok;
+      delete slip.reason;
+      delete slip.sample;
+      delete slip.textLen;
+      delete slip.href;
+      return slip;
+    }
+    if (hit?.reason) return { _debug: hit.reason, _sample: hit.sample, _len: hit.textLen };
+    return null;
   } catch (e) {
     return { _debug: e.message || 'inject-err' };
   }

@@ -159,14 +159,14 @@ function saveConfig() {
   return cfg;
 }
 
-function displayOdds(btiO, polyO) {
+function displayOdds(btiO, polyO, snapReason) {
   const now = Date.now();
+  const bcMissing = snapReason && /BC\.Game 배당 없음/.test(snapReason);
   const bti = btiO > 1 ? btiO
     : (now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
   const poly = polyO > 1 ? polyO
-    : (now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
-  if (!bti && !poly) return;
-  $('oddsVal').textContent = `${bti?.toFixed(3) || '-'} / ${poly?.toFixed(3) || '-'}`;
+    : (!bcMissing && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
+  $('oddsVal').textContent = `${bti > 1 ? bti.toFixed(3) : '-'} / ${poly > 1 ? poly.toFixed(3) : '-'}`;
 }
 
 function patchSnapFromKnown(snap, cfg) {
@@ -204,7 +204,7 @@ function updateStatusFromSnap(snap, cfg) {
     $('profitVal').textContent = `${snap.profit.toFixed(2)}%`;
     $('profitVal').className = snap.profit >= cfg.minProfit ? 'positive' : '';
   }
-  displayOdds(snap.btiO, snap.polyO);
+  displayOdds(snap.btiO, snap.polyO, snap.reason);
   const hint = $('statusHint');
   if (snap.reason && !polyPreSynced) hint.textContent = snap.reason;
   else if (polyPreSynced && snap.polyUsd > 0) {
@@ -724,4 +724,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.6 — BC 전 frame 텍스트 파싱 + shadow DOM', 'info');
+logLine('v1.4.7 — CSP우회 isolated 슬립 파서', 'info');

@@ -326,7 +326,30 @@ function btiHintFromPoly(poly) {
   return team ? { excludeTeam: team, polyTeam: team } : {};
 }
 
+async function readPolySlipAllBcTabs(leg2Pref = 'bcgame') {
+  const tabs = await chrome.tabs.query({});
+  const leg2Tabs = tabs
+    .filter((t) => t.url && urlMatchesLeg2Pref(t.url, leg2Pref))
+    .map((t) => ({ tab: t, score: scoreLeg2Tab(t.url, null, t.id, leg2Pref) }))
+    .sort((a, b) => b.score - a.score);
+
+  let best = null;
+  for (const { tab } of leg2Tabs) {
+    const slip = await readPolyOddsOnce({ id: tab.id, url: tab.url });
+    if (!(slip?.odds > 1.01)) continue;
+    const s = scorePolySlip(slip);
+    if (s > (best?._score ?? -1)) {
+      best = { slip, tab: { id: tab.id, url: tab.url }, _score: s };
+    }
+    if (slip.sourceKind === 'bc-native-slip' || slip.fromPayout) break;
+  }
+  return best;
+}
+
 async function readPolySlipAllFrames(polyTab) {
+  if (!polyTab?.id) return null;
+  const multi = await readPolySlipAllBcTabs('bcgame');
+  if (multi?.slip?.odds > 1.01) return multi.slip;
   return readPolyOddsOnce(polyTab);
 }
 
@@ -881,7 +904,9 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
     return { ok: false, reason: 'BC.Game: 스포츠/예측 탭 없음', found };
   }
 
-  const poly = await readPolySlipAllFrames(found.polyTab);
+  const multi = await readPolySlipAllBcTabs(leg2Pref);
+  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab);
+  if (multi?.tab) found.polyTab = multi.tab;
   const arbBti = await readBtiOddsOnce(found.btiTab, poly);
   const bti = arbBti;
 
