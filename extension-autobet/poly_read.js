@@ -1,7 +1,130 @@
 // poly_read.js — Polymarket DOM 스크랩 + Gamma API 폴백
 'use strict';
 
-async function injectReadPoly(tabId, siteKey = 'polymarket') {
+async function injectReadBcSports(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        function vis(el) {
+          const r = el?.getBoundingClientRect?.();
+          return !!(r && r.width > 2 && r.height > 2);
+        }
+        function parseOdds(t) {
+          const n = parseFloat(String(t || '').trim());
+          if (!n || n <= 1.01 || n >= 100) return null;
+          return n;
+        }
+
+        let hasInput = false;
+        for (const inp of document.querySelectorAll('input, textarea')) {
+          if (!vis(inp)) continue;
+          const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
+          if (/counter|Counter|베팅|stake/i.test(blob)) { hasInput = true; break; }
+        }
+
+        function readSlipPanel() {
+          if (!hasInput) return null;
+          const roots = [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
+          if (!roots.length) roots.push(document.body);
+          for (const root of roots) {
+            for (const card of root.querySelectorAll('[class*="bet"], [class*="Bet"]')) {
+              if (!vis(card)) continue;
+              const txt = (card.textContent || '').trim();
+              if (txt.length < 6 || txt.length > 900) continue;
+              if (card.querySelector('input')) continue;
+              if (!/W[12]|betInformation|우승|winner|맵|map|team/i.test(txt)) continue;
+
+              const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+              const selectionText = titleEls[0]?.textContent?.trim() || '';
+              const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+              const eventText = eventEl?.textContent?.trim() || '';
+
+              for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]')) {
+                const o = parseOdds(sp.textContent);
+                if (o) return { odds: o, selectionText, eventText, source: 'bc-sports-scrape', hasInput: true, marketKind: 'ml' };
+              }
+              const nums = [];
+              for (const sp of card.querySelectorAll('span, div, b, strong')) {
+                const t = (sp.textContent || '').trim();
+                if (!/^\d+\.\d{2,3}$/.test(t)) continue;
+                const o = parseOdds(t);
+                if (o) nums.push(o);
+              }
+              if (nums.length) {
+                return { odds: nums[nums.length - 1], selectionText, eventText, source: 'bc-sports-scrape', hasInput: true };
+              }
+            }
+          }
+          return null;
+        }
+
+        const slipPanel = readSlipPanel();
+        if (slipPanel?.odds > 1.01) {
+          let teamLabel = slipPanel.selectionText;
+          if (slipPanel.eventText) {
+            for (const sep of [' vs ', ' VS ', ' 대 ']) {
+              if (slipPanel.eventText.includes(sep)) {
+                const [home, away] = slipPanel.eventText.split(sep, 2).map((s) => s.trim());
+                if (/^W1$/i.test(teamLabel)) teamLabel = home || teamLabel;
+                if (/^W2$/i.test(teamLabel)) teamLabel = away || teamLabel;
+                break;
+              }
+            }
+          }
+          return {
+            ...slipPanel,
+            source: 'bcgame',
+            teamLabel,
+            outcome: teamLabel,
+            displayLabel: slipPanel.odds.toFixed(3),
+            fromPayout: false,
+            marketKind: 'ml'
+          };
+        }
+
+        const board = [];
+        for (const btn of document.querySelectorAll('button')) {
+          if (!vis(btn)) continue;
+          const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!txt) continue;
+          let odds = null;
+          const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+          if (oddsEl) odds = parseOdds(oddsEl.textContent);
+          if (!odds) {
+            const m = txt.match(/(\d+\.\d{2,3})\s*$/);
+            if (m) odds = parseOdds(m[1]);
+          }
+          if (!odds) continue;
+          const selected = btn.getAttribute('aria-pressed') === 'true'
+            || /selected|active|pressed|highlight/i.test(btn.className || '');
+          board.push({ odds, txt, selected });
+        }
+        if (!board.length) return null;
+        const sel = board.find((b) => b.selected) || board[0];
+        return {
+          source: 'bcgame',
+          odds: sel.odds,
+          teamLabel: sel.txt,
+          outcome: sel.txt,
+          selectionText: sel.txt,
+          displayLabel: sel.odds.toFixed(3),
+          sourceKind: 'sports-board',
+          fromPayout: false,
+          hasInput,
+          buttonCount: board.length,
+          marketKind: 'ml'
+        };
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function injectReadPoly(tabId, siteKey = 'bcgame') {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
@@ -270,6 +393,7 @@ function scorePolySlip(slip) {
   if (!(slip?.odds > 1)) return -1;
   let score = slip.odds;
   if (slip.fromPayout && !slip.pendingToWin) score += 200;
+  else if (slip.sourceKind === 'sports-slip') score += 220;
   else if (slip.liveCents) score += 150;
   if (slip.stake > 0) score += 30;
   if (slip.pendingToWin) score -= 40;
@@ -277,23 +401,13 @@ function scorePolySlip(slip) {
 }
 
 async function readPolySlipFromApi(polyTab) {
-  if (!polyTab?.url || typeof fetchPolyEventBySlug !== 'function') return null;
-  const slug = slugFromPolyUrl(polyTab.url);
-  if (!slug) return null;
-  try {
-    const event = await fetchPolyEventBySlug(slug);
-    if (!event) return null;
-    const teamHint = polyTeamHintFromUrl(polyTab.url);
-    const siteKey = typeof leg2SiteKey === 'function' ? (leg2SiteKey(polyTab.url) || 'polymarket') : 'polymarket';
-    return polyEventToSlip(event, teamHint, siteKey);
-  } catch (_) {
-    return null;
-  }
+  return null;
 }
 
 async function readPolyOddsOnce(polyTab) {
   if (!polyTab?.id) return null;
-  const siteKey = typeof leg2SiteKey === 'function' ? (leg2SiteKey(polyTab.url) || 'polymarket') : 'polymarket';
+  const siteKey = 'bcgame';
+  const isSports = typeof isBcGameSportsUrl === 'function' && isBcGameSportsUrl(polyTab.url);
 
   const frames = await getAllFrames(polyTab.id);
   const order = [0];
@@ -304,10 +418,10 @@ async function readPolyOddsOnce(polyTab) {
   const toProbe = order.slice(0, 12);
   await Promise.all(toProbe.map((fid) => ensurePolyScript(polyTab.id, fid)));
 
-  const [slipResults, injected, scraped, apiSlip] = await Promise.all([
+  const [slipResults, injected, scraped, sportsScraped] = await Promise.all([
     Promise.all(toProbe.map(async (frameId) => {
       try {
-        const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'Poly읽기');
+        const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'BC읽기');
         return res?.slip || null;
       } catch (_) {
         return null;
@@ -315,7 +429,7 @@ async function readPolyOddsOnce(polyTab) {
     })),
     injectReadPoly(polyTab.id, siteKey).catch(() => null),
     injectScrapePolyCents(polyTab.id).catch(() => null),
-    readPolySlipFromApi(polyTab).catch(() => null)
+    isSports ? injectReadBcSports(polyTab.id).catch(() => null) : Promise.resolve(null)
   ]);
 
   let best = null;
@@ -329,7 +443,7 @@ async function readPolyOddsOnce(polyTab) {
     }
   }
 
-  for (const slip of [injected, scraped, apiSlip]) {
+  for (const slip of [injected, scraped, sportsScraped]) {
     if (!slip?.odds || slip.odds <= 1) continue;
     const merged = mergePolySlipWithCache(polyTab.id, slip);
     const s = scorePolySlip(merged);

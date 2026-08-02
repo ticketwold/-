@@ -1,10 +1,332 @@
-// Polymarket / BC.Game content script v5 — To win 기반 배당 (텐텐뱃 양방 전용)
+// BC.Game content script — 스포츠북 + 예측(Predictions) UI
 
 function predictionSiteId() {
+  return 'bcgame';
+}
+
+function isBcSportsPage() {
   try {
-    if (/bc\.game/i.test(location.hostname)) return 'bcgame';
-  } catch (_) {}
-  return 'polymarket';
+    return /bc\.game/i.test(location.hostname) && /\/sports\//i.test(location.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+function parseDecimalOdds(t) {
+  const n = parseFloat(String(t || '').trim());
+  if (!Number.isFinite(n) || n <= 1.01 || n >= 100) return null;
+  return n;
+}
+
+function findBcSportsStakeInput() {
+  const direct = document.getElementById('counter')
+    || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[placeholder*="Stake"], input[class*="counter"], input[class*="Counter"]');
+  if (direct && visible(direct)) return direct;
+
+  for (const inp of document.querySelectorAll('input, textarea')) {
+    if (!visible(inp)) continue;
+    const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
+    if (/search|검색/i.test(blob)) continue;
+    if (/counter|Counter|베팅|stake|amount/i.test(blob)) return inp;
+  }
+  return null;
+}
+
+function readBcSportsStake() {
+  const input = findBcSportsStakeInput();
+  if (!input) return 0;
+  const raw = String(input.value || '').replace(/,/g, '').trim();
+  const v = parseFloat(raw);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function isBcSportsBetButtonText(txt) {
+  const t = String(txt || '').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  if (t.includes('슬립') || t.includes('내 베팅') || t.includes('로그인') || t.includes('정리')) return false;
+  if (t === '최대' || t.includes('전체') || /^\+\s*[\d,]+\s*₩/.test(t)) return false;
+  if (t.includes('배당 수락') || t.includes('배당수락')) return true;
+  if (/수락.*베팅|베팅.*수락/i.test(t)) return true;
+  if (t.includes('베팅하기') || /^place\s*bet$/i.test(t) || t === 'Bet Now' || t === 'Bet') return true;
+  if (t === '베팅 확인' || t.includes('베팅 확인')) return true;
+  return false;
+}
+
+function findBcSportsBetButton() {
+  const allBtns = Array.from(document.querySelectorAll('button, [role="button"]')).filter((b) => !b.disabled);
+  for (const btn of allBtns) {
+    const txt = (btn.textContent || '').trim();
+    if (txt.includes('배당 수락') || txt.includes('배당수락')) return btn;
+  }
+  for (const btn of allBtns) {
+    const txt = (btn.textContent || '').trim();
+    if (isBcSportsBetButtonText(txt)) return btn;
+    if ((btn.className || '').includes('sportsbook-Button') && /베팅|bet/i.test(txt)) return btn;
+  }
+  return null;
+}
+
+function readBcSportsSlipFromPanel() {
+  const hasInput = !!findBcSportsStakeInput();
+  if (!hasInput) return null;
+
+  const roots = [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
+  if (!roots.length) roots.push(document.body);
+
+  for (const root of roots) {
+    for (const card of root.querySelectorAll('[class*="bet"], [class*="Bet"]')) {
+      if (!visible(card)) continue;
+      const txt = (card.textContent || '').trim();
+      if (txt.length < 6 || txt.length > 900) continue;
+      if (card.querySelector('input')) continue;
+      if (!/W[12]|betInformation|우승|winner|맵|map|team/i.test(txt)) continue;
+
+      const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+      const selectionText = titleEls[0]?.textContent?.trim() || '';
+      const marketTitleText = titleEls[1]?.textContent?.trim() || '';
+      const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+      const eventText = eventEl?.textContent?.trim() || '';
+      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
+
+      let odds = null;
+      for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]')) {
+        odds = parseDecimalOdds(sp.textContent);
+        if (odds) break;
+      }
+      if (!odds) {
+        const nums = [];
+        for (const sp of card.querySelectorAll('span, div, b, strong')) {
+          const t = (sp.textContent || '').trim();
+          if (!/^\d+\.\d{2,3}$/.test(t)) continue;
+          const o = parseDecimalOdds(t);
+          if (o) nums.push(o);
+        }
+        if (nums.length) odds = nums[nums.length - 1];
+      }
+      if (!(odds > 1.01)) continue;
+
+      let homeTeam = '';
+      let awayTeam = '';
+      if (eventText) {
+        for (const sep of [' vs ', ' VS ', ' 대 ']) {
+          if (eventText.includes(sep)) {
+            [homeTeam, awayTeam] = eventText.split(sep, 2).map((s) => s.trim());
+            break;
+          }
+        }
+      }
+      let teamLabel = selectionText;
+      if (/^W1$/i.test(teamLabel)) teamLabel = homeTeam || teamLabel;
+      if (/^W2$/i.test(teamLabel)) teamLabel = awayTeam || teamLabel;
+
+      const stake = readBcSportsStake();
+      return {
+        source: 'bcgame',
+        odds,
+        teamLabel,
+        outcome: teamLabel,
+        selectionText: selectionText || teamLabel,
+        displayLabel: `${odds.toFixed(3)}${stake > 0 ? ` · $${stake.toFixed(2)}` : ''}`,
+        stake: stake || null,
+        eventText,
+        homeTeam,
+        awayTeam,
+        marketKind: /핸디|handicap|hdp|spread/i.test(allText) ? 'ah' : (/오버|언더|over|under|총계|total/i.test(allText) ? 'ou' : 'ml'),
+        sourceKind: 'sports-slip',
+        fromPayout: false,
+        hasInput
+      };
+    }
+  }
+  return null;
+}
+
+function readBcSportsBoardOdds() {
+  const board = [];
+  for (const btn of document.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn)) continue;
+    const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!txt) continue;
+    let odds = null;
+    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+    if (oddsEl) odds = parseDecimalOdds(oddsEl.textContent);
+    if (!odds) {
+      const m = txt.match(/(\d+\.\d{2,3})\s*$/);
+      if (m) odds = parseDecimalOdds(m[1]);
+    }
+    if (!odds) continue;
+    const selected = btn.getAttribute('aria-pressed') === 'true'
+      || /selected|active|pressed|highlight/i.test(btn.className || '');
+    board.push({ odds, txt, selected });
+  }
+  if (!board.length) return null;
+  const sel = board.find((b) => b.selected) || board[0];
+  return {
+    source: 'bcgame',
+    odds: sel.odds,
+    teamLabel: sel.txt,
+    outcome: sel.txt,
+    selectionText: sel.txt,
+    displayLabel: sel.odds.toFixed(3),
+    marketKind: 'ml',
+    sourceKind: 'sports-board',
+    fromPayout: false,
+    buttonCount: board.length,
+    hasInput: !!findBcSportsStakeInput()
+  };
+}
+
+function readBcSportsSlip() {
+  const panelSlip = readBcSportsSlipFromPanel();
+  if (panelSlip?.odds > 1.01) return panelSlip;
+  return readBcSportsBoardOdds();
+}
+
+function probeBcSportsUi() {
+  const slip = readBcSportsSlip();
+  const input = findBcSportsStakeInput();
+  const btn = findBcSportsBetButton();
+  return {
+    hasPanel: !!(input || slip),
+    hasInput: !!input,
+    stake: readBcSportsStake(),
+    hasBtn: !!btn,
+    btnText: btn ? (btn.textContent || '').trim().slice(0, 60) : '',
+    btnDisabled: btn ? !!btn.disabled : null,
+    team: slip?.teamLabel || '',
+    url: location.href,
+    mode: 'sports'
+  };
+}
+
+async function setBcSportsAmount(amountUsd, force = true) {
+  const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+  const input = findBcSportsStakeInput();
+  if (!input) return { ok: false, reason: '베팅슬립 없음 — 배당 클릭 후 금액 입력란 확인' };
+
+  const existing = readBcSportsStake();
+  if (!force && existing && Math.abs(existing - rounded) < 0.05) {
+    return { ok: true, stake: existing, method: 'unchanged' };
+  }
+
+  await typeIntoField(input, String(rounded));
+  await sleep(80);
+  const stake = readBcSportsStake();
+  if (stake > 0) return { ok: true, stake, method: 'type', target: rounded };
+  return { ok: false, reason: `금액 입력 실패 — $${rounded} 직접 입력`, stake: existing || 0 };
+}
+
+async function clickBcSportsOutcome(teamHint) {
+  if (!teamHint) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const btn of document.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 140) continue;
+    if (!teamMatchesButton(teamHint, t)) continue;
+    const odds = parseDecimalOdds(t.match(/(\d+\.\d{2,3})\s*$/)?.[1] || '');
+    let score = selectionScore(btn) + 80;
+    if (odds) score += 40;
+    if (score > bestScore) { bestScore = score; best = btn; }
+  }
+  if (best) {
+    clickBuyButton(best);
+    await sleep(300);
+  }
+  return best;
+}
+
+async function ensureBcSportsSlip(teamHint) {
+  if (findBcSportsStakeInput() && readBcSportsSlip()?.odds > 1.01) {
+    return { ok: true, alreadyOpen: true };
+  }
+  const clicked = await clickBcSportsOutcome(teamHint);
+  for (let i = 0; i < 15; i++) {
+    if (findBcSportsStakeInput() && readBcSportsSlip()?.odds > 1.01) {
+      return { ok: true, clicked: !!clicked };
+    }
+    await sleep(120);
+  }
+  return { ok: false, reason: 'BC.Game 슬립 없음 — 배당 클릭', probe: probeBcSportsUi() };
+}
+
+async function placeBcSportsBet(amountUsd, opts = {}) {
+  const skipFill = !!opts.skipFill;
+  const fastStrike = !!opts.fastStrike;
+  const teamHint = opts.teamHint || '';
+
+  if (!findBcSportsStakeInput()) {
+    const ready = await ensureBcSportsSlip(teamHint);
+    if (!ready.ok) return { success: false, reason: ready.reason || '베팅슬립 없음', probe: ready.probe };
+  }
+
+  const amount = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+  if (!skipFill) {
+    const fill = await setBcSportsAmount(amount, true);
+    if (!fill.ok) return { success: false, reason: fill.reason || '금액 입력 실패', probe: probeBcSportsUi() };
+  } else {
+    const existing = readBcSportsStake();
+    if (!existing || Math.abs(existing - amount) > 0.2) {
+      const fill = await setBcSportsAmount(amount, true);
+      if (!fill.ok) return { success: false, reason: fill.reason || '금액 입력 실패' };
+    }
+  }
+
+  let btn = null;
+  const tries = (skipFill || fastStrike) ? 6 : 20;
+  for (let i = 0; i < tries; i++) {
+    await sleep((skipFill || fastStrike) ? 25 : 100);
+    btn = findBcSportsBetButton();
+    if (btn && !btn.disabled) break;
+    btn = null;
+  }
+  if (!btn) {
+    return { success: false, reason: '베팅하기 버튼 없음 — 슬립 열기', probe: probeBcSportsUi() };
+  }
+
+  const btnText = (btn.textContent || '').trim();
+  clickBuyButton(btn);
+  await sleep(fastStrike ? 150 : 350);
+
+  const acceptBtn = findBcSportsBetButton();
+  if (acceptBtn && acceptBtn !== btn && /배당|수락|accept/i.test(acceptBtn.textContent || '')) {
+    clickBuyButton(acceptBtn);
+    await sleep(200);
+  }
+
+  const modalBtn = findModalActionButton();
+  if (modalBtn) clickBuyButton(modalBtn);
+
+  const result = await waitAfterBuyClick(null, btn);
+  result.btnText = btnText.slice(0, 60);
+  result.method = 'sports';
+  return result;
+}
+
+function readLeg2Slip() {
+  if (isBcSportsPage()) return readBcSportsSlip();
+  return readPolymarketSlip();
+}
+
+function probeLeg2BetUi() {
+  if (isBcSportsPage()) return probeBcSportsUi();
+  return probePolyBetUi();
+}
+
+async function ensureLeg2Panel(teamHint) {
+  if (isBcSportsPage()) return ensureBcSportsSlip(teamHint);
+  return ensurePolyTradePanel(teamHint);
+}
+
+async function setLeg2TradeAmount(amountUsd, force = true) {
+  if (isBcSportsPage()) return setBcSportsAmount(amountUsd, force);
+  return setPolyTradeAmount(amountUsd, force);
+}
+
+async function placeLeg2Bet(amountUsd, opts = {}) {
+  if (isBcSportsPage()) return placeBcSportsBet(amountUsd, opts);
+  return placePolymarketBet(amountUsd, opts);
 }
 
 const RE_WIN_LABEL = /\bto\s*win\b|우승|당첨(금)?|획득|예상\s*수익/i;
@@ -989,7 +1311,7 @@ function readPolymarketSlip() {
       priceCents: isValidPolyCents(listedCents) ? listedCents : null,
       hint: listedCents
         ? `${formatCentsLabel(listedCents)} — Amount 입력 시 당첨금 기준 배당`
-        : 'Polymarket Amount 입력 후 To win 확인',
+        : 'BC.Game Amount 입력 후 To win 확인',
       marketKind: 'ml'
     };
   }
@@ -1565,6 +1887,29 @@ function pushMatchup(matchups, seen, home, away, homeCents, awayCents) {
   });
 }
 
+function scanBcSportsBoard() {
+  const slip = readBcSportsSlip();
+  const matchups = [];
+  if (slip?.odds > 1.01 && slip.teamLabel) {
+    matchups.push({
+      id: slip.teamLabel.slice(0, 40),
+      home: slip.homeTeam || slip.teamLabel,
+      away: slip.awayTeam || '',
+      title: slip.eventText || slip.teamLabel,
+      league: '',
+      ml: [{ team: slip.teamLabel, side: 'pick', price: 1 / slip.odds, decimal: slip.odds }]
+    });
+  }
+  return {
+    ok: true,
+    site: 'bcgame',
+    url: location.href,
+    matchups,
+    hasCart: !!findBcSportsStakeInput(),
+    cartSlip: slip
+  };
+}
+
 function scanPredictionsBoard() {
   const matchups = [];
   const seen = new Set();
@@ -1627,27 +1972,27 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg.type === 'READ_SLIP') {
-    sendResponse({ slip: readPolymarketSlip() });
+    sendResponse({ slip: readLeg2Slip() });
     return false;
   }
   if (msg.type === 'SCAN_BOARD') {
-    sendResponse(scanPredictionsBoard());
+    sendResponse(isBcSportsPage() ? scanBcSportsBoard() : scanPredictionsBoard());
     return false;
   }
   if (msg.type === 'PROBE_POLY') {
-    sendResponse({ ok: true, probe: probePolyBetUi() });
+    sendResponse({ ok: true, probe: probeLeg2BetUi() });
     return false;
   }
   if (msg.type === 'SET_POLY_AMOUNT') {
-    setPolyTradeAmount(msg.amount, msg.force !== false).then(sendResponse);
+    setLeg2TradeAmount(msg.amount, msg.force !== false).then(sendResponse);
     return true;
   }
   if (msg.type === 'ENSURE_POLY_PANEL') {
-    ensurePolyTradePanel(msg.team || '').then(sendResponse);
+    ensureLeg2Panel(msg.team || '').then(sendResponse);
     return true;
   }
   if (msg.type === 'PLACE_BET') {
-    placePolymarketBet(msg.amount, {
+    placeLeg2Bet(msg.amount, {
       skipFill: !!msg.skipFill,
       fastStrike: !!msg.fastStrike,
       teamHint: msg.teamHint || msg.team || ''
@@ -1657,10 +2002,10 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 });
 
 try {
-  window.__polyPlaceBet = placePolymarketBet;
-  window.__polySetAmount = setPolyTradeAmount;
-  window.__polyProbe = probePolyBetUi;
-  window.__polyReadSlip = readPolymarketSlip;
+  window.__polyPlaceBet = placeLeg2Bet;
+  window.__polySetAmount = setLeg2TradeAmount;
+  window.__polyProbe = probeLeg2BetUi;
+  window.__polyReadSlip = readLeg2Slip;
 } catch (_) {}
 
 (function observe() {
@@ -1675,7 +2020,7 @@ try {
   }
 
   function tick() {
-    const slip = readPolymarketSlip();
+    const slip = readLeg2Slip();
     if (!slip) return;
     const key = slipKey(slip);
     if (key === last) return;
@@ -1720,4 +2065,4 @@ try {
   }
 })();
 
-console.log(`[Prediction v5] content script loaded (${predictionSiteId()})`);
+console.log(`[BC.Game v1.4] content script loaded (${isBcSportsPage() ? 'sports' : 'predictions'})`);

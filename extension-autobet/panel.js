@@ -49,7 +49,7 @@ function getConfig() {
     minProfit: parseFloat($('minProfit').value),
     btiBetKrw: parseInt($('btiBet').value, 10) || 10000,
     usdRate: parseFloat($('usdRate').value) || 1400,
-    leg2: $('leg2Site').value || 'auto',
+    leg2: $('leg2Site').value || 'bcgame',
     cooldownMs: parseInt($('cooldownMs').value, 10) || 8000,
     useArbBotBridge: $('useBridge').checked,
     preSyncAmount: $('preSync').checked
@@ -73,7 +73,7 @@ function setArmedUi(armed) {
   armedLocal = !!armed;
   const st = $('armStatus');
   if (st) {
-    if (armed && btiSlipPaused) {
+    if (armed && (btiSlipPaused || pendingStrike)) {
       st.textContent = '무장·대기';
       st.className = 'armed paused';
     } else {
@@ -367,7 +367,7 @@ async function liveAmountSync(force) {
     if (!snap.btiO || !snap.polyO) {
       if (!snap.btiO && !snap.polyO) polyPreSynced = false;
       if (cfg.preSyncAmount && snap.btiO && !snap.polyO) {
-        $('statusHint').textContent = snap.reason || '예측 배당 읽는 중 — outcome/Amount 확인';
+        $('statusHint').textContent = snap.reason || 'BC.Game 배당 읽는 중 — 배당 클릭/슬립 확인';
       }
       return;
     }
@@ -481,7 +481,7 @@ async function executeStrike(snap, cfg, label) {
         logLine(`  ${leg1Label()} iframe: ${result.btiRes.frameId}`, 'err');
       }
       if (result.polyRes?.probe) {
-        logLine(`  ${leg2PrefLabel(cfg.leg2)} UI: Buy=${result.polyRes.probe.hasBuyBtn}`, 'err');
+        logLine(`  ${leg2PrefLabel(cfg.leg2)} UI: btn=${result.polyRes.probe.hasBtn}`, 'err');
       }
     }
     chrome.runtime.sendMessage({ type: 'AUTOBET_STRIKE_RESULT', result, profit: snap.profit });
@@ -606,12 +606,12 @@ $('scanBtn')?.addEventListener('click', async () => {
     else logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
     if (snap.polyO > 1) {
       const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
-      logLine(`예측 ${cents}${snap.polyO.toFixed(3)}`, 'ok');
+      logLine(`BC.Game ${cents}${snap.polyO.toFixed(3)}`, 'ok');
     } else {
-      logLine(snap.reason || '예측 배당 없음 — outcome 클릭 또는 Amount 입력', 'err');
+      logLine(snap.reason || 'BC.Game 배당 없음 — 배당 클릭 또는 금액 입력', 'err');
     }
     if (snap.btiO > 1 && snap.polyO > 1) {
-      logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · Poly $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
+      logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · BC $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
       amountSyncQueued = true;
       liveAmountSync(true);
     }
@@ -639,7 +639,7 @@ $('testBetBtn')?.addEventListener('click', async () => {
       return;
     }
     logLine(
-      `탭 A:${snap.found.btiTab.id} B:${snap.found.polyTab.id} | ${snap.btiO || '-'} / ${snap.polyO || '-'} | Poly $${snap.polyUsd || '-'}`,
+      `탭 A:${snap.found.btiTab.id} B:${snap.found.polyTab.id} | ${snap.btiO || '-'} / ${snap.polyO || '-'} | BC $${snap.polyUsd || '-'}`,
       'info'
     );
     if (!snap.btiO || !snap.polyO) {
@@ -708,4 +708,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.3.0 — 슬립 닫힘 시 대기·열리면 배팅 재개', 'info');
+logLine('v1.4.0 — Polymarket 제거 · BC.Game 스포츠 지원', 'info');

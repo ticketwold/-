@@ -7,7 +7,7 @@
 <body>
 <header>
   <h1>⚡ 양방 자동배팅</h1>
-  <div class="sub">배당 실시간 갱신 · v1.3.0</div>
+  <div class="sub">배당 실시간 갱신 · v1.4.0</div>
 </header>
 
 <section class="status-box" id="statusBox">
@@ -20,7 +20,7 @@
     <strong id="profitVal">-</strong>
   </div>
   <div class="status-row">
-    <span>텐텐뱃 / 예측</span>
+    <span>텐텐뱃 / BC.Game</span>
     <strong id="oddsVal">- / -</strong>
   </div>
   <div class="hint" id="statusHint">확장 아이콘 클릭 → 별도 창 열림 · 닫지 마세요</div>
@@ -43,8 +43,6 @@
 <div class="row">
   <label>오른쪽(B) 사이트</label>
   <select id="leg2Site">
-    <option value="auto">자동</option>
-    <option value="polymarket">Polymarket</option>
     <option value="bcgame">BC.Game</option>
   </select>
 </div>
@@ -58,7 +56,7 @@
 </label>
 <label class="check">
   <input type="checkbox" id="preSync" checked>
-  실시간 금액 동기화 (무장 없이도 텐텐뱃 기준 → Poly 자동 입력)
+  실시간 금액 동기화 (무장 없이도 텐텐뱃 기준 → BC.Game 자동 입력)
 </label>
 
 <div class="btn-row">
@@ -74,7 +72,6 @@
 
 <script src="sites_config.js"></script>
 <script src="odds.js"></script>
-<script src="poly_api.js"></script>
 <script src="bti_read.js"></script>
 <script src="engine.js"></script>
 <script src="poly_read.js"></script>

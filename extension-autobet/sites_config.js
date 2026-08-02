@@ -1,15 +1,14 @@
-// 텐텐뱃 (x10x10s) + Polymarket / BC.Game 전용 설정
+// 텐텐뱃 (x10x10s) + BC.Game 전용 설정
 const SITE_CONFIG = {
   WRAPPER_HOSTS: ['x10x10s.com'],
-  POLYMARKET_HOSTS: ['polymarket.com'],
   BCGAME_HOSTS: ['bc.game'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
   BTI_HOST_HINTS: ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'],
   BTI_INJECTABLE_HOSTS: ['bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com'],
-  GAMMA_API: 'https://gamma-api.polymarket.com',
-  GAMMA_SPORTS_TAG: '100639',
   LEG1_LABEL: '텐텐뱃',
-  LEG1_SHORT: '텐텐'
+  LEG1_SHORT: '텐텐',
+  LEG2_LABEL: 'BC.Game',
+  LEG2_SHORT: 'BC'
 };
 
 function leg1Label() {
@@ -20,8 +19,16 @@ function leg1ShortLabel() {
   return SITE_CONFIG.LEG1_SHORT || '텐텐';
 }
 
+function leg2Label() {
+  return SITE_CONFIG.LEG2_LABEL || 'BC.Game';
+}
+
+function leg2ShortLabel() {
+  return SITE_CONFIG.LEG2_SHORT || 'BC';
+}
+
 function formatStrikeFailLine(btiRes, polyRes, leg2Pref) {
-  const leg2 = leg2PrefLabel(leg2Pref || 'auto');
+  const leg2 = leg2PrefLabel(leg2Pref || 'bcgame');
   const left = btiRes?.reason || btiRes?.btnText || '실패';
   const right = polyRes?.reason || polyRes?.method || polyRes?.btnText || '실패';
   return `✗ ${leg1Label()}: ${left} · ${leg2}: ${right}`;
@@ -30,11 +37,6 @@ function formatStrikeFailLine(btiRes, polyRes, leg2Pref) {
 function isWrapperUrl(url) {
   if (!url) return false;
   return SITE_CONFIG.WRAPPER_HOSTS.some((h) => url.includes(h));
-}
-
-function isPolymarketUrl(url) {
-  if (!url) return false;
-  return SITE_CONFIG.POLYMARKET_HOSTS.some((h) => url.includes(h));
 }
 
 function isBcGameUrl(url) {
@@ -47,58 +49,60 @@ function isBcGameUrl(url) {
   }
 }
 
-function isLeg2PredictionUrl(url) {
-  return isPolymarketUrl(url) || isBcGameUrl(url);
+function isBcGameSportsUrl(url) {
+  if (!isBcGameUrl(url)) return false;
+  try {
+    return /\/sports\//i.test(new URL(url).pathname);
+  } catch (_) {
+    return /\/sports\//i.test(String(url || ''));
+  }
+}
+
+function isLeg2Url(url) {
+  return isBcGameUrl(url);
 }
 
 function isLeg2EventUrl(url) {
   if (!url) return false;
+  if (isBcGameSportsUrl(url)) return true;
   return /\/event\//i.test(url) || /\/predictions\/event\//i.test(url);
 }
 
 function leg2SiteKey(url) {
   if (isBcGameUrl(url)) return 'bcgame';
-  if (isPolymarketUrl(url)) return 'polymarket';
   return '';
 }
 
 function leg2SiteLabel(url) {
-  const key = leg2SiteKey(url);
-  if (key === 'bcgame') return 'BC.Game';
-  if (key === 'polymarket') return 'Polymarket';
-  return '예측';
+  if (leg2SiteKey(url) === 'bcgame') return 'BC.Game';
+  return 'BC.Game';
 }
 
 function leg2SiteShort(url) {
-  const key = leg2SiteKey(url);
-  if (key === 'bcgame') return 'BC';
-  if (key === 'polymarket') return '폴리';
-  return '예측';
+  if (leg2SiteKey(url) === 'bcgame') return 'BC';
+  return 'BC';
 }
 
 function leg2PrefLabel(pref) {
-  if (pref === 'polymarket') return 'Polymarket';
-  if (pref === 'bcgame') return 'BC.Game';
-  return '자동';
+  if (pref === 'bcgame' || pref === 'auto') return 'BC.Game';
+  return 'BC.Game';
 }
 
 function urlMatchesLeg2Pref(url, pref) {
   if (!url) return false;
-  if (pref === 'polymarket') return isPolymarketUrl(url);
-  if (pref === 'bcgame') return isBcGameUrl(url);
-  return isLeg2PredictionUrl(url);
+  return isBcGameUrl(url);
 }
 
 function scoreLeg2Tab(url, activeId, tabId, pref) {
   if (!urlMatchesLeg2Pref(url, pref)) return -1;
   let score = 0;
   if (isLeg2EventUrl(url)) score += 30;
-  if (pref === 'bcgame' || isBcGameUrl(url)) {
-    if (/\/predictions\/event\//i.test(url)) score += 35;
-    else if (/\/predictions/i.test(url)) score += 25;
-    else score += 8;
-  } else if (/predictions/i.test(url)) score += 5;
-  if (pref === 'polymarket' && isPolymarketUrl(url)) score += 10;
+  if (isBcGameSportsUrl(url)) {
+    if (/\/sports\/[^/]+\/[^/]+\/[^/]+-/i.test(url)) score += 45;
+    else if (/\/sports\/[^/]+\/[^/]+\//i.test(url)) score += 38;
+    else score += 32;
+  } else if (/\/predictions\/event\//i.test(url)) score += 28;
+  else if (/\/predictions/i.test(url)) score += 18;
   if (tabId === activeId) score += 15;
   return score;
 }

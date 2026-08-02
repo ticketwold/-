@@ -148,7 +148,7 @@ async function ensureAllBtiScripts(tabId) {
   await Promise.all(frames.map((f) => ensureBtiScript(tabId, f.frameId)));
 }
 
-async function findTabs(leg2Pref = 'auto') {
+async function findTabs(leg2Pref = 'bcgame') {
   const tabs = await chrome.tabs.query({});
   let btiTab = null;
   let btiBestScore = -1;
@@ -541,7 +541,7 @@ async function verifyStrikeReady(found, hint = {}, poly = null) {
     return {
       ok: false,
       btiClosed: false,
-      reason: '예측 Buy 버튼 없음 — outcome 클릭',
+      reason: 'BC.Game 배팅 준비 안됨 — 배당 클릭 또는 슬립 열기',
       btiUi,
       polyProbe
     };
@@ -648,7 +648,7 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
     teamHint
   });
   if (fallback?.success) return fallback;
-  return fallback || { success: false, reason: 'Poly 배팅 실패' };
+  return fallback || { success: false, reason: 'BC.Game 배팅 실패' };
 }
 
 async function syncBothAmounts(found, btiBetKrw, polyUsd, hint) {
@@ -683,13 +683,13 @@ async function prewarmTabs(btiTab, polyTab, hint, btiBetKrw, polyUsd) {
 async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
   const found = await findTabs(leg2Pref);
   if (!found.btiTab && !found.polyTab) {
-    return { ok: false, reason: 'x10x10s + 예측 탭을 열어주세요', found };
+    return { ok: false, reason: 'x10x10s + BC.Game 탭을 열어주세요', found };
   }
   if (!found.btiTab) {
     return { ok: false, reason: '텐텐뱃: x10x10s.com 스포츠 탭 없음', found };
   }
   if (!found.polyTab) {
-    return { ok: false, reason: '예측: Polymarket/BC.Game 탭 없음', found };
+    return { ok: false, reason: 'BC.Game: 스포츠/예측 탭 없음', found };
   }
 
   const poly = await readPolySlipAllFrames(found.polyTab);
@@ -703,7 +703,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
 
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = '예측 배당 없음 — Polymarket outcome 클릭 또는 Amount 입력';
+  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — 배당 클릭 또는 금액 입력';
 
   return {
     ok: true,
@@ -753,7 +753,7 @@ async function strikeBothSides(ctx) {
           }
         } catch (_) {}
       })(),
-      withTimeout(ensurePolyPanel(found.polyTab, polyTeam), 4000, '예측 패널 준비').catch(() => null)
+      withTimeout(ensurePolyPanel(found.polyTab, polyTeam), 4000, 'BC.Game 슬립 준비').catch(() => null)
     ]);
   }
 
@@ -766,7 +766,7 @@ async function strikeBothSides(ctx) {
   const polyP = withTimeout(
     placePolyBet(found.polyTab, polyUsd, { skipFill: fast, fastStrike: fast, teamHint: polyTeam }),
     25000,
-    'Polymarket 배팅'
+    'BC.Game 배팅'
   ).catch((e) => ({ success: false, reason: e.message }));
 
   const [btiRes, polyRes] = await Promise.all([btiP, polyP]);
