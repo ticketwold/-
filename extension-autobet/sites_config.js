@@ -152,6 +152,8 @@ function scoreBtiFrameUrl(url) {
 function isBcBetbyFrameUrl(url) {
   return /betby|sptpub|biahosted|sptsportscdn|cocoesports|sportradar|invisiblesport|bt-renderer/i.test(url || '');
 }
+
+function scoreBcLeg2FrameUrl(url, tabUrl) {
   if (!url) return 0;
   if (/tracker\.html|amazon-ivs|widgets?\.|doubleclick|googlesyndication/i.test(url)) return -200;
   let score = scoreBtiFrameUrl(url);

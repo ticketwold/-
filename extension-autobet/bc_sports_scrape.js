@@ -1,18 +1,30 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 9;
+  const SCRAPE_VER = 10;
+
+  function openShadow(el) {
+    if (!el || el.nodeType !== 1) return null;
+    if (el.shadowRoot) return el.shadowRoot;
+    return null;
+  }
 
   function collectPageText() {
     const parts = [];
     function walk(node, depth) {
-      if (!node || depth > 100) return;
+      if (!node || depth > 120) return;
       if (node.nodeType === 3) {
         const t = node.textContent?.trim();
         if (t) parts.push(t);
         return;
       }
-      if (node.nodeType !== 1) return;
-      if (node.shadowRoot) walk(node.shadowRoot, depth + 1);
+      if (node.nodeType !== 1) {
+        if (node.nodeType === 11) {
+          for (const c of node.childNodes) walk(c, depth + 1);
+        }
+        return;
+      }
+      const sr = openShadow(node);
+      if (sr) walk(sr, depth + 1);
       for (const c of node.childNodes) walk(c, depth + 1);
     }
     walk(document.documentElement, 0);
@@ -46,12 +58,15 @@
   }
 
   function collectRoots(node, out) {
-    if (!node || out.length > 8000) return;
+    if (!node || out.length > 12000) return;
     if (node.nodeType === 1) {
       out.push(node);
-      if (node.shadowRoot) collectRoots(node.shadowRoot, out);
+      const sr = node.shadowRoot;
+      if (sr) collectRoots(sr, out);
       const ch = node.children || [];
       for (let i = 0; i < ch.length; i++) collectRoots(ch[i], out);
+    } else if (node.nodeType === 11) {
+      for (const c of node.childNodes) collectRoots(c, out);
     }
   }
 

@@ -48,7 +48,39 @@ async function injectReadBcSports(tabId, frameId = 0) {
 }
 
 function isBcFrameSkippable(url) {
-  return /tracker\.html|amazon-ivs|widgets?\.|doubleclick|googlesyndication|about:blank$/i.test(url || '');
+  return /tracker\.html|amazon-ivs|widgets?\.|doubleclick|googlesyndication|hcaptcha|captcha|about:blank$/i.test(url || '');
+}
+
+async function waitForBcSportsFrame(tabId, maxMs = 6000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    const frames = await getAllFrames(tabId);
+    const hit = frames.find((f) => typeof isBcBetbyFrameUrl === 'function'
+      ? isBcBetbyFrameUrl(f.url)
+      : /sptsportscdn|cocoesports|betby|renderer|sportsbook/i.test(f.url || ''));
+    if (hit && !isBcFrameSkippable(hit.url)) return hit.frameId;
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return null;
+}
+
+async function waitForBetbyRenderer(tabId, maxMs = 5000) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['bc_betby_bridge.js'],
+      world: 'MAIN'
+    });
+    const res = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      world: 'MAIN',
+      func: (ms) => (typeof window.__bcWaitRenderer === 'function' ? window.__bcWaitRenderer(ms) : null),
+      args: [maxMs]
+    });
+    return res?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function readBcSportsPerFrameDeep(polyTab) {
@@ -642,6 +674,10 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
   const maxAttempts = focusTab ? 4 : 1;
 
   if (focusTab && waitMs > 0) await focusBcTabForRead(polyTab.id, waitMs);
+  if (focusTab) {
+    await waitForBetbyRenderer(polyTab.id, 5000);
+    await waitForBcSportsFrame(polyTab.id, 4000);
+  }
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);
 
@@ -700,16 +736,14 @@ async function probeBcSlipFrames(polyTab) {
         func: () => {
           const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
           const api = window.__bcApiSlip;
-          const iframes = [...document.querySelectorAll('iframe')].slice(0, 6).map((f) => ({
-            s: (f.src || '').replace(/^https?:\/\//, '').slice(0, 60),
-            w: f.offsetWidth,
-            h: f.offsetHeight
-          }));
+          const iframes = typeof window.__bcDiscoverIframes === 'function' ? window.__bcDiscoverIframes() : [];
+          const btReady = !!window.BTRenderer;
           return {
             scraped: scraped?.ok ? scraped : null,
             api: api?.odds > 1.01 ? api : null,
             ver: window.__bcScrapeVer || 0,
-            iframes
+            iframes,
+            btReady
           };
         }
       })
@@ -732,7 +766,10 @@ async function probeBcSlipFrames(polyTab) {
         const flags = hit?.flags ? ` slip${hit.flags.slip ? 1 : 0} win${hit.flags.win ? 1 : 0} usdt${hit.flags.usdt ? 1 : 0} btn${hit.flags.betBtn ? 1 : 0}` : '';
         const selOdds = diag?.selectedOdds?.map((b) => b.t).join(', ') || '';
         const apiOdds = main.api?.odds || diag?.apiSlip?.odds;
-        const iframeHint = main.iframes?.filter((i) => i.w > 50 && i.h > 50).map((i) => i.s).join(' | ') || '';
+        const iframeHint = (main.iframes || [])
+          .filter((i) => i.w > 40 && i.h > 40 && !/hcaptcha|captcha|tracker/i.test(i.src || ''))
+          .map((i) => (i.src || '').replace(/^https?:\/\//, '').slice(0, 55))
+          .join(' | ') || (main.btReady ? 'BTRenderer' : '');
         out.push({
           frameId,
           url,

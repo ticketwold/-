@@ -740,4 +740,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.5.1 — 초록 선택 배당 + 텐텐뱃 팀 자동클릭', 'info');
+logLine(`v${chrome.runtime.getManifest().version} — BetBy(sptsportscdn) 슬립 읽기`, 'info');
