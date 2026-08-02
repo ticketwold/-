@@ -426,13 +426,17 @@ function readBcSportsBoardOdds() {
   };
 }
 
+function isBcHistoryVisible() {
+  const t = getDeepPageText();
+  return /내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|open\s*bets|settled\s*bets|bethistory/i.test(t);
+}
+
 function readBcSportsSlip() {
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return panelSlip;
   const pageText = getDeepPageText();
-  if (/베팅\s*슬립|bet\s*slip/i.test(pageText) && /예상\s*당첨|총\s*베팅|베팅하기/i.test(pageText)) {
-    return null;
-  }
+  if (/베팅\s*슬립|bet\s*slip|betslip/i.test(pageText)) return null;
+  if (isBcHistoryVisible()) return null;
   return readBcSportsBoardOdds();
 }
 
@@ -440,14 +444,19 @@ function probeBcSportsUi() {
   const slip = readBcSportsSlip();
   const input = findBcSportsStakeInput();
   const btn = findBcSportsBetButton();
+  const slipOdds = slip?.odds > 1.01 ? slip.odds : 0;
+  const strikeSlip = slipOdds > 1 && (slip.sourceKind === 'bc-native-slip' || slip.sourceKind === 'sports-slip' || slip.fromPayout);
   return {
-    hasPanel: !!(input || slip),
+    hasPanel: !!(input && strikeSlip),
     hasInput: !!input,
     stake: readBcSportsStake(),
-    hasBtn: !!btn,
+    hasBtn: !!(btn && !btn.disabled),
     btnText: btn ? (btn.textContent || '').trim().slice(0, 60) : '',
     btnDisabled: btn ? !!btn.disabled : null,
     team: slip?.teamLabel || '',
+    slipOdds,
+    hasSlipSelection: !!strikeSlip,
+    slipKind: slip?.sourceKind || '',
     url: location.href,
     mode: 'sports'
   };

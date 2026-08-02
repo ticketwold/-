@@ -106,6 +106,7 @@
 
   function hasSlipMarkers(raw) {
     const t = String(raw || '');
+    if (/내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|settled|bethistory|open\s*bets/i.test(t)) return false;
     if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return true;
     if (/place\s*(a\s*)?bet/i.test(t) && /stake|odds|total|win|USDT/i.test(t)) return true;
     if (/total\s*(stake|odds)|potential\s*win|to\s*win/i.test(t) && /\d+\.\d{1,3}/.test(t)) return true;
@@ -714,13 +715,15 @@
       readBetbyOutcomeSlip,
       readViaBetButton,
       readViaStakeInputs,
-      readSelectedBoardOdds,
       () => {
         const p = parseSlipText(collectAllText());
         return p ? { ...p, method: 'all-text' } : null;
       },
       readScriptJsonState,
       walkSameOriginIframes,
+      readFromApiCache,
+      readBetbyShadowSlip,
+      readSelectedBoardOdds,
       readFromStorage,
       scanWindowGlobals
     ];

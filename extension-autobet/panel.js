@@ -161,21 +161,25 @@ function saveConfig() {
   return cfg;
 }
 
+function isBcSlipMissingReason(reason) {
+  return !!(reason && /BC\.Game.*(배당 없음|슬립 없음)/.test(reason));
+}
+
 function displayOdds(btiO, polyO, snapReason) {
   const now = Date.now();
-  const bcMissing = snapReason && /BC\.Game 배당 없음/.test(snapReason);
+  const bcMissing = isBcSlipMissingReason(snapReason);
   const bti = btiO > 1 ? btiO
     : (now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
   const poly = polyO > 1 ? polyO
-    : (!bcMissing && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
+    : (!bcMissing && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
   $('oddsVal').textContent = `${bti > 1 ? bti.toFixed(3) : '-'} / ${poly > 1 ? poly.toFixed(3) : '-'}`;
 }
 
 function patchSnapFromKnown(snap, cfg) {
-  const bcMissing = snap.reason && /BC\.Game 배당 없음/.test(snap.reason);
+  const bcMissing = isBcSlipMissingReason(snap.reason);
   const partial = {
     btiO: lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO,
-    polyO: bcMissing ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO)
+    polyO: bcMissing || !lastKnownOdds.polyTrusted ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO)
   };
   if (partial.btiO > 1 && partial.polyO > 1) {
     partial.profit = calcProfit(partial.btiO, partial.polyO);
@@ -186,6 +190,7 @@ function patchSnapFromKnown(snap, cfg) {
 
 function applyInstantOdds(msg) {
   if (!msg?.slip?.odds || msg.slip.odds <= 1) return false;
+  if (msg.source !== 'bti' && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(msg.slip)) return false;
   const cfg = getConfig();
   const o = msg.slip.odds;
   const now = Date.now();
@@ -195,6 +200,7 @@ function applyInstantOdds(msg) {
   } else {
     lastKnownOdds.polyO = o;
     lastKnownOdds.polyAt = now;
+    lastKnownOdds.polyTrusted = true;
   }
   lastSynced.at = 0;
   amountSyncQueued = true;
@@ -223,11 +229,11 @@ function stabilizeSnap(snap, cfg) {
   } else if (lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
     snap.btiO = lastKnownOdds.btiO;
   }
-  if (snap.polyO > 1 && (typeof isTrustedBcSlip !== 'function' || isTrustedBcSlip(snap.poly))) {
+  if (snap.polyO > 1 && (typeof isStrikeBcSlip === 'function' ? isStrikeBcSlip(snap.poly) : isTrustedBcSlip(snap.poly))) {
     lastKnownOdds.polyO = snap.polyO;
     lastKnownOdds.polyAt = now;
     lastKnownOdds.polyTrusted = true;
-  } else if (snap.reason && /BC\.Game 배당 없음/.test(snap.reason)) {
+  } else if (snap.reason && /BC\.Game.*(배당|슬립)/.test(snap.reason)) {
     lastKnownOdds.polyO = null;
     lastKnownOdds.polyAt = 0;
     lastKnownOdds.polyTrusted = false;
@@ -235,7 +241,7 @@ function stabilizeSnap(snap, cfg) {
     snap.poly = null;
   } else if (lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
-  } else if (snap.polyO > 1 && typeof isTrustedBcSlip === 'function' && !isTrustedBcSlip(snap.poly)) {
+  } else if (snap.polyO > 1 && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(snap.poly)) {
     snap.polyO = null;
     snap.poly = null;
   }
@@ -410,6 +416,7 @@ async function liveAmountSync(force) {
     lastKnownOdds.polyO = syncPolyO;
     lastKnownOdds.btiAt = Date.now();
     lastKnownOdds.polyAt = Date.now();
+    lastKnownOdds.polyTrusted = !!(syncPolyO > 1 && (!snap.poly || !isStrikeBcSlip || isStrikeBcSlip(snap.poly)));
 
     snap.btiO = syncBtiO;
     snap.polyO = syncPolyO;
@@ -501,6 +508,9 @@ async function executeStrike(snap, cfg, label) {
       logLine(`  ${leg1Label()}: ${result.btiRes?.btnText || result.btiRes?.reason || 'OK'}`, 'ok');
       logLine(`  ${leg2PrefLabel(cfg.leg2)}: ${result.polyRes?.btnText || result.polyRes?.method || result.polyRes?.reason || 'OK'}`, 'ok');
       disarmAfterStrike('배팅 성공 — 자동 해제');
+    } else if (result.oneSidedPrevented) {
+      logLine(`⛔ BC 실패 — 텐텐뱃 배팅 차단됨`, 'err');
+      logLine(`  BC: ${result.polyRes?.reason || result.polyRes?.btnText || '실패'}`, 'err');
     } else if (result.gated) {
       queuePendingStrike(snap, cfg, label);
       logLine(`⏸ ${result.btiRes?.reason || '텐텐뱃 미준비'} — 배팅 대기`, 'info');
@@ -544,6 +554,7 @@ async function panelLoop() {
     updateStatusFromSnap(snap, cfg);
 
     if (snap.profit == null || snap.btiO == null || snap.polyO == null) return;
+    if (typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(snap.poly)) return;
     if (snap.profit < cfg.minProfit) {
       if (pendingStrike) {
         logLine('수익 구간 이탈 — 배팅 대기 해제', 'info');

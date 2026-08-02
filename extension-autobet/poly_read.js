@@ -421,14 +421,19 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 
 function mergePolySlipWithCache(tabId, slip) {
   slip = normalizePolySlip(slip);
-  if (slip?.odds > 1 && isTrustedBcSlip(slip)) {
+  if (slip?.odds > 1 && isStrikeBcSlip(slip)) {
     cachePolyOdds(tabId, slip);
+    return slip;
+  }
+  if (slip?.odds > 1 && isTrustedBcSlip(slip)) return slip;
+  if (!slip?.odds || slip.odds <= 1) {
+    polyOddsCache.delete(tabId);
     return slip;
   }
   const pending = slip?.pendingToWin || slip?.needsStake;
   if (!pending) return slip;
-  const cached = getCachedPolyOdds(tabId);
-  if (!cached) return slip;
+  const cached = getCachedPolyOdds(tabId, 2000);
+  if (!cached || !isStrikeBcSlip(cached)) return slip;
   return {
     ...cached,
     stake: slip?.stake > 0 ? slip.stake : cached.stake,
@@ -466,6 +471,19 @@ function isTrustedBcSlip(slip) {
   return false;
 }
 
+/** 자동배팅용 — 슬립 카트에 실제 선택이 있을 때만 (보드/내역/캐시 오탐 제외) */
+function isStrikeBcSlip(slip) {
+  if (!isTrustedBcSlip(slip)) return false;
+  const kind = slip.sourceKind || '';
+  const method = slip.method || '';
+  if (kind === 'sports-board-selected' || kind === 'sports-board' || method === 'board-selected') return false;
+  if (/storage|window-|script-json|all-text|board-selected/i.test(method)) return false;
+  if (kind === 'bc-api' && slip.capturedAt && Date.now() - slip.capturedAt > 120000) return false;
+  return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
+    || (slip.fromPayout && slip.stake > 0)
+    || /shadow-slip|bet-btn|stake-input|near-stake|betby-outcome|coupon|api-cache/i.test(method);
+}
+
 function isRelaxedBcSlip(slip) {
   if (!(slip?.odds > 1.01 && slip.odds <= 8)) return false;
   if (slip.sourceKind === 'sports-text') return false;
@@ -478,10 +496,10 @@ function scorePolySlip(slip) {
   let score = 0;
   if (slip.sourceKind === 'bc-native-slip') score += 300;
   else if (slip.sourceKind === 'bc-api') score += 280;
-  else if (slip.sourceKind === 'sports-board-selected') score += 260;
   else if (slip.fromPayout && !slip.pendingToWin) score += 200;
   else if (slip.sourceKind === 'sports-slip') score += 240;
-  else if (slip.sourceKind === 'sports-board') score += 40;
+  else if (slip.sourceKind === 'sports-board-selected') score -= 120;
+  else if (slip.sourceKind === 'sports-board') score -= 80;
   else if (slip.sourceKind === 'sports-text') score -= 500;
   else if (slip.liveCents || slip.source === 'poly-scrape') score += 40;
   if (slip.fromPayout && slip.stake > 0) score += 150;
@@ -849,10 +867,12 @@ async function readPolyOddsOnce(polyTab, opts = {}) {
 
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab, opts);
-    if (isTrustedBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
+    if (isStrikeBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
+    if (isTrustedBcSlip(native)) return native;
 
     const leg2 = await readBcLeg2FromBtiFrames(polyTab);
-    if (isTrustedBcSlip(leg2)) return mergePolySlipWithCache(polyTab.id, leg2);
+    if (isStrikeBcSlip(leg2)) return mergePolySlipWithCache(polyTab.id, leg2);
+    if (isTrustedBcSlip(leg2)) return leg2;
 
     polyOddsCache.delete(polyTab.id);
     return null;
