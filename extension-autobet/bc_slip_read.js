@@ -257,12 +257,26 @@
     };
   }
 
+  function readFromApiCache() {
+    try {
+      const api = window.__bcApiSlip;
+      if (api?.odds > 1.01 && Date.now() - (api.capturedAt || 0) < 180000) {
+        return { ...api, method: 'api-cache' };
+      }
+    } catch (_) {}
+    return null;
+  }
+
   function readNativeSlip() {
     const fields = collectStakeFields();
     const strategies = [
+      readFromApiCache,
       readViaBetButton,
       readViaStakeInputs,
-      () => parseSlipText(collectAllText()) && { ...parseSlipText(collectAllText()), method: 'all-text' },
+      () => {
+        const p = parseSlipText(collectAllText());
+        return p ? { ...p, method: 'all-text' } : null;
+      },
       walkSameOriginIframes,
       readFromStorage,
       scanWindowGlobals

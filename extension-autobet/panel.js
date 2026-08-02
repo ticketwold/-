@@ -314,10 +314,10 @@ async function refreshOddsLive() {
   }
 }
 
-async function getSnap(cfg, progressLabel) {
+async function getSnap(cfg, progressLabel, opts = {}) {
   if (progressLabel) logLine(progressLabel, 'info');
   let snap = await withTimeout(
-    readSnapshot(cfg.leg2, cfg.btiBetKrw, cfg.usdRate),
+    readSnapshot(cfg.leg2, cfg.btiBetKrw, cfg.usdRate, opts),
     SNAP_TIMEOUT_MS,
     '배당 읽기'
   );
@@ -575,9 +575,9 @@ $('disarmBtn')?.addEventListener('click', () => arm(false));
 
 $('scanBtn')?.addEventListener('click', async () => {
   const cfg = saveConfig();
-  logLine('배당 스캔…', 'info');
+  logLine('배당 스캔… (BC 탭 활성화)', 'info');
   try {
-    const snap = await getSnap(cfg, null);
+    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 1600 });
     liveSnap = snap;
     updateStatusFromSnap(snap, cfg);
 
@@ -622,12 +622,14 @@ $('scanBtn')?.addEventListener('click', async () => {
             if (p.odds > 1.01) {
               logLine(`  f${p.frameId}: ${p.odds.toFixed(3)} [${p.kind}] in${p.inputs} · ${p.url || '(main)'}`, 'ok');
             } else {
-              logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0} · ${p.url || '(main)'}`, 'info');
+              logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0}${p.flags || ''} · ${p.url || '(main)'}`, 'info');
+              if (p.frameId === 0 && p.sample) logLine(`    "${p.sample.slice(0, 80)}…"`, 'info');
             }
           }
         } catch (_) {}
       }
-      logLine(snap.reason || 'BC.Game 배당 없음 — 배당 클릭 후 슬립 열기', 'err');
+      logLine(snap.reason || 'BC.Game 배당 없음 — BC 탭에서 슬립 열고 스캔', 'err');
+      logLine('  ※ 패널 클릭 시 BC 슬립이 DOM에서 사라질 수 있음 → 스캔 시 BC 탭으로 전환됨', 'info');
     }
     if (snap.btiO > 1 && snap.polyO > 1) {
       logLine(`수익률 ${snap.profit?.toFixed(2) ?? '-'}% · BC $${snap.polyUsd?.toFixed(2) ?? '-'}`, snap.profit >= cfg.minProfit ? 'ok' : 'info');
@@ -727,4 +729,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.8 — USDT 입력필드 탐색 + iframe 1.2 차단', 'info');
+logLine('v1.5.0 — BC탭 활성화 + API훅 (백그라운드 슬립 DOM)', 'info');

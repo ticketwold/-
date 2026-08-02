@@ -326,7 +326,7 @@ function btiHintFromPoly(poly) {
   return team ? { excludeTeam: team, polyTeam: team } : {};
 }
 
-async function readPolySlipAllBcTabs(leg2Pref = 'bcgame') {
+async function readPolySlipAllBcTabs(leg2Pref = 'bcgame', opts = {}) {
   const tabs = await chrome.tabs.query({});
   const leg2Tabs = tabs
     .filter((t) => t.url && urlMatchesLeg2Pref(t.url, leg2Pref))
@@ -335,7 +335,7 @@ async function readPolySlipAllBcTabs(leg2Pref = 'bcgame') {
 
   let best = null;
   for (const { tab } of leg2Tabs) {
-    const slip = await readPolyOddsOnce({ id: tab.id, url: tab.url });
+    const slip = await readPolyOddsOnce({ id: tab.id, url: tab.url }, opts);
     if (!(slip?.odds > 1.01)) continue;
     const s = scorePolySlip(slip);
     if (s > (best?._score ?? -1)) {
@@ -892,7 +892,7 @@ async function prewarmTabs(btiTab, polyTab, hint, btiBetKrw, polyUsd) {
   await Promise.all(tasks);
 }
 
-async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
+async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   const found = await findTabs(leg2Pref);
   if (!found.btiTab && !found.polyTab) {
     return { ok: false, reason: 'x10x10s + BC.Game 탭을 열어주세요', found };
@@ -904,8 +904,8 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate) {
     return { ok: false, reason: 'BC.Game: 스포츠/예측 탭 없음', found };
   }
 
-  const multi = await readPolySlipAllBcTabs(leg2Pref);
-  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab);
+  const multi = await readPolySlipAllBcTabs(leg2Pref, opts);
+  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab, opts);
   if (multi?.tab) found.polyTab = multi.tab;
   const arbBti = await readBtiOddsOnce(found.btiTab, poly);
   const bti = arbBti;

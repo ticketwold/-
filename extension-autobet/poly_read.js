@@ -403,8 +403,68 @@ async function injectParseBcSlipInline(tabId, frameId) {
   }
 }
 
+async function ensureBcApiHook(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['bc_api_hook.js'],
+      world: 'MAIN'
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function focusBcTabForRead(tabId, waitMs = 1200) {
+  if (!tabId) return null;
+  try {
+    const [cur] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const prevId = cur?.id;
+    if (prevId === tabId) {
+      await new Promise((r) => setTimeout(r, waitMs));
+      return prevId;
+    }
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    await new Promise((r) => setTimeout(r, waitMs));
+    return prevId;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function readBcApiSlipAllFrames(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: 'MAIN',
+      func: () => {
+        const api = window.__bcApiSlip;
+        if (api?.odds > 1.01 && Date.now() - (api.capturedAt || 0) < 180000) {
+          return { ...api, sourceKind: 'bc-api' };
+        }
+        return null;
+      }
+    });
+    let best = null;
+    for (const row of results || []) {
+      const hit = row?.result;
+      if (hit?.odds > 1.01) {
+        const s = scorePolySlip(hit);
+        if (s > (best?._score ?? -1)) best = { ...hit, frameId: row.frameId, _score: s };
+      }
+    }
+    return best?.odds > 1.01 ? best : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function injectBcSlipAllFrames(tabId) {
   try {
+    await ensureBcApiHook(tabId);
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['bc_slip_read.js']
@@ -436,17 +496,28 @@ async function injectBcSlipAllFrames(tabId) {
   }
 }
 
-async function readBcSportsNativeSlip(polyTab) {
+async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
-  await ensurePolyScript(polyTab.id);
+  const focusTab = opts.focusTab !== false;
+  const waitMs = opts.waitMs || (focusTab ? 1400 : 400);
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  if (focusTab) await focusBcTabForRead(polyTab.id, waitMs);
+  await ensurePolyScript(polyTab.id);
+  await ensureBcApiHook(polyTab.id);
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const apiHit = await readBcApiSlipAllFrames(polyTab.id);
+    if (apiHit?.odds > 1.01) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: apiHit.frameId ?? 0 };
+      return apiHit;
+    }
+
     const hit = await injectBcSlipAllFrames(polyTab.id);
     if (hit?.odds > 1.01) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: hit.frameId };
       return hit;
     }
-    if (attempt < 3) await new Promise((r) => setTimeout(r, 350));
+    if (attempt < 4) await new Promise((r) => setTimeout(r, 400));
   }
   return null;
 }
@@ -493,41 +564,13 @@ async function probeBcSlipFrames(polyTab) {
   }
 }
 
-async function readBcSportsNativeSlip(polyTab) {
-  if (!polyTab?.id) return null;
-  await ensurePolyScript(polyTab.id);
-
-  const allFramesHit = await injectBcSlipAllFrames(polyTab.id);
-  if (allFramesHit?.odds > 1.01) {
-    lastBcLeg2Frame = { tabId: polyTab.id, frameId: allFramesHit.frameId };
-    return allFramesHit;
-  }
-
-  const frames = await getAllFrames(polyTab.id);
-  const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])];
-
-  let best = null;
-  for (const frameId of frameIds) {
-    const inline = await injectParseBcSlipInline(polyTab.id, frameId);
-    if (!(inline?.odds > 1.01)) continue;
-    const s = scorePolySlip(inline);
-    if (s > (best?._score ?? -1)) best = { ...inline, frameId, _score: s };
-  }
-
-  if (best?.odds > 1.01) {
-    lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
-    return best;
-  }
-  return null;
-}
-
-async function readPolyOddsOnce(polyTab) {
+async function readPolyOddsOnce(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const siteKey = 'bcgame';
   const isSports = typeof isBcGameSportsUrl === 'function' && isBcGameSportsUrl(polyTab.url);
 
   if (isSports) {
-    const native = await readBcSportsNativeSlip(polyTab);
+    const native = await readBcSportsNativeSlip(polyTab, opts);
     if (native?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, native);
 
     polyOddsCache.delete(polyTab.id);
