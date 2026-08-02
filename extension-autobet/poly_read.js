@@ -84,6 +84,10 @@ async function readBcLeg2FromBtiFrames(polyTab) {
     if (s > (best?._score ?? -1)) {
       best = { ...norm, frameId, _score: s };
     }
+    if (norm.sourceKind === 'bc-native-slip' || (norm.fromPayout && norm.stake > 0)) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+      return best;
+    }
   }
 
   if (best?.frameId != null) lastBcLeg2Frame = { tabId: polyTab.id, frameId: best.frameId };
@@ -372,27 +376,54 @@ async function readPolySlipFromApi(polyTab) {
   return null;
 }
 
+async function readBcSportsNativeSlip(polyTab) {
+  if (!polyTab?.id) return null;
+  const frameId = 0;
+  await Promise.all([
+    ensurePolyScript(polyTab.id, frameId),
+    ensureBcScrapeScript(polyTab.id, frameId)
+  ]);
+
+  const [deep, msgRes] = await Promise.all([
+    injectReadBcSportsDeep(polyTab.id, frameId),
+    withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 2500, 'BC슬립').catch(() => null)
+  ]);
+
+  const candidates = [];
+  if (deep?.odds > 1.01 && !deep._fail) candidates.push(deep);
+  if (msgRes?.slip?.odds > 1.01) candidates.push(msgRes.slip);
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => scorePolySlip(b) - scorePolySlip(a));
+  const best = normalizePolySlip(candidates[0]);
+  if (best.sourceKind === 'bc-native-slip' || best.sourceKind === 'sports-slip' || best.fromPayout || best.stake > 0) {
+    lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+    return { ...best, frameId };
+  }
+  return null;
+}
+
 async function readPolyOddsOnce(polyTab) {
   if (!polyTab?.id) return null;
   const siteKey = 'bcgame';
   const isSports = typeof isBcGameSportsUrl === 'function' && isBcGameSportsUrl(polyTab.url);
 
-  const frames = await getAllFrames(polyTab.id);
-  let order = frames.map((f) => f.frameId);
-  if (isSports && typeof orderBcLeg2FrameIds === 'function') {
-    const scored = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
-    order = [...new Set([...scored, ...order])];
+  if (isSports) {
+    const native = await readBcSportsNativeSlip(polyTab);
+    if (native?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, native);
+
+    const iframeSlip = await readBcLeg2FromBtiFrames(polyTab).catch(() => null);
+    if (iframeSlip?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, iframeSlip);
+
+    return mergePolySlipWithCache(polyTab.id, null);
   }
 
-  const toProbe = order.slice(0, 20);
+  const frames = await getAllFrames(polyTab.id);
+  let order = frames.map((f) => f.frameId);
+  const toProbe = order.slice(0, 5);
   await Promise.all(toProbe.map((fid) => ensurePolyScript(polyTab.id, fid)));
 
-  const btiSlipP = isSports ? readBcLeg2FromBtiFrames(polyTab).catch(() => null) : Promise.resolve(null);
-  const scrapeJobs = isSports
-    ? toProbe.map((frameId) => injectReadBcSports(polyTab.id, frameId).catch(() => null))
-    : [injectReadBcSports(polyTab.id, 0).catch(() => null)];
-
-  const [slipResults, injected, scraped, sportsScrapedList, btiSlip] = await Promise.all([
+  const [slipResults, injected, scraped] = await Promise.all([
     Promise.all(toProbe.map(async (frameId) => {
       try {
         const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, frameId), 3500, 'BC읽기');
@@ -402,9 +433,7 @@ async function readPolyOddsOnce(polyTab) {
       }
     })),
     injectReadPoly(polyTab.id, siteKey).catch(() => null),
-    injectScrapePolyCents(polyTab.id).catch(() => null),
-    Promise.all(scrapeJobs),
-    btiSlipP
+    injectScrapePolyCents(polyTab.id).catch(() => null)
   ]);
 
   let best = null;
@@ -418,10 +447,7 @@ async function readPolyOddsOnce(polyTab) {
     }
   }
 
-  const sportsScraped = (sportsScrapedList || []).filter((s) => s?.odds > 1.01)
-    .sort((a, b) => scorePolySlip(b) - scorePolySlip(a))[0] || null;
-
-  for (const slip of [btiSlip, injected, scraped, sportsScraped]) {
+  for (const slip of [injected, scraped]) {
     if (!slip?.odds || slip.odds <= 1) continue;
     const merged = mergePolySlipWithCache(polyTab.id, slip);
     const s = scorePolySlip(merged);

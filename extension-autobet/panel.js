@@ -719,4 +719,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.4.3 — BC.Game 네이티브 베팅슬립(1.7/USDT) 지원', 'info');
+logLine('v1.4.4 — BC.Game 슬립 우선(iframe/¢ 스캔 제거)', 'info');

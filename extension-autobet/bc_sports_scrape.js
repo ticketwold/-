@@ -300,7 +300,16 @@
     }
 
     const board = collectOddsCandidates();
+    const onBcMain = /bc\.game/i.test(location.hostname);
+    const nativeSlipOpen = !!findSlipRoot();
+    if (onBcMain && nativeSlipOpen) {
+      return { ok: false, reason: 'native-slip-open', href, bodyLen, hasInput: !!findStakeInput() };
+    }
+
     if (!board.length) {
+      if (onBcMain) {
+        return { ok: false, reason: 'no-slip', href, bodyLen, boardCount: 0 };
+      }
       const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
       const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
         .map((m) => parseOdds(m[1]))

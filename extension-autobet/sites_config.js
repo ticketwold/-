@@ -159,3 +159,10 @@ function scoreBcLeg2FrameUrl(url, tabUrl) {
   if (isBcGameUrl(url) && /\/sports/i.test(url || '')) score += 15;
   return score;
 }
+
+function orderBcSportsReadFrameIds(tabId, tabUrl) {
+  return orderBcLeg2FrameIds(tabId, tabUrl).then((ids) => {
+    if (!isBcGameSportsUrl(tabUrl)) return ids;
+    return [0, ...ids.filter((id) => id !== 0)];
+  });
+}

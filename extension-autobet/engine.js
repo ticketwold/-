@@ -517,6 +517,10 @@ async function orderBcLeg2FrameIds(tabId, tabUrl) {
     score: scoreBcLeg2FrameUrl(f.url || '', tabUrl) + (f.frameId === 0 ? 2 : 0),
     url: f.url || ''
   }));
+  if (tabUrl && isBcGameSportsUrl(tabUrl)) {
+    const main = scored.find((s) => s.frameId === 0);
+    if (main) main.score += 500;
+  }
   if (lastBcLeg2Frame?.tabId === tabId) {
     const hit = scored.find((s) => s.frameId === lastBcLeg2Frame.frameId);
     if (hit) hit.score += 120;
