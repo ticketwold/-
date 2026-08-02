@@ -104,9 +104,73 @@
     return nums[nums.length - 1];
   }
 
+  function isBcHistoryText(t) {
+    return /내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|settled|bethistory|open\s*bets|진행\s*중|정산\s*완료|미정산|past\s*bets/i.test(String(t || ''));
+  }
+
+  function isBcHistoryElement(el) {
+    if (!el) return false;
+    let node = el;
+    for (let i = 0; i < 24 && node; i++) {
+      const blob = [
+        node.id || '',
+        String(node.className || ''),
+        node.getAttribute?.('data-testid') || '',
+        node.getAttribute?.('aria-label') || '',
+        (node.textContent || '').slice(0, 100)
+      ].join(' ');
+      if (/my-?bets|bet-?history|bethistory|open-?bets|settled|historybets|past-?bets|BetHistory|betHistory|내\s*베팅|베팅\s*내역/i.test(blob)) return true;
+      node = node.parentElement || node.getRootNode?.()?.host || null;
+    }
+    return false;
+  }
+
+  function findSlipRoot() {
+    let best = null;
+    let bestScore = -1;
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (!/^(DIV|SECTION|ASIDE|FORM)$/.test(tag) && !/slip/i.test(String(node.className || ''))) return;
+      const t = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return;
+      if (isBcHistoryElement(node)) return;
+      const len = t.length;
+      if (len < 25 || len > 6000) return;
+      let score = 0;
+      if (/예상\s*당첨|총\s*베팅/i.test(t)) score += 140;
+      if (/베팅하기/i.test(t)) score += 100;
+      if (/USDT/i.test(t)) score += 80;
+      if (node.querySelector?.('input, textarea')) score += 70;
+      if (/vs\.?|승자|맵\s*[-–]/i.test(t)) score += 40;
+      if (/\d+\.\d{1,3}/.test(t)) score += 30;
+      score += Math.min(len / 35, 60);
+      if (score > bestScore) { bestScore = score; best = node; }
+    }, 0);
+    return best;
+  }
+
+  function slipRootScopeText() {
+    const root = findSlipRoot();
+    return root ? (root.innerText || root.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function isBcSlipEmpty() {
+    const slipText = slipRootScopeText();
+    if (!slipText) return false;
+    if (/슬립이\s*비어|선택한\s*베팅\s*없|베팅을\s*선택|베팅\s*카트|no\s*selection|empty\s*(bet\s*)?slip|add\s*selections?|카트가\s*비어/i.test(slipText)) return true;
+    const totals = readSlipTotals(slipText);
+    if (totals.stake > 0 && totals.payout > totals.stake) return false;
+    const root = findSlipRoot();
+    const hasSelectionEl = root?.querySelector?.('[class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]');
+    const hasSelectionText = /vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(slipText) && !isBcHistoryText(slipText.slice(0, 240));
+    if (!hasSelectionEl && !hasSelectionText) return true;
+    return false;
+  }
+
   function hasSlipMarkers(raw) {
     const t = String(raw || '');
-    if (/내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|settled|bethistory|open\s*bets/i.test(t)) return false;
+    if (isBcHistoryText(t)) return false;
     if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return true;
     if (/place\s*(a\s*)?bet/i.test(t) && /stake|odds|total|win|USDT/i.test(t)) return true;
     if (/total\s*(stake|odds)|potential\s*win|to\s*win/i.test(t) && /\d+\.\d{1,3}/.test(t)) return true;
@@ -146,7 +210,7 @@
   }
 
   function readSlipTotals(scopeText) {
-    const text = String(scopeText || collectAllText()).replace(/\s+/g, ' ');
+    const text = String(scopeText || slipRootScopeText() || collectAllText()).replace(/\s+/g, ' ');
     let stake = 0;
     let payout = 0;
     const m1 = text.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
@@ -341,7 +405,7 @@
 
   function parseSlipText(raw) {
     const text = String(raw || '').replace(/\s+/g, ' ').trim();
-    if (!hasSlipMarkers(text)) return null;
+    if (!hasSlipMarkers(text) || isBcHistoryText(text)) return null;
 
     let stake = 0;
     let m = text.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
@@ -386,13 +450,17 @@
     }
     if (!odds) odds = pickBestSlipOdds(text, { stake, payout });
 
-    if (!(odds > 1.01)) return null;
-
     let teamLabel = '';
     const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,40}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
     if (afterMap) teamLabel = afterMap[1].trim();
+    const vsM = text.match(/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40})/i);
+    if (!teamLabel && vsM) teamLabel = vsM[1].trim();
 
-    return { odds, stake: stake || null, payout: payout || null, teamLabel, fromPayout: !!(stake > 0 && payout > stake) };
+    if (!(odds > 1.01)) return null;
+    const confirmed = stake > 0 && payout > stake;
+    if (!confirmed && !teamLabel) return null;
+
+    return { odds, stake: stake || null, payout: payout || null, teamLabel, fromPayout: confirmed };
   }
 
   function readViaBetButton() {
@@ -541,16 +609,19 @@
   }
 
   function readNearStakeSlip() {
+    if (isBcSlipEmpty()) return null;
     const fields = collectStakeFields();
     if (!fields.length) return null;
     for (const field of fields) {
+      if (isBcHistoryElement(field)) continue;
       const stake = pm(field.value ?? field.textContent ?? '');
       let el = field;
       for (let i = 0; i < 28 && el; i++) {
+        if (isBcHistoryElement(el)) break;
         const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
         if (t.length >= 12 && t.length <= 3000) {
-          const hasCtx = /place\s*(a\s*)?bet|total\s*stake|potential|to\s*win|베팅|bet\s*slip|coupon|single|combo|odds|USDT|당첨|stake/i.test(t);
-          if (hasCtx || fields.length === 1) {
+          const hasCtx = /place\s*(a\s*)?bet|total\s*stake|potential|to\s*win|베팅\s*슬립|bet\s*slip|coupon|single|combo|odds|USDT|당첨|stake/i.test(t);
+          if ((hasCtx && !isBcHistoryText(t)) || fields.length === 1) {
             const odds = pickBestSlipOdds(t, { stake });
             if (odds > 1.01) {
               return {
@@ -572,9 +643,10 @@
   }
 
   function readBetbyOutcomeSlip() {
+    if (isBcSlipEmpty()) return null;
     let best = null;
     walkNodes(document.documentElement, (node) => {
-      if (node.nodeType !== 1) return;
+      if (node.nodeType !== 1 || isBcHistoryElement(node)) return;
       const cls = String(node.className || '');
       const testId = node.getAttribute?.('data-testid') || '';
       if (!/outcome|selection|coupon|bet-item|betslip|bet-slip|ticket|odd-item|coefficient/i.test(`${cls} ${testId}`)) return;
@@ -707,6 +779,9 @@
   }
 
   function readNativeSlip() {
+    if (isBcSlipEmpty()) {
+      return { ok: false, reason: 'empty-slip', sample: slipRootScopeText().slice(0, 200) };
+    }
     const fields = collectStakeFields();
     const strategies = [
       readFromApiCache,
@@ -716,8 +791,10 @@
       readViaBetButton,
       readViaStakeInputs,
       () => {
-        const p = parseSlipText(collectAllText());
-        return p ? { ...p, method: 'all-text' } : null;
+        const scope = slipRootScopeText();
+        if (!scope) return null;
+        const p = parseSlipText(scope);
+        return p ? { ...p, method: 'slip-root' } : null;
       },
       readScriptJsonState,
       walkSameOriginIframes,

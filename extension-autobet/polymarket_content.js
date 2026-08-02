@@ -102,8 +102,53 @@ function findBcSportsStakeInput() {
   return best;
 }
 
-function readBcSlipTotals() {
-  const raw = getDeepPageText();
+function isBcHistoryText(t) {
+  return /내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|open\s*bets|settled\s*bets|bethistory|진행\s*중|정산\s*완료|미정산|past\s*bets/i.test(String(t || ''));
+}
+
+function isBcHistoryElement(el) {
+  if (!el) return false;
+  let node = el;
+  for (let i = 0; i < 24 && node; i++) {
+    const blob = [
+      node.id || '',
+      String(node.className || ''),
+      node.getAttribute?.('data-testid') || '',
+      node.getAttribute?.('aria-label') || '',
+      (node.textContent || '').slice(0, 100)
+    ].join(' ');
+    if (/my-?bets|bet-?history|bethistory|open-?bets|settled|historybets|past-?bets|BetHistory|betHistory|내\s*베팅|베팅\s*내역/i.test(blob)) return true;
+    node = node.parentElement || node.getRootNode?.()?.host || null;
+  }
+  return false;
+}
+
+function slipRootScopeText() {
+  const root = findBcNativeSlipRoot();
+  return root ? (root.innerText || root.textContent || '').replace(/\s+/g, ' ').trim() : '';
+}
+
+function isBcSlipEmpty() {
+  const slipText = slipRootScopeText();
+  if (!slipText) return false;
+  if (/슬립이\s*비어|선택한\s*베팅\s*없|베팅을\s*선택|베팅\s*카트|no\s*selection|empty\s*(bet\s*)?slip|add\s*selections?|카트가\s*비어/i.test(slipText)) return true;
+
+  const totals = readBcSlipTotals(slipText);
+  const confirmed = totals.stake > 0 && totals.payout > totals.stake;
+  if (confirmed) return false;
+
+  const root = findBcNativeSlipRoot();
+  const hasSelectionEl = root?.querySelector?.(
+    '[class*="betInformation__title"], [class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]'
+  );
+  const hasSelectionText = /vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(slipText)
+    && !isBcHistoryText(slipText.slice(0, 240));
+  if (!hasSelectionEl && !hasSelectionText) return true;
+  return false;
+}
+
+function readBcSlipTotals(scopeText) {
+  const raw = String(scopeText || slipRootScopeText() || getDeepPageText()).replace(/\s+/g, ' ');
   let stake = 0;
   let payout = 0;
   const m1 = raw.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
@@ -158,6 +203,7 @@ function findBcNativeSlipRoot() {
 
 function parseBcNativeSlipText(raw) {
   const text = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!text || isBcHistoryText(text)) return null;
   const hasSlip = /베팅\s*슬립|bet\s*slip|betslip/i.test(text);
   const hasCtx = /예상\s*당첨|총\s*베팅|베팅하기|place\s*(a\s*)?bet|total\s*stake|potential\s*win/i.test(text);
   if (!hasSlip && !hasCtx) return null;
@@ -192,7 +238,7 @@ function parseBcNativeSlipText(raw) {
   const afterMap = text.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);
   if (afterMap) teamLabel = afterMap[1].trim();
 
-  if (!odds) {
+  if (!odds && (teamLabel || eventText || (stake > 0 && payout > stake))) {
     const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
     const nums = [...text.matchAll(/\b(\d+\.\d{1,3})\b/g)]
       .map((x) => parseDecimalOdds(x[1]))
@@ -203,29 +249,17 @@ function parseBcNativeSlipText(raw) {
   }
 
   if (!(odds > 1.01)) return null;
+  const confirmed = stake > 0 && payout > stake;
+  if (!confirmed && !teamLabel && !eventText) return null;
   return { odds, teamLabel, eventText, stake: stake || null, payout: payout || null };
 }
 
 function readNativeBcGameSlip() {
-  const bodyText = getDeepPageText();
-  let parsed = parseBcNativeSlipText(bodyText);
-  if (parsed) {
-    return {
-      source: 'bcgame',
-      ...parsed,
-      outcome: parsed.teamLabel,
-      selectionText: parsed.teamLabel,
-      displayLabel: `${parsed.odds.toFixed(3)}${parsed.stake > 0 ? ` · ${parsed.stake} USDT` : ''}`,
-      marketKind: 'ml',
-      sourceKind: 'bc-native-slip',
-      fromPayout: !!(parsed.stake > 0 && parsed.payout > parsed.stake),
-      hasInput: !!findBcSportsStakeInput()
-    };
-  }
+  if (isBcSlipEmpty()) return null;
 
   const slipRoot = findBcNativeSlipRoot();
-  if (!slipRoot) return null;
-  parsed = parseBcNativeSlipText((slipRoot.innerText || slipRoot.textContent || '').replace(/\s+/g, ' '));
+  if (!slipRoot || isBcHistoryElement(slipRoot)) return null;
+  const parsed = parseBcNativeSlipText((slipRoot.innerText || slipRoot.textContent || '').replace(/\s+/g, ' '));
   if (!parsed) return null;
 
   return {
@@ -290,18 +324,25 @@ function findBcSportsBetButton() {
 }
 
 function readBcSportsSlipFromPanel() {
+  if (isBcSlipEmpty()) return null;
+
   const native = readNativeBcGameSlip();
   if (native?.odds > 1.01) return native;
 
   const hasInput = !!findBcSportsStakeInput();
   if (!hasInput) return null;
 
-  const roots = [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
-  if (!roots.length) roots.push(document.body);
+  const roots = [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"], [class*="bet-slip"]')];
+  if (!roots.length) {
+    const slipRoot = findBcNativeSlipRoot();
+    if (slipRoot) roots.push(slipRoot);
+  }
+  if (!roots.length) return null;
 
   for (const root of roots) {
+    if (isBcHistoryElement(root)) continue;
     for (const card of root.querySelectorAll('[class*="bet"], [class*="Bet"]')) {
-      if (!visible(card)) continue;
+      if (!visible(card) || isBcHistoryElement(card)) continue;
       const txt = (card.textContent || '').trim();
       if (txt.length < 6 || txt.length > 900) continue;
       const hasSlipMarkers = /W[12]|betInformation|우승|winner|맵|map|team|vs|승자/i.test(txt);
@@ -427,11 +468,17 @@ function readBcSportsBoardOdds() {
 }
 
 function isBcHistoryVisible() {
-  const t = getDeepPageText();
-  return /내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|open\s*bets|settled\s*bets|bethistory/i.test(t);
+  const active = document.querySelector?.(
+    '[class*="my-bets"][class*="active"], [class*="MyBets"][class*="active"], [aria-selected="true"][class*="history"], [aria-selected="true"][class*="History"], button[aria-selected="true"]'
+  );
+  if (active && isBcHistoryText(active.textContent || '')) return true;
+  const slipText = slipRootScopeText();
+  if (slipText && isBcSlipEmpty() && isBcHistoryText(getDeepPageText().slice(0, 5000))) return true;
+  return isBcHistoryText(getDeepPageText().slice(0, 5000)) && isBcSlipEmpty();
 }
 
 function readBcSportsSlip() {
+  if (isBcSlipEmpty()) return null;
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return panelSlip;
   const pageText = getDeepPageText();

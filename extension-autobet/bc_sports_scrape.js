@@ -168,6 +168,7 @@
 
   function parseNativeSlipText(raw) {
     const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text || /내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|settled|bethistory/i.test(text)) return null;
     if (!/베팅\s*슬립|bet\s*slip|betslip/i.test(text) && !/place\s*(a\s*)?bet/i.test(text)) return null;
     if (!/예상\s*당첨|총\s*베팅|베팅하기|place\s*(a\s*)?bet|total\s*stake|potential\s*win|total\s*odds|stake/i.test(text)) return null;
 
@@ -212,26 +213,31 @@
     if (!odds) odds = pickBestSlipOdds(text, { stake, payout });
 
     if (!(odds > 1.01)) return null;
+    const confirmed = stake > 0 && payout > stake;
+    if (!confirmed && !teamLabel && !eventText) return null;
     return { odds, teamLabel, eventText, stake: stake || null, payout: payout || null };
   }
 
+  function isBcSlipEmpty() {
+    const slipRoot = findSlipRoot();
+    if (!slipRoot) return false;
+    const slipText = (slipRoot.innerText || slipRoot.textContent || '').replace(/\s+/g, ' ');
+    if (/슬립이\s*비어|선택한\s*베팅\s*없|no\s*selection|empty\s*(bet\s*)?slip|add\s*selections?/i.test(slipText)) return true;
+    const totals = readStake(slipRoot);
+    if (totals > 0) return false;
+    const hasSelection = /vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(slipText);
+    const hasSelectionEl = slipRoot.querySelector?.('[class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"]');
+    return !hasSelection && !hasSelectionEl;
+  }
+
   function readNativeBcGameSlip() {
-    const bodyText = collectPageText();
-    let parsed = parseNativeSlipText(bodyText);
-    if (parsed) {
-      return {
-        ...parsed,
-        hasInput: !!findStakeInput(),
-        sourceKind: 'bc-native-slip',
-        fromPayout: !!(parsed.stake > 0 && parsed.payout > parsed.stake)
-      };
-    }
+    if (isBcSlipEmpty()) return null;
 
     const slipRoot = findSlipRoot();
     if (!slipRoot) return null;
 
     const raw = (slipRoot.innerText || slipRoot.textContent || '').replace(/\s+/g, ' ');
-    parsed = parseNativeSlipText(raw);
+    const parsed = parseNativeSlipText(raw);
     if (!parsed) return null;
 
     return {

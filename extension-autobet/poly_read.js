@@ -460,8 +460,10 @@ function isTrustedBcSlip(slip) {
   const kind = slip.sourceKind || '';
   if (kind === 'sports-text') return false;
   const confirmed = slip.fromPayout && slip.stake > 0;
+  const hasSelection = !!(slip.teamLabel || slip.outcome || slip.selectionText || slip.eventText);
   if (slip.odds > 7 && !confirmed) return false;
   if (slip.odds > 5.5 && !confirmed && (kind === 'sports-board-selected' || slip.method === 'board-selected')) return false;
+  if (kind === 'bc-native-slip' && !confirmed && !hasSelection) return false;
   if (confirmed) return true;
   if (kind === 'bc-native-slip' || kind === 'bc-api' || kind === 'sports-slip') return true;
   if (kind === 'sports-board-selected' || slip.method === 'board-selected') return true;
