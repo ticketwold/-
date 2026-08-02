@@ -732,7 +732,7 @@ async function strikeBothSides(ctx) {
     return {
       ok: false,
       btiRes: { success: false, reason: gate.reason },
-      polyRes: { success: false, reason: '텐텐뱃 미준비 — 폴리 배팅 취소' },
+      polyRes: { success: false, reason: '텐텐뱃 미준비 — 배팅 대기' },
       elapsedMs: Math.round((performance.now() - t0) * 100) / 100,
       gated: true
     };
