@@ -194,9 +194,9 @@ async function updateBtiSlipPauseState() {
   try {
     const ui = await checkBtiSlipUi(tab);
     const wasPaused = btiSlipPaused;
-    const isOpen = !!ui.open;
+    const isReady = !!ui.strikeReady;
 
-    if (isOpen) {
+    if (isReady) {
       btiSlipEverOpen = true;
       btiSlipPaused = false;
       if (wasPaused) {
@@ -368,24 +368,22 @@ async function executeStrike(snap, cfg, label) {
     return;
   }
 
-  if (!polyPreSynced && snap.found?.btiTab) {
-    try {
-      const ui = await checkBtiSlipUi(snap.found.btiTab);
-      if (ui.open) {
-        btiSlipPaused = false;
-        btiSlipEverOpen = true;
-      } else if (btiSlipEverOpen) {
-        logLine('텐텐뱃 슬립 닫힘 — 베팅슬립 열면 자동 재개', 'info');
-        return;
-      } else {
-        logLine('텐텐뱃 슬립 준비 중…', 'info');
-        await ensureBtiSlip(snap.found.btiTab, { ...(snap.hint || {}), forArbPick: true });
-      }
-    } catch (_) {}
-  } else if (snap.found?.btiTab) {
-    btiSlipPaused = false;
-    btiSlipEverOpen = true;
+  const ready = await verifyStrikeReady(snap.found, snap.hint || {}, snap.poly);
+  if (!ready.ok) {
+    if (ready.btiClosed) {
+      btiSlipEverOpen = true;
+      btiSlipPaused = true;
+      logLine(`⏸ ${ready.reason} — 양쪽 배팅 취소`, 'info');
+      const hint = $('statusHint');
+      if (hint) hint.textContent = '⏸ 텐텐뱃 슬립 닫힘 — 열리면 자동 재개';
+      setArmedUi(true);
+    } else {
+      logLine(ready.reason, 'err');
+    }
+    return;
   }
+  btiSlipPaused = false;
+  btiSlipEverOpen = true;
 
   strikeLock = true;
   setTestBtnBusy(true);
@@ -641,4 +639,4 @@ setInterval(() => {
 }, AMOUNT_SYNC_INTERVAL_MS);
 setInterval(panelLoop, 400);
 
-logLine('v1.2.8 — 동시 배팅 복구·즉시 실행(fastStrike)', 'info');
+logLine('v1.2.9 — 텐텐뱃 슬립 닫히면 폴리 배팅 차단', 'info');
