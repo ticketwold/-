@@ -421,9 +421,13 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 
 function mergePolySlipWithCache(tabId, slip) {
   slip = normalizePolySlip(slip);
+  if (!slip?.odds || slip.odds <= 1 || slip._slipClosed) {
+    polyOddsCache.delete(tabId);
+    return slip;
+  }
   if (slip?.odds > 1) {
     const cached = getCachedPolyOdds(tabId, 8000);
-    if (cached?.odds > 1 && typeof stabilizeSportsOdds === 'function') {
+    if (cached?.odds > 1 && isStrikeBcSlip(cached) && isStrikeBcSlip(slip) && typeof stabilizeSportsOdds === 'function') {
       slip = { ...slip, odds: stabilizeSportsOdds(cached.odds, slip.odds) };
     } else if (typeof normalizeSportsOdds === 'function') {
       slip = { ...slip, odds: normalizeSportsOdds(slip.odds) || slip.odds };

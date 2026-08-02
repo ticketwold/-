@@ -458,10 +458,11 @@ function parseSlipFromCard(card) {
 
   const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
   if (boardOdds && boardOdds > 1.01) {
-    odds = boardOdds;
+    odds = Math.round(boardOdds * 100) / 100;
   }
   if (!boardOdds && isSlipCardSuspended(card)) return null;
   if (!odds || odds <= 1.01) return null;
+  odds = Math.round(odds * 100) / 100;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
   function detectPeriod(text) {
@@ -1750,6 +1751,7 @@ function readEmergencyBoardOdds(hint = {}) {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
+  if (!isActiveBetslipOpen()) return null;
 
   // 1) 사용자 슬립 선택 — Poly 힌트 무시 (홈↔원정 전환 시에도 읽기)
   if (getRealSlipCards().length > 0) {

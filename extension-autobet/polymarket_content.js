@@ -468,6 +468,15 @@ function readBcSportsBoardOdds() {
   };
 }
 
+function isBcSlipClosed() {
+  if (isBcSlipEmpty()) return true;
+  const input = findBcSportsStakeInput();
+  const btn = findBcSportsBetButton();
+  if (!input && !btn) return true;
+  if (btn && btn.disabled) return true;
+  return false;
+}
+
 function isBcHistoryVisible() {
   const active = document.querySelector?.(
     '[class*="my-bets"][class*="active"], [class*="MyBets"][class*="active"], [aria-selected="true"][class*="history"], [aria-selected="true"][class*="History"], button[aria-selected="true"]'
@@ -479,13 +488,10 @@ function isBcHistoryVisible() {
 }
 
 function readBcSportsSlip() {
-  if (isBcSlipEmpty()) return null;
+  if (isBcSlipClosed()) return null;
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return panelSlip;
-  const pageText = getDeepPageText();
-  if (/베팅\s*슬립|bet\s*slip|betslip/i.test(pageText)) return null;
-  if (isBcHistoryVisible()) return null;
-  return readBcSportsBoardOdds();
+  return null;
 }
 
 function probeBcSportsUi() {
@@ -2419,7 +2425,14 @@ try {
 
   function tick() {
     const raw = readLeg2Slip();
-    if (!raw) return;
+    if (!raw?.odds || raw.odds <= 1) {
+      if (last !== '') {
+        last = '';
+        lastStableOdds = 0;
+        try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip: null, suspended: true }); } catch (_) {}
+      }
+      return;
+    }
     const slip = stabilizeObservedOdds(raw);
     const key = slipKey(slip);
     if (key === last) return;

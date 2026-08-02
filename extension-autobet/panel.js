@@ -171,11 +171,28 @@ function isBcSlipMissingReason(reason) {
   return !!(reason && /BC\.Game.*(배당 없음|슬립 없음)/.test(reason));
 }
 
+function clearKnownOdds(side = 'all') {
+  if (side === 'bti' || side === 'all') {
+    lastKnownOdds.btiO = null;
+    lastKnownOdds.btiAt = 0;
+  }
+  if (side === 'poly' || side === 'all') {
+    lastKnownOdds.polyO = null;
+    lastKnownOdds.polyAt = 0;
+    lastKnownOdds.polyTrusted = false;
+  }
+}
+
+function isBtiSlipMissingReason(reason) {
+  return !!(reason && /텐텐뱃.*(배당 없음|슬립)/.test(reason));
+}
+
 function displayOdds(btiO, polyO, snapReason) {
   const now = Date.now();
   const bcMissing = isBcSlipMissingReason(snapReason);
+  const btiMissing = isBtiSlipMissingReason(snapReason);
   const bti = btiO > 1 ? btiO
-    : (now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
+    : (!btiMissing && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
   const poly = polyO > 1 ? polyO
     : (!bcMissing && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
   $('oddsVal').textContent = `${bti > 1 ? bti.toFixed(3) : '-'} / ${poly > 1 ? poly.toFixed(3) : '-'}`;
@@ -183,8 +200,9 @@ function displayOdds(btiO, polyO, snapReason) {
 
 function patchSnapFromKnown(snap, cfg) {
   const bcMissing = isBcSlipMissingReason(snap.reason);
+  const btiMissing = isBtiSlipMissingReason(snap.reason);
   const partial = {
-    btiO: lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO,
+    btiO: btiMissing ? snap.btiO : (lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO),
     polyO: bcMissing || !lastKnownOdds.polyTrusted ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO)
   };
   if (partial.btiO > 1 && partial.polyO > 1) {
@@ -195,7 +213,11 @@ function patchSnapFromKnown(snap, cfg) {
 }
 
 function applyInstantOdds(msg) {
-  if (!msg?.slip?.odds || msg.slip.odds <= 1) return false;
+  if (msg.suspended || !msg?.slip?.odds || msg.slip.odds <= 1) {
+    if (msg.source === 'bti') clearKnownOdds('bti');
+    else clearKnownOdds('poly');
+    return false;
+  }
   if (msg.source !== 'bti' && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(msg.slip)) return false;
   const cfg = getConfig();
   const o = normalizeSportsOdds(msg.slip.odds);
@@ -232,6 +254,12 @@ function updateStatusFromSnap(snap, cfg) {
 
 function stabilizeSnap(snap, cfg) {
   const now = Date.now();
+  const btiMissing = isBtiSlipMissingReason(snap.reason);
+  const bcMissing = isBcSlipMissingReason(snap.reason);
+
+  if (btiMissing) clearKnownOdds('bti');
+  if (bcMissing) clearKnownOdds('poly');
+
   if (snap.btiO > 1) {
     const next = normalizeSportsOdds(snap.btiO);
     if (lastKnownOdds.btiO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.btiO, next, ODDS_STABLE_EPS)) {
@@ -241,9 +269,12 @@ function stabilizeSnap(snap, cfg) {
       lastKnownOdds.btiO = next;
       lastKnownOdds.btiAt = now;
     }
-  } else if (lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
+  } else if (!btiMissing && lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
     snap.btiO = lastKnownOdds.btiO;
+  } else if (!snap.btiO) {
+    snap.btiO = null;
   }
+
   if (snap.polyO > 1 && (typeof isStrikeBcSlip === 'function' ? isStrikeBcSlip(snap.poly) : isTrustedBcSlip(snap.poly))) {
     const next = normalizeSportsOdds(snap.polyO);
     if (lastKnownOdds.polyO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.polyO, next, ODDS_STABLE_EPS)) {
@@ -254,17 +285,17 @@ function stabilizeSnap(snap, cfg) {
       lastKnownOdds.polyAt = now;
       lastKnownOdds.polyTrusted = true;
     }
-  } else if (snap.reason && /BC\.Game.*(배당|슬립)/.test(snap.reason)) {
-    lastKnownOdds.polyO = null;
-    lastKnownOdds.polyAt = 0;
-    lastKnownOdds.polyTrusted = false;
+  } else if (bcMissing || (snap.reason && /BC\.Game.*(배당|슬립)/.test(snap.reason))) {
+    clearKnownOdds('poly');
     snap.polyO = null;
     snap.poly = null;
-  } else if (lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
+  } else if (!bcMissing && lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
   } else if (snap.polyO > 1 && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(snap.poly)) {
     snap.polyO = null;
     snap.poly = null;
+  } else if (!snap.polyO) {
+    snap.polyO = null;
   }
 
   if (snap.btiO > 1 && snap.polyO > 1) {

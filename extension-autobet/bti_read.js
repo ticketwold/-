@@ -127,8 +127,8 @@ async function injectReadBtiFrame(tabId, frameId) {
         const boardFirst = scrapeBoard();
         const slipPanel = readSlipPanel();
 
-        const pick = (slipPanel?.odds > 1.01 && hasInput) ? slipPanel : (boardFirst || slipPanel);
-        if (!pick?.odds) return boardFirst || slipPanel || null;
+        const pick = (slipPanel?.odds > 1.01 && hasInput) ? slipPanel : null;
+        if (!pick?.odds) return slipPanel || null;
 
         let homeTeam = '';
         let awayTeam = '';

@@ -195,6 +195,10 @@
     return false;
   }
 
+  function isBcSlipClosed() {
+    return isBcSlipEmpty() || !collectStakeFields().length;
+  }
+
   function hasSlipMarkers(raw) {
     const t = String(raw || '');
     if (isBcHistoryText(t)) return false;
@@ -487,7 +491,7 @@
     const confirmed = stake > 0 && payout > stake;
     if (!confirmed && !teamLabel) return null;
 
-    return { odds, stake: stake || null, payout: payout || null, teamLabel, fromPayout: confirmed };
+    return { odds: stabilizePickedOdds(odds), stake: stake || null, payout: payout || null, teamLabel, fromPayout: confirmed };
   }
 
   function readViaBetButton() {
@@ -806,6 +810,10 @@
   }
 
   function readNativeSlip() {
+    if (isBcSlipClosed()) {
+      lastPickStableOdds = 0;
+      return { ok: false, reason: 'slip-closed', sample: slipRootScopeText().slice(0, 200) };
+    }
     if (isBcSlipEmpty()) {
       return { ok: false, reason: 'empty-slip', sample: slipRootScopeText().slice(0, 200) };
     }

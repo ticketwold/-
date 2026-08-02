@@ -396,18 +396,20 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
 async function readBtiOddsOnce(btiTab, poly) {
   if (!btiTab?.id) return null;
 
+  const ui = await checkBtiSlipUi(btiTab);
+  if (!ui.open && !ui.strikeReady) return null;
+
   let merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true }, true);
   if (merged.slip?.odds > 1.01) return merged.slip;
 
   merged = await scrapeBtiFromAllFrames(btiTab.id);
-  if (merged.slip?.odds > 1.01) return merged.slip;
+  if (merged.slip?.odds > 1.01 && merged.slip.source === 'slip-display') return merged.slip;
+
+  if (!ui.strikeReady) return null;
 
   const arbHint = { ...btiHintFromPoly(poly), forArbPick: true };
   merged = await readBtiFromAllFrames(btiTab.id, arbHint, true);
   if (merged.slip?.odds > 1.01) return merged.slip;
-
-  const boardSlip = await readBtiBoardOddsFromFrames(btiTab, arbHint);
-  if (boardSlip?.odds > 1.01) return boardSlip;
 
   return null;
 }
