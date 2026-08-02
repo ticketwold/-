@@ -11,6 +11,13 @@ const ODDS_GAP_FILL_MS = 5000;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
 const BTI_REAL_CHANGE_EPS = 0.03;
 
+function isBcSlipUiSource(slip) {
+  if (!slip) return false;
+  if (slip.fromSlip === true || slip.source === 'slip-latched') return true;
+  const kind = slip.sourceKind || '';
+  return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api';
+}
+
 function isScanPolySlip(slip) {
   if (typeof isScanBcSlip === 'function') return isScanBcSlip(slip);
   if (typeof isTrustedBcSlip === 'function') return isTrustedBcSlip(slip);
@@ -237,7 +244,8 @@ function applyInstantOdds(msg) {
     lastKnownOdds.btiO = o;
     lastKnownOdds.btiAt = now;
   } else {
-    if (lastKnownOdds.polyO > 1 && !oddsChangedSignificantly(lastKnownOdds.polyO, o, ODDS_STABLE_EPS)) return false;
+    const fromSlipUi = isBcSlipUiSource(msg.slip);
+    if (!fromSlipUi && lastKnownOdds.polyO > 1 && !oddsChangedSignificantly(lastKnownOdds.polyO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.polyO = o;
     lastKnownOdds.polyAt = now;
     lastKnownOdds.polyTrusted = true;
@@ -299,8 +307,22 @@ function stabilizeSnap(snap, cfg) {
 
   if (snap.polyO > 1 && isScanPolySlip(snap.poly)) {
     const next = normalizeSportsOdds(snap.polyO);
-    if (lastKnownOdds.polyO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.polyO, next, ODDS_STABLE_EPS)) {
-      snap.polyO = lastKnownOdds.polyO;
+    const fromSlipUi = isBcSlipUiSource(snap.poly);
+    if (lastKnownOdds.polyO > 1 && next) {
+      const delta = oddsDelta(lastKnownOdds.polyO, next);
+      if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
+        snap.polyO = next;
+        lastKnownOdds.polyO = next;
+        lastKnownOdds.polyAt = now;
+        lastKnownOdds.polyTrusted = true;
+      } else if (!oddsChangedSignificantly(lastKnownOdds.polyO, next, ODDS_STABLE_EPS)) {
+        snap.polyO = lastKnownOdds.polyO;
+      } else {
+        snap.polyO = next;
+        lastKnownOdds.polyO = next;
+        lastKnownOdds.polyAt = now;
+        lastKnownOdds.polyTrusted = true;
+      }
     } else if (next) {
       snap.polyO = next;
       lastKnownOdds.polyO = next;

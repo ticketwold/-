@@ -407,6 +407,40 @@ async function injectScrapePolyCents(tabId) {
 }
 
 const polyOddsCache = new Map();
+let bcOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+
+function isBcSlipOddsSource(slip) {
+  if (!slip) return false;
+  if (slip.fromSlip === true || slip.source === 'slip-latched') return true;
+  const kind = slip.sourceKind || '';
+  const method = slip.method || '';
+  if (kind === 'sports-board-selected' || kind === 'sports-board') return false;
+  if (method === 'board-selected' || method === 'scrape-main') return false;
+  return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
+    || (slip.fromPayout && slip.stake > 0)
+    || /shadow-slip|bet-btn|stake-input|near-stake|betby-outcome|coupon|api-cache|slip-root/i.test(method);
+}
+
+function finalizeBcPolySlip(slip) {
+  slip = normalizePolySlip(slip);
+  if (!(slip?.odds > 1.01)) {
+    if (slip?._slipClosed) bcOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+    return slip;
+  }
+  const o = Math.round(slip.odds * 1000) / 1000;
+  const key = `${slip.teamLabel || slip.selectionText || ''}_${slip.eventText || ''}`;
+  if (isBcSlipOddsSource(slip)) {
+    bcOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+    return { ...slip, odds: o, fromSlip: true };
+  }
+  if (bcOddsLatch.source === 'slip' && bcOddsLatch.key === key
+    && Date.now() - bcOddsLatch.at < 8000
+    && Math.abs(o - bcOddsLatch.odds) >= 0.015) {
+    return { ...slip, odds: bcOddsLatch.odds, source: 'slip-latched', fromSlip: true };
+  }
+  bcOddsLatch = { odds: o, source: slip.sourceKind || 'board', at: Date.now(), key };
+  return { ...slip, odds: o };
+}
 
 function cachePolyOdds(tabId, slip) {
   if (!tabId || !isTrustedBcSlip(slip)) return;
@@ -420,7 +454,7 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 }
 
 function mergePolySlipWithCache(tabId, slip) {
-  slip = normalizePolySlip(slip);
+  slip = finalizeBcPolySlip(normalizePolySlip(slip));
   if (!slip?.odds || slip.odds <= 1 || slip._slipClosed) {
     polyOddsCache.delete(tabId);
     return slip;
@@ -707,8 +741,8 @@ async function injectBcSlipAllFrames(tabId) {
         if (rs > (relaxed?._rscore ?? -1)) relaxed = { ...v, _rscore: rs };
       }
     }
-    if (best?.odds > 1.01 && isTrustedBcSlip(best)) return best;
-    if (relaxed?.odds > 1.01) return relaxed;
+    if (best?.odds > 1.01 && isTrustedBcSlip(best)) return finalizeBcPolySlip(best);
+    if (relaxed?.odds > 1.01) return finalizeBcPolySlip(relaxed);
     return null;
   } catch (_) {
     return null;
@@ -892,11 +926,11 @@ async function readPolyOddsOnce(polyTab, opts = {}) {
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab, opts);
     if (isStrikeBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
-    if (isTrustedBcSlip(native)) return native;
+    if (isTrustedBcSlip(native)) return finalizeBcPolySlip(native);
 
     const leg2 = await readBcLeg2FromBtiFrames(polyTab);
     if (isStrikeBcSlip(leg2)) return mergePolySlipWithCache(polyTab.id, leg2);
-    if (isTrustedBcSlip(leg2)) return leg2;
+    if (isTrustedBcSlip(leg2)) return finalizeBcPolySlip(leg2);
 
     polyOddsCache.delete(polyTab.id);
     return null;

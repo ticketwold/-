@@ -76,6 +76,31 @@
 
   /** 슬립 텍스트에서 단일 배당 추출 — 보드의 12.1 같은 오탐 대신 1.31 같은 실제 슬립 배당 우선 */
   let lastPickStableOdds = 0;
+  let bcSlipOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+
+  function isSlipOnlyHit(hit) {
+    const kind = hit?.sourceKind || '';
+    const method = hit?.method || '';
+    return kind !== 'sports-board-selected' && method !== 'board-selected';
+  }
+
+  function finalizeBcSlipHit(hit) {
+    if (!(hit?.odds > 1.01)) return hit;
+    const o = Math.round(hit.odds * 1000) / 1000;
+    const key = hit.teamLabel || hit.selectionText || '';
+    if (isSlipOnlyHit(hit)) {
+      bcSlipOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+      lastPickStableOdds = o;
+      return { ...hit, odds: o };
+    }
+    if (bcSlipOddsLatch.source === 'slip' && bcSlipOddsLatch.key === key
+      && Date.now() - bcSlipOddsLatch.at < 8000
+      && Math.abs(o - bcSlipOddsLatch.odds) >= 0.015) {
+      return { ...hit, odds: bcSlipOddsLatch.odds, sourceKind: 'bc-native-slip', method: 'slip-latched' };
+    }
+    bcSlipOddsLatch = { odds: o, source: 'board', at: Date.now(), key };
+    return { ...hit, odds: o };
+  }
 
   function roundOdds(n) {
     const v = parseFloat(n);
@@ -818,13 +843,14 @@
   function readNativeSlip() {
     if (isBcSlipClosed()) {
       lastPickStableOdds = 0;
+      bcSlipOddsLatch = { odds: 0, source: '', at: 0, key: '' };
       return { ok: false, reason: 'slip-closed', sample: slipRootScopeText().slice(0, 200) };
     }
     if (isBcSlipEmpty()) {
       return { ok: false, reason: 'empty-slip', sample: slipRootScopeText().slice(0, 200) };
     }
     const fields = collectStakeFields();
-    const strategies = [
+    const slipStrategies = [
       readFromApiCache,
       readBetbyShadowSlip,
       readNearStakeSlip,
@@ -841,28 +867,67 @@
       walkSameOriginIframes,
       readFromApiCache,
       readBetbyShadowSlip,
-      readSelectedBoardOdds,
       readFromStorage,
       scanWindowGlobals
     ];
 
-    for (const fn of strategies) {
+    for (const fn of slipStrategies) {
       const hit = fn();
       if (hit?.odds > 1.01) {
-        const isBoard = hit.sourceKind === 'sports-board-selected' || hit.method === 'board-selected';
+        const finalized = finalizeBcSlipHit(hit);
+        const isBoard = finalized.sourceKind === 'sports-board-selected' || finalized.method === 'board-selected';
         return {
           ok: true,
           source: 'bcgame',
-          ...hit,
-          outcome: hit.teamLabel || '',
-          selectionText: hit.teamLabel || '',
-          displayLabel: `${hit.odds.toFixed(3)}${hit.stake > 0 ? ` · ${hit.stake} USDT` : ''}`,
-          sourceKind: isBoard ? 'sports-board-selected' : 'bc-native-slip',
+          ...finalized,
+          outcome: finalized.teamLabel || '',
+          selectionText: finalized.teamLabel || '',
+          displayLabel: `${finalized.odds.toFixed(3)}${finalized.stake > 0 ? ` · ${finalized.stake} USDT` : ''}`,
+          sourceKind: isBoard ? 'sports-board-selected' : (finalized.sourceKind || 'bc-native-slip'),
           hasInput: fields.length > 0,
           inputCount: fields.length,
           href: location.href
         };
       }
+    }
+
+    if (bcSlipOddsLatch.source === 'slip' && bcSlipOddsLatch.odds > 1.01
+      && Date.now() - bcSlipOddsLatch.at < 8000) {
+      const latched = finalizeBcSlipHit({
+        odds: bcSlipOddsLatch.odds,
+        teamLabel: bcSlipOddsLatch.key,
+        method: 'slip-latched',
+        sourceKind: 'bc-native-slip'
+      });
+      return {
+        ok: true,
+        source: 'bcgame',
+        ...latched,
+        outcome: latched.teamLabel || '',
+        selectionText: latched.teamLabel || '',
+        displayLabel: `${latched.odds.toFixed(3)}`,
+        sourceKind: 'bc-native-slip',
+        hasInput: fields.length > 0,
+        inputCount: fields.length,
+        href: location.href
+      };
+    }
+
+    const boardHit = readSelectedBoardOdds();
+    if (boardHit?.odds > 1.01) {
+      const finalized = finalizeBcSlipHit(boardHit);
+      return {
+        ok: true,
+        source: 'bcgame',
+        ...finalized,
+        outcome: finalized.teamLabel || '',
+        selectionText: finalized.teamLabel || '',
+        displayLabel: `${finalized.odds.toFixed(3)}`,
+        sourceKind: 'sports-board-selected',
+        hasInput: fields.length > 0,
+        inputCount: fields.length,
+        href: location.href
+      };
     }
 
     const raw = collectAllText();

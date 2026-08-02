@@ -273,8 +273,36 @@ function readNativeBcGameSlip() {
     marketKind: 'ml',
     sourceKind: 'bc-native-slip',
     fromPayout: !!(parsed.stake > 0 && parsed.payout > parsed.stake),
+    fromSlip: true,
     hasInput: !!findBcSportsStakeInput()
   };
+}
+
+let bcContentOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+
+function isBcContentSlipSource(slip) {
+  if (!slip) return false;
+  if (slip.fromSlip === true || slip.source === 'slip-latched') return true;
+  const kind = slip.sourceKind || '';
+  return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
+    || (slip.fromPayout && slip.stake > 0);
+}
+
+function finalizeBcContentOdds(slip) {
+  if (!(slip?.odds > 1.01)) return slip;
+  const o = Math.round(slip.odds * 1000) / 1000;
+  const key = `${slip.teamLabel || slip.selectionText || ''}_${slip.eventText || ''}`;
+  if (isBcContentSlipSource(slip)) {
+    bcContentOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+    return { ...slip, odds: o, fromSlip: true };
+  }
+  if (bcContentOddsLatch.source === 'slip' && bcContentOddsLatch.key === key
+    && Date.now() - bcContentOddsLatch.at < 8000
+    && Math.abs(o - bcContentOddsLatch.odds) >= 0.015) {
+    return { ...slip, odds: bcContentOddsLatch.odds, source: 'slip-latched', fromSlip: true };
+  }
+  bcContentOddsLatch = { odds: o, source: slip.sourceKind || 'board', at: Date.now(), key };
+  return { ...slip, odds: o };
 }
 
 function isBcSportsBetButtonText(txt) {
@@ -404,6 +432,7 @@ function readBcSportsSlipFromPanel() {
         marketKind: /핸디|handicap|hdp|spread/i.test(allText) ? 'ah' : (/오버|언더|over|under|총계|total/i.test(allText) ? 'ou' : 'ml'),
         sourceKind: 'sports-slip',
         fromPayout: false,
+        fromSlip: true,
         hasInput
       };
     }
@@ -493,11 +522,24 @@ function isBcHistoryVisible() {
 }
 
 function readBcSportsSlip() {
-  if (isBcSlipClosed()) return null;
+  if (isBcSlipClosed()) {
+    bcContentOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+    return null;
+  }
   const panelSlip = readBcSportsSlipFromPanel();
-  if (panelSlip?.odds > 1.01) return panelSlip;
+  if (panelSlip?.odds > 1.01) return finalizeBcContentOdds(panelSlip);
   const native = readNativeBcGameSlip();
-  if (native?.odds > 1.01) return native;
+  if (native?.odds > 1.01) return finalizeBcContentOdds(native);
+  if (bcContentOddsLatch.source === 'slip' && bcContentOddsLatch.odds > 1.01
+    && Date.now() - bcContentOddsLatch.at < 8000) {
+    return finalizeBcContentOdds({
+      odds: bcContentOddsLatch.odds,
+      teamLabel: bcContentOddsLatch.key,
+      sourceKind: 'bc-native-slip',
+      source: 'slip-latched',
+      fromSlip: true
+    });
+  }
   return null;
 }
 
@@ -2409,7 +2451,6 @@ try {
 
 (function observe() {
   let last = '';
-  let lastStableOdds = 0;
   let pending = false;
 
   function slipKey(slip) {
@@ -2420,14 +2461,7 @@ try {
   }
 
   function stabilizeObservedOdds(slip) {
-    if (!slip?.odds || slip.odds <= 1) return slip;
-    let o = Math.round(slip.odds * 1000) / 1000;
-    if (lastStableOdds > 1 && Math.abs(o - lastStableOdds) < 0.008) {
-      o = lastStableOdds;
-    } else {
-      lastStableOdds = o;
-    }
-    return o === slip.odds ? slip : { ...slip, odds: o };
+    return finalizeBcContentOdds(slip);
   }
 
   function tick() {
@@ -2435,7 +2469,7 @@ try {
     if (!raw?.odds || raw.odds <= 1) {
       if (last !== '') {
         last = '';
-        lastStableOdds = 0;
+        bcContentOddsLatch = { odds: 0, source: '', at: 0, key: '' };
         try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip: null, suspended: true }); } catch (_) {}
       }
       return;
