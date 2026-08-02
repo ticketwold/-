@@ -622,7 +622,11 @@ $('scanBtn')?.addEventListener('click', async () => {
             if (p.odds > 1.01) {
               logLine(`  f${p.frameId}: ${p.odds.toFixed(3)} [${p.kind}] in${p.inputs} · ${p.url || '(main)'}`, 'ok');
             } else {
-              logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0}${p.flags || ''} · ${p.url || '(main)'}`, 'info');
+              let extra = '';
+              if (p.selectedOdds) extra += ` sel[${p.selectedOdds}]`;
+              if (p.apiOdds > 1.01) extra += ` api${p.apiOdds.toFixed(3)}`;
+              if (p.stake) extra += ` stake${p.stake}`;
+              logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0}${p.flags || ''}${extra} · ${p.url || '(main)'}`, 'info');
               if (p.frameId === 0 && p.sample) logLine(`    "${p.sample.slice(0, 80)}…"`, 'info');
             }
           }

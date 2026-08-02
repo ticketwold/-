@@ -558,27 +558,37 @@ async function probeBcSlipFrames(polyTab) {
     });
     const results = await chrome.scripting.executeScript({
       target: { tabId: polyTab.id, allFrames: true },
-      func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+      func: () => {
+        const slip = typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null;
+        const diag = typeof window.__bcDiagReport === 'function' ? window.__bcDiagReport() : null;
+        return { slip, diag };
+      }
     });
     const out = [];
     for (const row of results || []) {
-      const hit = row?.result;
+      const hit = row?.result?.slip;
+      const diag = row?.result?.diag;
       const frameId = row?.frameId ?? 0;
       const frame = frames.find((f) => f.frameId === frameId);
-      const url = (frame?.url || hit?.href || '').replace(/^https?:\/\//, '').slice(0, 72);
+      const url = (frame?.url || hit?.href || diag?.url || '').replace(/^https?:\/\//, '').slice(0, 72);
       if (hit?.ok && hit.odds > 1.01) {
         out.push({ frameId, url, odds: hit.odds, kind: hit.sourceKind || hit.method || 'bc-native-slip', inputs: hit.inputCount });
       } else {
         const flags = hit?.flags ? ` slip${hit.flags.slip ? 1 : 0} win${hit.flags.win ? 1 : 0} usdt${hit.flags.usdt ? 1 : 0} btn${hit.flags.betBtn ? 1 : 0}` : '';
+        const selOdds = diag?.selectedOdds?.map((b) => b.t).join(', ') || '';
+        const apiOdds = diag?.apiSlip?.odds;
         out.push({
           frameId,
           url,
           odds: null,
           kind: hit?.reason || 'miss',
-          inputs: hit?.inputCount ?? 0,
-          len: hit?.textLen ?? 0,
+          inputs: hit?.inputCount ?? diag?.inputCount ?? 0,
+          len: hit?.textLen ?? diag?.textLen ?? 0,
           flags,
-          sample: hit?.sample || ''
+          selectedOdds: selOdds,
+          apiOdds: apiOdds > 1.01 ? apiOdds : null,
+          stake: diag?.stake || null,
+          sample: hit?.sample || diag?.sample || ''
         });
       }
     }

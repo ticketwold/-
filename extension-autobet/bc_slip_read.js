@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 4;
+  const VER = 5;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -302,7 +302,7 @@
     const m = txt.match(/(\d+\.\d{1,3})\s*$/);
     if (m) return po(m[1]);
     const m2 = txt.match(/(\d+\.\d{1,3})/);
-    return m2 ? po(m[2] || m2[1]) : null;
+    return m2 ? po(m2[1]) : null;
   }
 
   function readSelectedBoardOdds() {
@@ -426,6 +426,58 @@
     };
   }
 
+  function diagReport() {
+    const raw = collectAllText();
+    const body = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    const fields = collectStakeFields();
+    const inputs = fields.slice(0, 5).map((node) => ({
+      v: String(node.value ?? node.textContent ?? '').trim().slice(0, 40),
+      ph: node.placeholder || '',
+      cls: String(node.className || '').slice(0, 60)
+    }));
+
+    const selectedOdds = [];
+    const allOddsBtns = [];
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName;
+      if (tag !== 'BUTTON' && node.getAttribute?.('role') !== 'button') return;
+      const t = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/^\d+\.\d{1,3}$/.test(t) && !/베팅하기|vs|MOUZ|Spirit/i.test(t)) return;
+      const r = node.getBoundingClientRect?.();
+      if (!r || r.width <= 5) return;
+      const sel = isSelectedEl(node);
+      const item = { t: t.slice(0, 50), sel, x: Math.round(r.x), y: Math.round(r.y) };
+      if (/^\d+\.\d/.test(t)) {
+        allOddsBtns.push(item);
+        if (sel) selectedOdds.push(item);
+      }
+    }, 0);
+
+    const flags = markerFlags(raw);
+    let apiSlip = null;
+    try { apiSlip = window.__bcApiSlip || null; } catch (_) {}
+
+    return {
+      url: location.href,
+      slip: flags.slip,
+      win: flags.win,
+      usdt: flags.usdt,
+      betBtn: flags.betBtn,
+      textLen: raw.length,
+      bodyLen: body.length,
+      inputCount: fields.length,
+      inputs,
+      selectedOdds,
+      allOddsBtns: allOddsBtns.slice(0, 8),
+      payout: raw.match(/예상\s*당첨\s*금액\s*([\d,.]+)/)?.[1] || null,
+      stake: raw.match(/총\s*베팅\s*금액\s*([\d,.]+)/)?.[1] || inputs[0]?.v || null,
+      apiSlip,
+      sample: raw.slice(0, 300)
+    };
+  }
+
   window.__bcSlipReadVer = VER;
   window.__bcReadNativeSlip = readNativeSlip;
+  window.__bcDiagReport = diagReport;
 })();
