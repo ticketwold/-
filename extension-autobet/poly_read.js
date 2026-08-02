@@ -473,46 +473,51 @@ async function injectBcSlipAllFrames(tabId) {
       target: { tabId, allFrames: true },
       files: ['bc_slip_read.js']
     });
-    const results = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: () => {
-        const hits = [];
-        try {
-          const native = typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null;
-          if (native?.ok && native.odds > 1.01) hits.push(native);
-        } catch (_) {}
-        try {
-          const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
-          if (scraped?.ok && scraped.odds > 1.01) {
-            hits.push({
-              ok: true,
-              odds: scraped.odds,
-              stake: scraped.stake,
-              payout: scraped.payout,
-              teamLabel: scraped.teamLabel || scraped.selectionText || '',
-              sourceKind: scraped.sourceKind || 'sports-board',
-              fromPayout: scraped.fromPayout,
-              hasInput: scraped.hasInput,
-              method: 'scrape-main'
-            });
-          }
-        } catch (_) {}
-        try {
-          const api = window.__bcApiSlip;
-          if (api?.odds > 1.01 && Date.now() - (api.capturedAt || 0) < 180000) {
-            hits.push({ ok: true, ...api, sourceKind: 'bc-api', method: 'api-cache' });
-          }
-        } catch (_) {}
-        if (!hits.length) return null;
-        hits.sort((a, b) => (b.stake > 0 ? 50 : 0) + b.odds - ((a.stake > 0 ? 50 : 0) + a.odds));
-        return hits[0];
-      }
-    });
-    let best = null;
-    for (const row of results || []) {
-      const hit = row?.result;
-      const frameId = row?.frameId ?? 0;
-      if (hit?.ok && hit.odds > 1.01) {
+    const [nativeRows, mainRows] = await Promise.all([
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+      }),
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        func: () => {
+          const hits = [];
+          try {
+            const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
+            if (scraped?.ok && scraped.odds > 1.01) {
+              hits.push({
+                ok: true,
+                odds: scraped.odds,
+                stake: scraped.stake,
+                payout: scraped.payout,
+                teamLabel: scraped.teamLabel || scraped.selectionText || '',
+                sourceKind: scraped.sourceKind || 'sports-board',
+                fromPayout: scraped.fromPayout,
+                hasInput: scraped.hasInput,
+                method: 'scrape-main'
+              });
+            }
+          } catch (_) {}
+          try {
+            const api = window.__bcApiSlip;
+            if (api?.odds > 1.01 && Date.now() - (api.capturedAt || 0) < 180000) {
+              hits.push({ ok: true, ...api, sourceKind: 'bc-api', method: 'api-cache' });
+            }
+          } catch (_) {}
+          if (!hits.length) return null;
+          hits.sort((a, b) => (b.stake > 0 ? 50 : 0) + b.odds - ((a.stake > 0 ? 50 : 0) + a.odds));
+          return hits[0];
+        }
+      })
+    ]);
+
+    const byFrame = new Map();
+    const absorb = (rows) => {
+      for (const row of rows || []) {
+        const frameId = row?.frameId ?? 0;
+        const hit = row?.result;
+        if (!hit?.ok || !(hit.odds > 1.01)) continue;
         const slip = { ...hit };
         delete slip.ok;
         delete slip.reason;
@@ -525,8 +530,16 @@ async function injectBcSlipAllFrames(tabId) {
         const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
         if (/betby|sptpub|biahosted|bti-sports/i.test(frameUrl)) s += 120;
         if (frameId > 0 && /betby|sptpub|biahosted/i.test(frameUrl)) s += 80;
-        if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
+        const prev = byFrame.get(frameId);
+        if (!prev || s > prev._score) byFrame.set(frameId, { ...slip, frameId, frameUrl, _score: s });
       }
+    };
+    absorb(nativeRows);
+    absorb(mainRows);
+
+    let best = null;
+    for (const v of byFrame.values()) {
+      if (v._score > (best?._score ?? -1)) best = v;
     }
     return best?.odds > 1.01 ? best : null;
   } catch (_) {
@@ -552,7 +565,7 @@ async function autoOpenBcSportsSlip(tabId, teamHint) {
 async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const focusTab = opts.focusTab !== false;
-  const waitMs = opts.waitMs || (focusTab ? 1400 : 400);
+  const waitMs = opts.waitMs || (focusTab ? 2000 : 500);
   const teamHint = opts.teamHint || opts.excludeTeam || '';
 
   if (focusTab) await focusBcTabForRead(polyTab.id, waitMs);
@@ -587,43 +600,65 @@ async function probeBcSlipFrames(polyTab) {
   if (!polyTab?.id) return [];
   const frames = await getAllFrames(polyTab.id);
   await ensurePolyScript(polyTab.id);
+  await ensureBcScrapeScript(polyTab.id);
   try {
     await chrome.scripting.executeScript({
       target: { tabId: polyTab.id, allFrames: true },
       files: ['bc_slip_read.js']
     });
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: polyTab.id, allFrames: true },
-      func: () => {
-        const slip = typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null;
-        const diag = typeof window.__bcDiagReport === 'function' ? window.__bcDiagReport() : null;
-        return { slip, diag };
-      }
-    });
+    const [isoResults, mainResults] = await Promise.all([
+      chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, allFrames: true },
+        func: () => {
+          const slip = typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null;
+          const diag = typeof window.__bcDiagReport === 'function' ? window.__bcDiagReport() : null;
+          return { slip, diag };
+        }
+      }),
+      chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, allFrames: true },
+        world: 'MAIN',
+        func: () => {
+          const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
+          const api = window.__bcApiSlip;
+          return {
+            scraped: scraped?.ok ? scraped : null,
+            api: api?.odds > 1.01 ? api : null,
+            ver: window.__bcScrapeVer || 0
+          };
+        }
+      })
+    ]);
+    const mainByFrame = new Map((mainResults || []).map((r) => [r.frameId ?? 0, r.result]));
     const out = [];
-    for (const row of results || []) {
+    for (const row of isoResults || []) {
       const hit = row?.result?.slip;
       const diag = row?.result?.diag;
+      const main = mainByFrame.get(row?.frameId ?? 0) || {};
       const frameId = row?.frameId ?? 0;
       const frame = frames.find((f) => f.frameId === frameId);
       const url = (frame?.url || hit?.href || diag?.url || '').replace(/^https?:\/\//, '').slice(0, 72);
-      if (hit?.ok && hit.odds > 1.01) {
-        out.push({ frameId, url, odds: hit.odds, kind: hit.sourceKind || hit.method || 'bc-native-slip', inputs: hit.inputCount });
+      const scrapeOdds = main.scraped?.odds;
+      const bestOdds = hit?.ok && hit.odds > 1.01 ? hit.odds : (scrapeOdds > 1.01 ? scrapeOdds : null);
+      if (bestOdds > 1.01) {
+        const kind = hit?.ok ? (hit.sourceKind || hit.method || 'bc-native-slip') : (main.scraped?.sourceKind || 'sports-board');
+        out.push({ frameId, url, odds: bestOdds, kind, inputs: hit?.inputCount ?? diag?.inputCount });
       } else {
         const flags = hit?.flags ? ` slip${hit.flags.slip ? 1 : 0} win${hit.flags.win ? 1 : 0} usdt${hit.flags.usdt ? 1 : 0} btn${hit.flags.betBtn ? 1 : 0}` : '';
         const selOdds = diag?.selectedOdds?.map((b) => b.t).join(', ') || '';
-        const apiOdds = diag?.apiSlip?.odds;
+        const apiOdds = main.api?.odds || diag?.apiSlip?.odds;
         out.push({
           frameId,
           url,
           odds: null,
-          kind: hit?.reason || 'miss',
+          kind: hit?.reason || main.scraped?.reason || 'miss',
           inputs: hit?.inputCount ?? diag?.inputCount ?? 0,
-          len: hit?.textLen ?? diag?.textLen ?? 0,
+          len: hit?.textLen ?? diag?.textLen ?? main.scraped?.frameTextLen ?? 0,
           flags,
           selectedOdds: selOdds,
+          scrapeOdds: scrapeOdds > 1.01 ? scrapeOdds : null,
           apiOdds: apiOdds > 1.01 ? apiOdds : null,
-          stake: diag?.stake || null,
+          stake: diag?.stake || main.scraped?.stake || null,
           sample: hit?.sample || diag?.sample || ''
         });
       }
@@ -643,6 +678,9 @@ async function readPolyOddsOnce(polyTab, opts = {}) {
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab, opts);
     if (native?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, native);
+
+    const leg2 = await readBcLeg2FromBtiFrames(polyTab);
+    if (leg2?.odds > 1.01) return mergePolySlipWithCache(polyTab.id, leg2);
 
     polyOddsCache.delete(polyTab.id);
     return null;
