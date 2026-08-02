@@ -72,10 +72,13 @@
   function hasSlipMarkers(raw) {
     const t = String(raw || '');
     if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) return true;
-    if (t.includes('당첨') && t.includes('USDT')) return true;
-    if (t.includes('베팅하기') && t.includes('USDT')) return true;
+    if (/place\s*(a\s*)?bet/i.test(t) && /stake|odds|total|win/i.test(t)) return true;
+    if (/total\s*(stake|odds)|potential\s*win|to\s*win/i.test(t) && /\d+\.\d{1,3}/.test(t)) return true;
+    if (t.includes('당첨') && (t.includes('USDT') || /\d/.test(t))) return true;
+    if (t.includes('베팅하기') && (t.includes('USDT') || /\d/.test(t))) return true;
     if (/예상\s*당첨/.test(t) && /총\s*베팅|USDT/i.test(t)) return true;
     if (/potential\s*win|to\s*win/i.test(t) && /USDT|stake/i.test(t)) return true;
+    if (/bet\s*slip|betslip/i.test(t) && /\d+\.\d{2,3}/.test(t)) return true;
     return false;
   }
 
@@ -127,11 +130,15 @@
     m = text.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
     if (m) payout = pm(m[1]);
     if (!payout) {
-      m = text.match(/(?:potential\s*win|to\s*win)[^\d]{0,30}([\d,]+(?:\.\d+)?)/i);
+      m = text.match(/(?:potential\s*win|to\s*win|total\s*win)[^\d]{0,30}([\d,]+(?:\.\d+)?)/i);
       if (m) payout = pm(m[1]);
     }
 
     let odds = stake > 0 && payout > stake ? Math.round((payout / stake) * 1000) / 1000 : null;
+    if (!odds) {
+      m = text.match(/(?:total\s*odds?|combined\s*odds?|odds?)\s*[:@]?\s*(\d+\.\d{2,3})/i);
+      if (m) odds = po(m[1]);
+    }
     if (!odds) {
       const usdtAmounts = [...text.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)].map((x) => pm(x[1])).filter((n) => n >= 1);
       for (const s of usdtAmounts) {
@@ -170,7 +177,7 @@
       const tag = node.tagName;
       if (tag !== 'BUTTON' && tag !== 'A' && node.getAttribute?.('role') !== 'button') return;
       const t = (node.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t !== '베팅하기' && !/^place\s*bet$/i.test(t)) return;
+      if (t !== '베팅하기' && !/^place\s*(a\s*)?bet$/i.test(t)) return;
       const parsed = parseSlipText(scopeTextFromEl(node));
       if (parsed) hit = { ...parsed, method: 'bet-btn' };
     }, 0);

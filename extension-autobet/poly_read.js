@@ -47,6 +47,63 @@ async function injectReadBcSports(tabId, frameId = 0) {
   return null;
 }
 
+function isBcFrameSkippable(url) {
+  return /tracker\.html|amazon-ivs|widgets?\.|doubleclick|googlesyndication|about:blank$/i.test(url || '');
+}
+
+async function readBcSportsPerFrameDeep(polyTab) {
+  if (!polyTab?.id) return null;
+  const frames = await getAllFrames(polyTab.id);
+  const ordered = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
+  const urlMap = new Map(frames.map((f) => [f.frameId, f.url || '']));
+  const allIds = [...new Set([...ordered, ...frames.map((f) => f.frameId)])];
+  let best = null;
+
+  for (const frameId of allIds.slice(0, BTI_MAX_FRAMES)) {
+    const frameUrl = urlMap.get(frameId) || '';
+    if (isBcFrameSkippable(frameUrl)) continue;
+
+    try {
+      await ensureBcScrapeScript(polyTab.id, frameId);
+      const scrapeRes = await chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, frameIds: [frameId] },
+        world: 'MAIN',
+        func: () => (typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null)
+      });
+      const scraped = scrapeRes?.[0]?.result;
+      if (scraped?.ok && scraped.odds > 1.01) {
+        const slip = { ...scraped, source: 'bcgame', method: 'per-frame-scrape' };
+        delete slip.ok;
+        if (isTrustedBcSlip(slip)) {
+          let s = scorePolySlip(slip);
+          if (/betby|sptpub|biahosted|renderer/i.test(frameUrl)) s += 100;
+          if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
+        }
+      }
+
+      await chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, frameIds: [frameId] },
+        files: ['bc_slip_read.js']
+      });
+      const nativeRes = await chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, frameIds: [frameId] },
+        func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+      });
+      const hit = nativeRes?.[0]?.result;
+      if (hit?.ok && hit.odds > 1.01) {
+        const slip = { ...hit };
+        delete slip.ok;
+        if (isTrustedBcSlip(slip)) {
+          let s = scorePolySlip(slip);
+          if (/betby|sptpub|biahosted|renderer/i.test(frameUrl)) s += 100;
+          if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
+        }
+      }
+    } catch (_) {}
+  }
+  return best?.odds > 1.01 ? best : null;
+}
+
 async function readBcLeg2FromBtiFrames(polyTab) {
   if (!polyTab?.id) return null;
   const frames = await getAllFrames(polyTab.id);
@@ -55,6 +112,8 @@ async function readBcLeg2FromBtiFrames(polyTab) {
   let best = null;
 
   for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+    const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
+    if (isBcFrameSkippable(frameUrl)) continue;
     let slip = await injectReadBcSportsDeep(polyTab.id, frameId);
     if (slip?._fail) slip = null;
     if (!(slip?.odds > 1.01)) {
@@ -75,6 +134,7 @@ async function readBcLeg2FromBtiFrames(polyTab) {
       } catch (_) {}
     }
     if (!(slip?.odds > 1.01)) continue;
+    if (!isTrustedBcSlip(slip)) continue;
     const norm = normalizePolySlip({
       ...slip,
       source: 'bcgame',
@@ -599,6 +659,12 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
       return hit;
     }
 
+    const perFrame = await readBcSportsPerFrameDeep(polyTab);
+    if (isTrustedBcSlip(perFrame)) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: perFrame.frameId };
+      return perFrame;
+    }
+
     if (!clicked && teamHint && focusTab && attempt >= 1) {
       clicked = await autoOpenBcSportsSlip(polyTab.id, teamHint);
       if (clicked) await new Promise((r) => setTimeout(r, 800));
@@ -675,6 +741,14 @@ async function probeBcSlipFrames(polyTab) {
           sample: hit?.sample || diag?.sample || ''
         });
       }
+    }
+    out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
+    const seen = new Set(out.map((p) => p.frameId));
+    for (const f of frames) {
+      if (seen.has(f.frameId)) continue;
+      const url = (f.url || '').replace(/^https?:\/\//, '').slice(0, 72);
+      if (f.frameId !== 0 && !/bc\.game|betby|sptpub|biahosted|bti-sports/i.test(url)) continue;
+      out.push({ frameId: f.frameId, url, odds: null, kind: isBcFrameSkippable(f.url) ? 'skip-tracker' : 'no-inject', inputs: 0, len: 0, flags: '' });
     }
     out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
     return out.filter((p) => p.frameId === 0 || /bc\.game|betby|sptpub|biahosted|bti-sports/i.test(p.url || ''));

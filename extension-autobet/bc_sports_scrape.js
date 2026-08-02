@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 8;
+  const SCRAPE_VER = 9;
 
   function collectPageText() {
     const parts = [];
@@ -99,15 +99,15 @@
   function findSlipRoot() {
     let best = null;
     let bestScore = -1;
-    for (const el of queryDeep('div, section, aside, form, [class*="slip"], [class*="Slip"]')) {
+    for (const el of queryDeep('div, section, aside, form, [class*="slip"], [class*="Slip"], [data-testid*="betslip"], [data-testid*="BetSlip"]')) {
       if (!vis(el)) continue;
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!/베팅\s*슬립|bet\s*slip/i.test(t)) continue;
+      if (!/베팅\s*슬립|bet\s*slip|betslip|place\s*(a\s*)?bet|total\s*stake/i.test(t)) continue;
       const len = t.length;
       if (len < 25 || len > 6000) continue;
       let score = 0;
-      if (/예상\s*당첨|총\s*베팅/i.test(t)) score += 140;
-      if (/베팅하기/i.test(t)) score += 100;
+      if (/예상\s*당첨|총\s*베팅|potential\s*win|total\s*stake|total\s*odds/i.test(t)) score += 140;
+      if (/베팅하기|place\s*(a\s*)?bet/i.test(t)) score += 100;
       if (/USDT/i.test(t)) score += 80;
       if (el.querySelector?.('input')) score += 70;
       if (/vs\.?|승자|맵\s*[-–]/i.test(t)) score += 40;
@@ -120,12 +120,16 @@
 
   function parseNativeSlipText(raw) {
     const text = String(raw || '').replace(/\s+/g, ' ').trim();
-    if (!/베팅\s*슬립|bet\s*slip/i.test(text)) return null;
-    if (!/예상\s*당첨|총\s*베팅|베팅하기/i.test(text)) return null;
+    if (!/베팅\s*슬립|bet\s*slip|betslip/i.test(text) && !/place\s*(a\s*)?bet/i.test(text)) return null;
+    if (!/예상\s*당첨|총\s*베팅|베팅하기|place\s*(a\s*)?bet|total\s*stake|potential\s*win|total\s*odds|stake/i.test(text)) return null;
 
     let stake = 0;
     let m = text.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
     if (m) stake = parseMoney(m[1]);
+    if (!stake) {
+      m = text.match(/total\s*stake[^\d]{0,20}([\d,]+(?:\.\d+)?)/i);
+      if (m) stake = parseMoney(m[1]);
+    }
     if (!stake) {
       const usdtMatches = [...text.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)];
       for (const hit of usdtMatches) {
@@ -137,9 +141,17 @@
     let payout = 0;
     m = text.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
     if (m) payout = parseMoney(m[1]);
+    if (!payout) {
+      m = text.match(/(?:potential\s*win|to\s*win|total\s*win)[^\d]{0,30}([\d,]+(?:\.\d+)?)/i);
+      if (m) payout = parseMoney(m[1]);
+    }
 
     let odds = null;
     if (stake > 0 && payout > stake) odds = Math.round((payout / stake) * 1000) / 1000;
+    if (!odds) {
+      m = text.match(/(?:total\s*odds?|combined\s*odds?|@)\s*[:=]?\s*(\d+\.\d{2,3})/i);
+      if (m) odds = parseOdds(m[1]);
+    }
 
     let teamLabel = '';
     let eventText = '';
@@ -271,9 +283,43 @@
     return out;
   }
 
+  function findBetbySlipPanel() {
+    for (const el of queryDeep('aside, section, div, form, [class*="betslip"], [class*="BetSlip"], [data-testid*="betslip"]')) {
+      if (!vis(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 12 || t.length > 5000) continue;
+      if (!/place\s*(a\s*)?bet|total\s*stake|bet\s*slip|betslip|베팅|stake/i.test(t)) continue;
+      if (!/\d+\.\d{2,3}/.test(t)) continue;
+      if (!el.querySelector('input, textarea, [contenteditable="true"]')) continue;
+      return el;
+    }
+    return null;
+  }
+
   function readSlipFromPanel() {
     const native = readNativeBcGameSlip();
     if (native?.odds > 1.01) return native;
+
+    const betbyPanel = findBetbySlipPanel();
+    if (betbyPanel) {
+      const txt = (betbyPanel.textContent || '').replace(/\s+/g, ' ').trim();
+      let odds = null;
+      const om = txt.match(/(?:total\s*odds?|@|odds?\s*[:=])\s*(\d+\.\d{2,3})/i);
+      if (om) odds = parseOdds(om[1]);
+      if (!odds) {
+        const nums = [...txt.matchAll(/\b(\d+\.\d{2,3})\b/g)].map((x) => parseOdds(x[1])).filter(Boolean);
+        odds = nums.find((n) => n > 1.15 && n < 20) || nums[0];
+      }
+      if (odds > 1.01) {
+        return {
+          odds,
+          hasInput: !!findStakeInput(betbyPanel),
+          sourceKind: 'sports-slip',
+          teamLabel: '',
+          fromPayout: false
+        };
+      }
+    }
 
     const hasInput = !!findStakeInput();
     const cards = queryDeep('[class*="bet"], [class*="Bet"], [class*="betslip"], [class*="Betslip"], [class*="bet-slip"]');
