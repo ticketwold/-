@@ -632,6 +632,7 @@ $('scanBtn')?.addEventListener('click', async () => {
               if (p.scrapeOdds > 1.01) extra += ` scr${p.scrapeOdds.toFixed(3)}`;
               if (p.apiOdds > 1.01) extra += ` api${p.apiOdds.toFixed(3)}`;
               if (p.stake) extra += ` stake${p.stake}`;
+              if (p.iframeHint) extra += ` ifr[${p.iframeHint.slice(0, 40)}]`;
               logLine(`  f${p.frameId}: ${p.kind} in${p.inputs} len${p.len || 0}${p.flags || ''}${extra} · ${p.url || '(main)'}`, 'info');
               if (p.frameId === 0 && p.sample) logLine(`    "${p.sample.slice(0, 80)}…"`, 'info');
             }

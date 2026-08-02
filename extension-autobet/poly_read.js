@@ -700,10 +700,16 @@ async function probeBcSlipFrames(polyTab) {
         func: () => {
           const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
           const api = window.__bcApiSlip;
+          const iframes = [...document.querySelectorAll('iframe')].slice(0, 6).map((f) => ({
+            s: (f.src || '').replace(/^https?:\/\//, '').slice(0, 60),
+            w: f.offsetWidth,
+            h: f.offsetHeight
+          }));
           return {
             scraped: scraped?.ok ? scraped : null,
             api: api?.odds > 1.01 ? api : null,
-            ver: window.__bcScrapeVer || 0
+            ver: window.__bcScrapeVer || 0,
+            iframes
           };
         }
       })
@@ -726,6 +732,7 @@ async function probeBcSlipFrames(polyTab) {
         const flags = hit?.flags ? ` slip${hit.flags.slip ? 1 : 0} win${hit.flags.win ? 1 : 0} usdt${hit.flags.usdt ? 1 : 0} btn${hit.flags.betBtn ? 1 : 0}` : '';
         const selOdds = diag?.selectedOdds?.map((b) => b.t).join(', ') || '';
         const apiOdds = main.api?.odds || diag?.apiSlip?.odds;
+        const iframeHint = main.iframes?.filter((i) => i.w > 50 && i.h > 50).map((i) => i.s).join(' | ') || '';
         out.push({
           frameId,
           url,
@@ -738,7 +745,8 @@ async function probeBcSlipFrames(polyTab) {
           scrapeOdds: scrapeOdds > 1.01 ? scrapeOdds : null,
           apiOdds: apiOdds > 1.01 ? apiOdds : null,
           stake: diag?.stake || main.scraped?.stake || null,
-          sample: hit?.sample || diag?.sample || ''
+          sample: hit?.sample || diag?.sample || '',
+          iframeHint
         });
       }
     }

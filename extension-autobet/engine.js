@@ -336,7 +336,7 @@ async function readPolySlipAllBcTabs(leg2Pref = 'bcgame', opts = {}) {
   let best = null;
   for (const { tab } of leg2Tabs) {
     const slip = await readPolyOddsOnce({ id: tab.id, url: tab.url }, opts);
-    if (!(slip?.odds > 1.01)) continue;
+    if (!isTrustedBcSlip(slip)) continue;
     const s = scorePolySlip(slip);
     if (s > (best?._score ?? -1)) {
       best = { slip, tab: { id: tab.id, url: tab.url }, _score: s };
