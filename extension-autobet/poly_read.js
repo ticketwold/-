@@ -427,6 +427,7 @@ function finalizeBcPolySlip(slip) {
     if (slip?._slipClosed) bcOddsLatch = { odds: 0, source: '', at: 0, key: '' };
     return slip;
   }
+  if (!isBcSlipOddsSource(slip)) return null;
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.teamLabel || slip.selectionText || ''}_${slip.eventText || ''}`;
   if (isBcSlipOddsSource(slip)) {

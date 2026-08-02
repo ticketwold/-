@@ -892,7 +892,7 @@
     }
 
     if (bcSlipOddsLatch.source === 'slip' && bcSlipOddsLatch.odds > 1.01
-      && Date.now() - bcSlipOddsLatch.at < 8000) {
+      && Date.now() - bcSlipOddsLatch.at < 30000) {
       const latched = finalizeBcSlipHit({
         odds: bcSlipOddsLatch.odds,
         teamLabel: bcSlipOddsLatch.key,
@@ -907,23 +907,6 @@
         selectionText: latched.teamLabel || '',
         displayLabel: `${latched.odds.toFixed(3)}`,
         sourceKind: 'bc-native-slip',
-        hasInput: fields.length > 0,
-        inputCount: fields.length,
-        href: location.href
-      };
-    }
-
-    const boardHit = readSelectedBoardOdds();
-    if (boardHit?.odds > 1.01) {
-      const finalized = finalizeBcSlipHit(boardHit);
-      return {
-        ok: true,
-        source: 'bcgame',
-        ...finalized,
-        outcome: finalized.teamLabel || '',
-        selectionText: finalized.teamLabel || '',
-        displayLabel: `${finalized.odds.toFixed(3)}`,
-        sourceKind: 'sports-board-selected',
         hasInput: fields.length > 0,
         inputCount: fields.length,
         href: location.href

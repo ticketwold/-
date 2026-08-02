@@ -766,19 +766,6 @@ $('scanBtn')?.addEventListener('click', async () => {
         const odds = ml.map((s) => s.odds?.toFixed(2)).filter(Boolean).join(' / ');
         logLine(`  ${ev.homeTeam || '?'} vs ${ev.awayTeam || '?'}${odds ? ` · ${odds}` : ''}`, 'info');
       }
-      if (!snap.btiO && board.buttonCount > 0) {
-        const boardSlip = await readBtiBoardOddsFromFrames(snap.found.btiTab, snap.hint || {});
-        if (boardSlip?.odds > 1.01) {
-          snap.btiO = boardSlip.odds;
-          snap.bti = boardSlip;
-          if (snap.polyO > 1) {
-            snap.profit = calcProfit(snap.btiO, snap.polyO);
-            snap.polyUsd = calcPolyBetUsd(cfg.btiBetKrw, snap.btiO, snap.polyO, cfg.usdRate);
-          }
-          liveSnap = snap;
-          updateStatusFromSnap(snap, cfg);
-        }
-      }
     }
 
     if (snap.btiO > 1) logLine(`${leg1Label()} ${snap.btiO.toFixed(3)}`, 'ok');

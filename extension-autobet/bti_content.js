@@ -236,30 +236,16 @@ let btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
 
 function finalizeBtiOdds(slip) {
   if (!(slip?.odds > 1.01)) return slip;
-  const o = Math.round(slip.odds * 1000) / 1000;
-  const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
   const fromSlip = slip.fromSlip === true
     || slip.source === 'slip-display'
     || slip.source === 'slip-card'
     || slip.source === 'slip-latched';
+  if (!fromSlip) return null;
 
-  if (fromSlip) {
-    if (btiOddsLatch.source === 'slip' && btiOddsLatch.key === key
-      && Math.abs(o - btiOddsLatch.odds) >= 0.05
-      && Date.now() - btiOddsLatch.at < 3000) {
-      return { ...slip, odds: btiOddsLatch.odds, source: 'slip-latched' };
-    }
-    btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
-    return { ...slip, odds: o };
-  }
-
-  if (btiOddsLatch.source === 'slip' && Date.now() - btiOddsLatch.at < 30000
-    && Math.abs(o - btiOddsLatch.odds) >= 0.02) {
-    return { ...slip, odds: btiOddsLatch.odds, source: 'slip-latched', fromSlip: true };
-  }
-
-  btiOddsLatch = { odds: o, source: slip.source || 'board', at: Date.now(), key };
-  return { ...slip, odds: o };
+  const o = Math.round(slip.odds * 1000) / 1000;
+  const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
+  btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+  return { ...slip, odds: o, fromSlip: true };
 }
 
 function parseSlipFromCard(card) {
@@ -267,313 +253,75 @@ function parseSlipFromCard(card) {
   if (isSlipCardSuspended(card)) return null;
 
   const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
-  // [0]: 선택명 ("삼성 라이온스" 또는 "언더 16")
-  // [1]: 마켓명 ("[7:5] 라이브 승패 라이브 베팅")
   const selectionText = titleEls[0] ? titleEls[0].textContent.trim() : '';
   const marketTitleText = titleEls[1] ? titleEls[1].textContent.trim() : '';
-
   const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
   const eventText = eventEl ? eventEl.textContent.trim() : '';
-
   const mktEl = card.querySelector('[class*="betInformation__marketName"]');
   const mktText = mktEl ? mktEl.textContent.trim() : marketTitleText;
-
-  const allText = selectionText + ' ' + mktText + ' ' + marketTitleText;
-  const slipMktType = detectMarketType(allText);
+  const allText = `${selectionText} ${mktText} ${marketTitleText}`;
   const slipCardOdds = readOddsFromSlipCard(card);
 
-  // W1/W2 슬립 — 슬립 카드 배당 우선, 없을 때만 보드
-  if (/^W[12]$/i.test(selectionText.trim())) {
-    let odds = slipCardOdds;
-    if (!odds) {
-      odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
-      if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-      if (!odds) {
-        const teams = parseEventTeams(eventText);
-        const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
-        const teamLabel = side === 'away' ? teams.away : teams.home;
-        if (teamLabel) odds = readOddsFromBoardForSelection(teamLabel, allText, slipMktType);
-      }
-    }
-    if (!odds) return null;
-    const period = 'ft';
-    const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
-    const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
-    const teams = parseEventTeams(resolvedEventText);
-    return {
-      odds: Math.round(odds * 1000) / 1000,
-      eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
-      marketKind: 'ml',
-      period,
-      side,
-      line: null,
-      marketKey: `${period}_ml_${side}`,
-      mktText,
-      selectionText,
-      eventText: resolvedEventText,
-      homeTeam: teams.home,
-      awayTeam: teams.away,
-      fromSlip: !!slipCardOdds,
-      source: slipCardOdds ? 'slip-card' : 'board-live'
-    };
-  }
-
-  // 슬립 카드 배당 우선 — 보드는 카드에 배당 없을 때만
-  let odds = slipCardOdds || 0;
-
-  let matchedLine = null;
-  let matchedSide = null;
-
-  const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
-
-  if (!odds && selectionText) {
-    // 슬립 선택명에서 팀명과 기준점 분리
-    // 예: "LG 트윈스 +5.5" → teamName="LG 트윈스", slipLine=+5.5
-    // 예: "언더 16" → ouMatch
-    // 예: "삼성 라이온스" → teamName="삼성 라이온스", slipLine=null
-    const slipLineMatch = selectionText.match(/([+-]\d+\.?\d*)\s*$/);
-    const slipLine = slipLineMatch ? parseFloat(slipLineMatch[1]) : null;
-    const teamName = slipLine !== null
-      ? selectionText.replace(slipLineMatch[0], '').trim()
-      : selectionText;
-
-    // 방식 A: points span 기준점 + 팀명으로 버튼 매칭
-    // 예: slipLine=+5.5, teamName="LG 트윈스" → points="LG 트윈스+5.5" 버튼 탐색
-    if (slipLine !== null) {
-      for (const btn of allBtns) {
-        const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
-        if (!oddsEl) continue;
-        const btnOdds = parseFloat(oddsEl.textContent.trim());
-        if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
-
-        const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
-        if (!pointsEl) continue;
-        const pointsText = pointsEl.textContent.trim();
-
-        // points span에 팀명 + 기준점 포함 여부 확인
-        // 예: pointsText="LG 트윈스+5.5" 또는 "LG 트윈스 +5.5"
-        const pointsLineMatch = pointsText.match(/([+-]\d+\.?\d*)\s*$/);
-        if (!pointsLineMatch) continue;
-        const pointsLine = parseFloat(pointsLineMatch[1]);
-
-        if (Math.abs(pointsLine - slipLine) < 0.01) {
-          // 팀명도 포함되는지 확인 (공백 무시)
-          const pointsClean = pointsText.replace(/\s+/g, '').toLowerCase();
-          const teamClean = teamName.replace(/\s+/g, '').toLowerCase();
-          if (pointsClean.includes(teamClean) || teamClean.length < 2) {
-            odds = btnOdds;
-            matchedLine = pointsLine;
-            break;
-          }
-        }
-      }
-    }
-
-    // 방식 A-2: 버튼 텍스트에 선택명 포함 여부로 매칭 (기준점 없는 경우)
-    // 마켓 타입(ML/AH/OU)에 맞는 버튼 우선 선택
-    // 예: selectionText="삼성 라이온스", 마켓="승패" → points에 기준점 없는 ML 버튼 우선
-    if (!odds) {
-      const candidates = [];
-      for (const btn of allBtns) {
-        const btnText = btn.textContent || '';
-        const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
-        if (!oddsEl) continue;
-        const btnOdds = parseFloat(oddsEl.textContent.trim());
-        if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
-
-        const btnTextClean = btnText.replace(/\s+/g, '');
-        const selClean = selectionText.replace(/\s+/g, '');
-
-        if (btnTextClean.includes(selClean) || selClean.includes(btnTextClean.replace(/[\d.]+$/,''))) {
-          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
-          const pointsText = pointsEl ? pointsEl.textContent.trim() : '';
-          // ML 버튼: points span에 기준점(+/-)이 없고 팀명만 있음
-          const hasHandicap = /[+-]\d/.test(pointsText);
-          const isOuBtn = btnText.includes('오버') || btnText.includes('언더') || btnText.toLowerCase().includes('over') || btnText.toLowerCase().includes('under');
-          candidates.push({ btn, btnOdds, pointsText, hasHandicap, isOuBtn });
-        }
-      }
-
-      // 마켓 타입에 맞는 후보 우선 선택
-      let chosen = null;
-      if (slipMktType === 'ml') {
-        // ML: 핸디캡 없고 OU 아닌 버튼 우선
-        chosen = candidates.find(c => !c.hasHandicap && !c.isOuBtn)
-               || candidates.find(c => !c.isOuBtn)
-               || candidates[0];
-      } else if (slipMktType === 'ah') {
-        // AH: 핸디캡 있는 버튼 우선
-        chosen = candidates.find(c => c.hasHandicap)
-               || candidates[0];
-      } else {
-        chosen = candidates[0];
-      }
-
-      if (chosen) {
-        odds = chosen.btnOdds;
-        const pointsEl = chosen.btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
-        if (pointsEl) {
-          const pm = pointsEl.textContent.trim().match(/([+-]?\d+\.?\d*)/);
-          if (pm) matchedLine = parseFloat(pm[1]);
-        }
-        if (matchedLine === null) {
-          const lineM = chosen.btn.textContent.match(/([+-]?\d+\.?\d*)(?=\s*\d+\.\d{2,4})/);
-          if (lineM) matchedLine = parseFloat(lineM[1]);
-        }
-        if (chosen.btn.textContent.includes('언더') || chosen.btn.textContent.toLowerCase().includes('under')) matchedSide = 'u';
-        else if (chosen.btn.textContent.includes('오버') || chosen.btn.textContent.toLowerCase().includes('over')) matchedSide = 'o';
-      }
-    }
-
-    // 방식 B: OU 마켓 - "언더 16" 같은 선택명에서 기준점+side 추출 후 버튼 탐색
-    if (!odds) {
-      const ouMatch = selectionText.match(/(오버|언더|over|under)\s*([\d]+\.?[\d]*)/i);
-      if (ouMatch) {
-        const targetSide = (ouMatch[1].toLowerCase().includes('언더') || ouMatch[1].toLowerCase() === 'under') ? 'u' : 'o';
-        const targetLine = parseFloat(ouMatch[2]);
-        for (const btn of allBtns) {
-          const btnText = btn.textContent || '';
-          const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
-          if (!oddsEl) continue;
-          const btnOdds = parseFloat(oddsEl.textContent.trim());
-          if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
-
-          const btnSide = (btnText.includes('언더') || btnText.toLowerCase().includes('under')) ? 'u' : 'o';
-          if (btnSide !== targetSide) continue;
-
-          // 기준점 확인
-          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
-          let btnLine = null;
-          if (pointsEl) {
-            const pm = pointsEl.textContent.trim().match(/(\d+\.?\d*)/);
-            if (pm) btnLine = parseFloat(pm[1]);
-          }
-          if (btnLine === null) {
-            // 버튼 텍스트에서 기준점 추출 ("언더161.88" → 16)
-            const lm = btnText.replace(/언더|오버|under|over/gi, '').match(/(\d+\.?\d*)/);
-            if (lm) btnLine = parseFloat(lm[1]);
-          }
-          if (btnLine !== null && Math.abs(btnLine - targetLine) < 0.01) {
-            odds = btnOdds;
-            matchedLine = btnLine;
-            matchedSide = targetSide;
-            break;
-          }
-        }
-      }
-    }
-
-    // 방식 C: 핸디캡 - "+1.5", "-1.5" 등
-    if (!odds) {
-      const ahMatch = selectionText.match(/([+-]\d+\.?\d*)/);
-      if (ahMatch) {
-        const targetLine = parseFloat(ahMatch[1]);
-        for (const btn of allBtns) {
-          const btnText = btn.textContent || '';
-          const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
-          if (!oddsEl) continue;
-          const btnOdds = parseFloat(oddsEl.textContent.trim());
-          if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
-
-          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
-          let btnLine = null;
-          if (pointsEl) {
-            const pm = pointsEl.textContent.trim().match(/([+-]?\d+\.?\d*)/);
-            if (pm) btnLine = parseFloat(pm[1]);
-          }
-          if (btnLine === null) {
-            const lm = btnText.match(/([+-]\d+\.?\d*)/);
-            if (lm) btnLine = parseFloat(lm[1]);
-          }
-          if (btnLine !== null && Math.abs(btnLine - targetLine) < 0.01) {
-            odds = btnOdds;
-            matchedLine = btnLine;
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  if (!odds) odds = 0;
-
-  if (!odds) {
-    odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
-  }
-  if (!odds) {
-    odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-  }
-  if (!odds && isSlipCardSuspended(card)) return null;
-  if (!odds || odds <= 1.01) return null;
-  odds = Math.round(odds * 1000) / 1000;
-
-  // ── 4. 마켓 타입/period/side/line 판별 ──
-  function detectPeriod(text) {
-    const t = text.toLowerCase();
-    if (t.includes('전반전') || t.includes('1st half') || t.includes('halftime')) return '1h';
-    if (t.includes('후반전') || t.includes('2nd half')) return '2h';
-    if (/[23]세트|[23]rd set|[23]nd set/i.test(t)) return 'set';
-    return 'ft';
-  }
-  function detectType(text) {
-    const t = text.toLowerCase();
-    if (t.includes('머니 라인') || t.includes('money line') || t.includes('moneyline') || t.includes('승패')) return 'ml';
-    if (t.includes('핸디캡') || t.includes('handicap') || t.includes('아시안')) return 'ah';
-    if (t.includes('오버') || t.includes('언더') || t.includes('over') || t.includes('under') || t.includes('총계')) return 'ou';
-    return 'ml';
-  }
-  function detectSide(text, type) {
-    const t = text.toLowerCase();
-    if (type === 'ou') {
-      if (matchedSide) return matchedSide;
-      return (t.includes('언더') || t.includes('under')) ? 'u' : 'o';
-    }
-    if (type === 'ah') return (t.includes('어웨이') || t.includes('away')) ? 'a' : 'h';
-    if (t.includes('무승부') || t.includes('draw')) return 'draw';
-    if (t.includes('어웨이') || t.includes('away')) return 'away';
-    return 'home';
-  }
-  function detectLine(text) {
-    if (matchedLine !== null) return matchedLine;
-    const m = text.match(/(?:오버|언더|over|under)[\s]*([\d]+\.?[\d]*)/i);
-    if (m) return parseFloat(m[1]);
-    const m2 = text.match(/([+-]\d+\.?\d*)/);
-    if (m2) return parseFloat(m2[1]);
-    const m3 = text.match(/([\d]+\.[\d]+)/);
-    if (m3) return parseFloat(m3[1]);
-    return null;
-  }
+  if (!(slipCardOdds > 1.01)) return null;
+  const odds = Math.round(slipCardOdds * 1000) / 1000;
 
   const period = detectPeriod(allText);
-  // mktText(실제 마켓명) 우선 판별 — selectionText의 +1.5 등 기준점 숫자로 오판하는 버그 방지
-  const type = mktText ? detectType(mktText) : detectType(allText);
-  const side = detectSide(selectionText || allText, type);
-  const line = detectLine(selectionText || allText);
+  const type = mktText ? detectMarketType(mktText) : detectMarketType(allText);
+  const side = detectSideFromSlipText(selectionText || allText, type);
+  const line = detectLineFromSlipText(selectionText || allText);
   const marketKey = type === 'ml'
     ? `${period}_ml_${side}`
     : type === 'ah'
-    ? `${period}_ah_${side}_${line}`
-    : `${period}_ou_${side}_${line}`;
-
-  // URL에서 이벤트 ID 추출
+      ? `${period}_ah_${side}_${line}`
+      : `${period}_ou_${side}_${line}`;
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
-  const eventId = urlMatch ? urlMatch[1] : null;
-  const fromSlipCard = !!slipCardOdds;
+  const teams = parseEventTeams(eventText);
 
   return {
     odds,
-    eventId,
+    eventId: urlMatch ? urlMatch[1] : null,
     marketKind: type,
     period,
     side,
     line,
     marketKey,
     mktText,
-    selectionText,  // "언더 16", "삼성 라이온스" 등 실제 선택명 (기준점 검증용)
-    eventText,      // "KIA 타이거즈 vs SSG 랜더스"
-    fromSlip: fromSlipCard,
-    source: fromSlipCard ? 'slip-card' : 'board-live'
+    selectionText,
+    eventText,
+    homeTeam: teams.home,
+    awayTeam: teams.away,
+    fromSlip: true,
+    source: 'slip-card'
   };
+}
+
+function detectPeriod(text) {
+  const t = text.toLowerCase();
+  if (t.includes('전반전') || t.includes('1st half') || t.includes('halftime')) return '1h';
+  if (t.includes('후반전') || t.includes('2nd half')) return '2h';
+  if (/[23]세트|[23]rd set|[23]nd set/i.test(t)) return 'set';
+  return 'ft';
+}
+
+function detectSideFromSlipText(text, type) {
+  const t = text.toLowerCase();
+  if (/^W2$/i.test(text.trim())) return 'away';
+  if (/^W1$/i.test(text.trim())) return 'home';
+  if (type === 'ou') return (t.includes('언더') || t.includes('under')) ? 'u' : 'o';
+  if (type === 'ah') return (t.includes('어웨이') || t.includes('away')) ? 'a' : 'h';
+  if (t.includes('무승부') || t.includes('draw')) return 'draw';
+  if (t.includes('어웨이') || t.includes('away')) return 'away';
+  return 'home';
+}
+
+function detectLineFromSlipText(text) {
+  const m = text.match(/(?:오버|언더|over|under)[\s]*([\d]+\.?[\d]*)/i);
+  if (m) return parseFloat(m[1]);
+  const m2 = text.match(/([+-]\d+\.?\d*)/);
+  if (m2) return parseFloat(m2[1]);
+  const m3 = text.match(/([\d]+\.[\d]+)/);
+  if (m3) return parseFloat(m3[1]);
+  return null;
 }
 
 // ── BTI 기준점 검증 ──
@@ -1766,47 +1514,29 @@ function readEmergencyBoardOdds(hint = {}) {
 }
 
 function readBtiOdds(hint) {
-  const hintObj = hint || {};
   if (!isActiveBetslipOpen()) {
     btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
     return null;
   }
 
   const wrap = (slip) => (slip?.odds > 1.01 ? finalizeBtiOdds(slip) : slip);
-  const hasCards = getRealSlipCards().length > 0;
 
-  if (hasCards) {
-    const slipDisplay = readActiveSlipDisplayOdds();
-    if (slipDisplay?.odds > 1.01) return wrap(slipDisplay);
+  const slipDisplay = readActiveSlipDisplayOdds();
+  if (slipDisplay?.odds > 1.01) return wrap(slipDisplay);
 
-    const slipFromCard = readBtiSlip({ preferActiveSlip: true });
-    if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
+  const slipFromCard = readBtiSlip({ preferActiveSlip: true });
+  if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
 
-    if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
-      && Date.now() - btiOddsLatch.at < 30000) {
-      return wrap(enrichBtiSlip({
-        odds: btiOddsLatch.odds,
-        selectionText: (slipDisplay || slipFromCard)?.selectionText || '',
-        eventText: (slipDisplay || slipFromCard)?.eventText || '',
-        source: 'slip-latched',
-        fromSlip: true
-      }));
-    }
-    return null;
+  if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
+    && Date.now() - btiOddsLatch.at < 30000) {
+    return wrap(enrichBtiSlip({
+      odds: btiOddsLatch.odds,
+      selectionText: (slipDisplay || slipFromCard)?.selectionText || '',
+      eventText: (slipDisplay || slipFromCard)?.eventText || '',
+      source: 'slip-latched',
+      fromSlip: true
+    }));
   }
-
-  if (hintObj.excludeTeam || hintObj.polyTeam) {
-    const arbSlip = readBtiSlip({ ...hintObj, forArbPick: true });
-    if (arbSlip?.odds > 1.01) return wrap(arbSlip);
-  }
-
-  const board = readBtiBoardOdds(hintObj);
-  if (board?.odds > 1.01) {
-    return wrap(enrichBtiSlip({ ...board, source: 'board', fromSlip: false }));
-  }
-
-  const emergency = readEmergencyBoardOdds(hintObj);
-  if (emergency?.odds > 1.01) return wrap(emergency);
 
   return null;
 }
