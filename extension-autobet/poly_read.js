@@ -466,14 +466,47 @@ async function readBcApiSlipAllFrames(tabId) {
 
 async function injectBcSlipAllFrames(tabId) {
   try {
+    const frames = await getAllFrames(tabId);
     await ensureBcApiHook(tabId);
+    await ensureBcScrapeScript(tabId);
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['bc_slip_read.js']
     });
     const results = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
-      func: () => (typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null)
+      func: () => {
+        const hits = [];
+        try {
+          const native = typeof window.__bcReadNativeSlip === 'function' ? window.__bcReadNativeSlip() : null;
+          if (native?.ok && native.odds > 1.01) hits.push(native);
+        } catch (_) {}
+        try {
+          const scraped = typeof window.__bcScrapeOdds === 'function' ? window.__bcScrapeOdds() : null;
+          if (scraped?.ok && scraped.odds > 1.01) {
+            hits.push({
+              ok: true,
+              odds: scraped.odds,
+              stake: scraped.stake,
+              payout: scraped.payout,
+              teamLabel: scraped.teamLabel || scraped.selectionText || '',
+              sourceKind: scraped.sourceKind || 'sports-board',
+              fromPayout: scraped.fromPayout,
+              hasInput: scraped.hasInput,
+              method: 'scrape-main'
+            });
+          }
+        } catch (_) {}
+        try {
+          const api = window.__bcApiSlip;
+          if (api?.odds > 1.01 && Date.now() - (api.capturedAt || 0) < 180000) {
+            hits.push({ ok: true, ...api, sourceKind: 'bc-api', method: 'api-cache' });
+          }
+        } catch (_) {}
+        if (!hits.length) return null;
+        hits.sort((a, b) => (b.stake > 0 ? 50 : 0) + b.odds - ((a.stake > 0 ? 50 : 0) + a.odds));
+        return hits[0];
+      }
     });
     let best = null;
     for (const row of results || []) {
@@ -488,8 +521,11 @@ async function injectBcSlipAllFrames(tabId) {
         delete slip.inputCount;
         delete slip.flags;
         delete slip.href;
-        const s = scorePolySlip(slip);
-        if (s > (best?._score ?? -1)) best = { ...slip, frameId, _score: s };
+        let s = scorePolySlip(slip);
+        const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
+        if (/betby|sptpub|biahosted|bti-sports/i.test(frameUrl)) s += 120;
+        if (frameId > 0 && /betby|sptpub|biahosted/i.test(frameUrl)) s += 80;
+        if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
       }
     }
     return best?.odds > 1.01 ? best : null;
@@ -593,7 +629,7 @@ async function probeBcSlipFrames(polyTab) {
       }
     }
     out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
-    return out.filter((p) => p.frameId === 0 || /bc\.game/i.test(p.url));
+    return out.filter((p) => p.frameId === 0 || /bc\.game|betby|sptpub|biahosted|bti-sports/i.test(p.url || ''));
   } catch (e) {
     return [{ frameId: -1, url: '', odds: null, kind: e.message || 'probe-fail' }];
   }

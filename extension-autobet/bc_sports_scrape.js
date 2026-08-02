@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 6;
+  const SCRAPE_VER = 7;
 
   function collectPageText() {
     const parts = [];
@@ -74,12 +74,25 @@
   function isSelected(el) {
     if (!el) return false;
     const cls = String(el.className || '');
-    return el.getAttribute('aria-pressed') === 'true'
-      || el.getAttribute('aria-selected') === 'true'
-      || el.getAttribute('data-selected') === 'true'
-      || el.getAttribute('data-state') === 'on'
-      || el.getAttribute('data-state') === 'checked'
-      || /selected|active|pressed|highlight|checked/i.test(cls);
+    if (el.getAttribute('aria-pressed') === 'true') return true;
+    if (el.getAttribute('aria-selected') === 'true') return true;
+    if (el.getAttribute('data-selected') === 'true') return true;
+    if (el.getAttribute('data-state') === 'on' || el.getAttribute('data-state') === 'checked') return true;
+    if (/selected|active|pressed|highlight|checked|is-active|is-selected/i.test(cls)) return true;
+    try {
+      const st = getComputedStyle(el);
+      if (parseFloat(st.borderWidth) >= 2) return true;
+      const bg = st.backgroundColor || '';
+      const m = bg.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (m) {
+        const g = parseInt(m[2], 10);
+        const r = parseInt(m[1], 10);
+        if (g > 90 && g > r + 20) return true;
+      }
+      const outline = st.outlineColor || '';
+      if (/rgb\(\s*\d+\s*,\s*1\d{2}/.test(outline)) return true;
+    } catch (_) {}
+    return false;
   }
 
   function findSlipRoot() {
@@ -227,6 +240,9 @@
     const selectors = [
       'button',
       '[role="button"]',
+      '[data-testid*="outcome"]',
+      '[data-testid*="Odds"]',
+      '[data-testid*="odd"]',
       'a[class*="odd"]',
       '[class*="Outcome"]',
       '[class*="outcome"]',
@@ -429,4 +445,8 @@
   window.__bcScrapeOdds = scrapeBcSportsOdds;
   window.__bcSetStake = setStakeAmount;
   window.__bcPlaceSportsBet = placeBcSportsBet;
+
+  if (/betby|sptpub|biahosted/i.test(location.hostname)) {
+    console.log(`[BC.Game BetBy frame scrape v${SCRAPE_VER}] ${location.hostname}`);
+  }
 })();
