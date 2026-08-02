@@ -96,13 +96,26 @@ function findBcSportsStakeInput() {
     if (inp.getAttribute?.('inputmode') === 'decimal' || inp.inputMode === 'decimal') score += 40;
     const r = inp.getBoundingClientRect?.();
     if (r && r.x > vw * 0.5) score += 60;
-    if (inp.id === 'counter') score += 30;
+    if (inp.id === 'counter' || /CounterSecondary_input|counter__input/i.test(String(inp.className || ''))) score += 200;
     if (score > bestScore) { bestScore = score; best = inp; }
   }
   return best;
 }
 
+function readBcSlipTotals() {
+  const raw = getDeepPageText();
+  let stake = 0;
+  let payout = 0;
+  const m1 = raw.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
+  const m2 = raw.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
+  if (m1) stake = parseFloat(m1[1].replace(/,/g, '')) || 0;
+  if (m2) payout = parseFloat(m2[1].replace(/,/g, '')) || 0;
+  return { stake, payout };
+}
+
 function readBcSportsStake() {
+  const totals = readBcSlipTotals();
+  if (totals.stake > 0) return totals.stake;
   const input = findBcSportsStakeInput();
   if (input) {
     const raw = input.value ?? input.textContent ?? input.getAttribute?.('value') ?? '';
@@ -151,9 +164,13 @@ function parseBcNativeSlipText(raw) {
   if (hasSlip && !hasCtx && !/\d+\.\d{2,3}/.test(text)) return null;
 
   let stake = 0;
-  let m = text.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+  let m = text.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
   if (m) stake = parseFloat(m[1].replace(/,/g, '')) || 0;
   if (!stake) {
+    m = text.match(/total\s*stake[^\d]{0,16}([\d,]+(?:\.\d+)?)/i);
+    if (m) stake = parseFloat(m[1].replace(/,/g, '')) || 0;
+  }
+  if (!stake && !/베팅\s*슬립|betslip/i.test(text)) {
     for (const hit of text.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
       const v = parseFloat(hit[1].replace(/,/g, ''));
       if (Number.isFinite(v) && v >= 1 && v <= 50000) { stake = v; break; }
@@ -161,7 +178,7 @@ function parseBcNativeSlipText(raw) {
   }
 
   let payout = 0;
-  m = text.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+  m = text.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
   if (m) payout = parseFloat(m[1].replace(/,/g, '')) || 0;
 
   let odds = null;
@@ -414,6 +431,16 @@ function probeBcSportsUi() {
   };
 }
 
+async function commitBcStakeInput(input) {
+  if (!input) return;
+  input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+  input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Tab', code: 'Tab', keyCode: 9 }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Tab', code: 'Tab', keyCode: 9 }));
+  input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  await sleep(150);
+}
+
 async function setBcSportsAmount(amountUsd, force = true) {
   const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
   const input = findBcSportsStakeInput();
@@ -425,12 +452,26 @@ async function setBcSportsAmount(amountUsd, force = true) {
   }
 
   const str = String(rounded);
-  await typeIntoField(input, str);
-  await sleep(100);
+  input.focus?.();
+  try {
+    input.select?.();
+    document.execCommand('selectAll', false, null);
+    if (document.execCommand('insertText', false, str)) {
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertText' }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      await typeIntoField(input, str);
+    }
+  } catch (_) {
+    await typeIntoField(input, str);
+  }
+  await commitBcStakeInput(input);
+  await sleep(120);
   let stake = readBcSportsStake();
   if (!(stake > 0) || Math.abs(stake - rounded) > 0.2) {
-    await typeIntoField(input, `${str} USDT`);
-    await sleep(100);
+    await typeIntoField(input, str);
+    await commitBcStakeInput(input);
+    await sleep(120);
     stake = readBcSportsStake();
   }
   if (!(stake > 0) || Math.abs(stake - rounded) > 0.2) {
@@ -444,13 +485,27 @@ async function setBcSportsAmount(amountUsd, force = true) {
       input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
       await sleep(20);
     }
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
-    await sleep(80);
+    await commitBcStakeInput(input);
+    await sleep(120);
     stake = readBcSportsStake();
   }
-  if (stake > 0 && Math.abs(stake - rounded) < 0.5) return { ok: true, stake, method: 'type', target: rounded };
-  return { ok: false, reason: `금액 입력 실패 — $${rounded} 직접 입력`, stake: existing || stake || 0 };
+  const inputVal = (() => {
+    const raw = input.value ?? input.textContent ?? '';
+    const m = String(raw).replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
+    return m ? parseFloat(m[1]) : 0;
+  })();
+  if (stake > 0 && Math.abs(stake - rounded) < 0.5) {
+    return { ok: true, stake, method: 'type', target: rounded, inputVal };
+  }
+  return {
+    ok: false,
+    reason: inputVal > 0 && Math.abs(inputVal - rounded) < 0.2
+      ? `금액 미반영 — 입력 ${inputVal} · 총베팅 ${stake || 0} (Enter/탭 후 확인)`
+      : `금액 입력 실패 — $${rounded} 직접 입력`,
+    stake: stake || inputVal || 0,
+    inputVal,
+    target: rounded
+  };
 }
 
 async function clickBcSportsOutcome(teamHint) {

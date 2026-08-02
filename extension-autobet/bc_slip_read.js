@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 9;
+  const VER = 10;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -144,6 +144,34 @@
     return Number.isFinite(v) && v > 0 && v < 100000 ? v : 0;
   }
 
+  function readSlipTotals(scopeText) {
+    const text = String(scopeText || collectAllText()).replace(/\s+/g, ' ');
+    let stake = 0;
+    let payout = 0;
+    const m1 = text.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
+    const m2 = text.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
+    if (m1) stake = pm(m1[1]);
+    if (m2) payout = pm(m2[1]);
+    if (!stake) {
+      const m3 = text.match(/total\s*stake[^\d]{0,16}([\d,]+(?:\.\d+)?)/i);
+      if (m3) stake = pm(m3[1]);
+    }
+    if (!payout) {
+      const m4 = text.match(/(?:potential\s*win|to\s*win)[^\d]{0,20}([\d,]+(?:\.\d+)?)/i);
+      if (m4) payout = pm(m4[1]);
+    }
+    return { stake, payout };
+  }
+
+  function readAcceptedStake(field) {
+    const scope = field ? scopeTextFromEl(field) : '';
+    const totals = readSlipTotals(scope || undefined);
+    if (totals.stake > 0) return totals.stake;
+    const pageTotals = readSlipTotals();
+    if (pageTotals.stake > 0) return pageTotals.stake;
+    return readStakeValue(field || findBestStakeInput());
+  }
+
   function findBestStakeInput() {
     const fields = collectStakeFields();
     if (!fields.length) return null;
@@ -155,6 +183,7 @@
       const scope = scopeTextFromEl(field);
       if (/bet\s*slip|betslip|total\s*stake|place\s*(a\s*)?bet|베팅\s*슬립|총\s*베팅|potential\s*win/i.test(scope)) score += 220;
       const blob = `${field.id || ''} ${field.className || ''} ${field.placeholder || ''} ${field.getAttribute?.('aria-label') || ''}`;
+      if (field.id === 'counter' || /CounterSecondary_input|counter__input/i.test(String(field.className || ''))) score += 200;
       if (/USDT|stake|amount|counter|베팅|wager/i.test(blob)) score += 90;
       if (field.getAttribute?.('inputmode') === 'decimal' || field.type === 'number' || field.inputMode === 'decimal') score += 50;
       const r = field.getBoundingClientRect?.();
@@ -164,6 +193,44 @@
       if (score > bestScore) { bestScore = score; best = field; }
     }
     return best || fields[0];
+  }
+
+  async function commitStakeInput(inp) {
+    if (!inp) return;
+    try {
+      inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+      inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+    } catch (_) {}
+    try {
+      inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Tab', code: 'Tab', keyCode: 9 }));
+      inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Tab', code: 'Tab', keyCode: 9 }));
+    } catch (_) {}
+    inp.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    let clicked = false;
+    walkNodes(document.documentElement, (node) => {
+      if (clicked || node.nodeType !== 1) return;
+      const t = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > 50) return;
+      if (!/총\s*베팅|예상\s*당첨|total\s*stake|potential\s*win/i.test(t)) return;
+      try { node.click?.(); clicked = true; } catch (_) {}
+    }, 0);
+    await new Promise((r) => setTimeout(r, 160));
+  }
+
+  function applyExecInsert(el, text) {
+    const str = String(text);
+    el.focus?.();
+    try { el.click?.(); } catch (_) {}
+    try {
+      el.select?.();
+      document.execCommand('selectAll', false, null);
+      if (document.execCommand('insertText', false, str)) {
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertText' }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+    } catch (_) {}
+    applyNativeValue(el, str);
   }
 
   function applyNativeValue(el, text) {
@@ -223,23 +290,27 @@
     if (!inp) return { ok: false, reason: 'stake-input-missing' };
 
     const attempts = [
-      () => applyNativeValue(inp, str),
-      () => typeChars(inp, str),
-      () => applyNativeValue(inp, `${str} USDT`)
+      async () => { applyExecInsert(inp, str); await commitStakeInput(inp); },
+      async () => { applyNativeValue(inp, str); await commitStakeInput(inp); },
+      async () => { await typeChars(inp, str); await commitStakeInput(inp); },
+      async () => { applyNativeValue(inp, `${str} USDT`); await commitStakeInput(inp); }
     ];
     for (let i = 0; i < attempts.length; i++) {
       await attempts[i]();
-      await new Promise((r) => setTimeout(r, i === 1 ? 120 : 70));
-      const stake = readStakeValue(inp);
-      if (stake > 0 && Math.abs(stake - rounded) < 0.2) {
-        return { ok: true, stake, method: ['native', 'chars', 'usdt'][i], target: rounded };
+      await new Promise((r) => setTimeout(r, i === 2 ? 180 : 120));
+      const accepted = readAcceptedStake(inp);
+      if (accepted > 0 && Math.abs(accepted - rounded) < 0.2) {
+        const totals = readSlipTotals();
+        return { ok: true, stake: accepted, payout: totals.payout || null, method: ['exec', 'native', 'chars', 'usdt'][i], target: rounded };
       }
     }
-    const finalStake = readStakeValue(inp);
+    const accepted = readAcceptedStake(inp);
+    const inputVal = readStakeValue(inp);
     return {
-      ok: finalStake > 0 && Math.abs(finalStake - rounded) < 0.5,
-      stake: finalStake,
-      reason: finalStake > 0 ? 'stake-partial' : 'stake-not-accepted',
+      ok: accepted > 0 && Math.abs(accepted - rounded) < 0.5,
+      stake: accepted || inputVal,
+      inputVal,
+      reason: accepted > 0 ? 'stake-partial' : 'stake-not-accepted',
       target: rounded
     };
   }
@@ -265,9 +336,13 @@
     if (!hasSlipMarkers(text)) return null;
 
     let stake = 0;
-    let m = text.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+    let m = text.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
     if (m) stake = pm(m[1]);
     if (!stake) {
+      m = text.match(/total\s*stake[^\d]{0,16}([\d,]+(?:\.\d+)?)/i);
+      if (m) stake = pm(m[1]);
+    }
+    if (!stake && !/베팅\s*슬립|betslip/i.test(text)) {
       for (const hit of text.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
         const v = pm(hit[1]);
         if (v >= 0.1 && v <= 50000) { stake = v; break; }
@@ -275,7 +350,7 @@
     }
 
     let payout = 0;
-    m = text.match(/예상\s*당첨\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+    m = text.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
     if (m) payout = pm(m[1]);
     if (!payout) {
       m = text.match(/(?:potential\s*win|to\s*win|total\s*win)[^\d]{0,30}([\d,]+(?:\.\d+)?)/i);

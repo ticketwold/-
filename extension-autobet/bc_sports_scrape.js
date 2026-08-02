@@ -269,7 +269,7 @@
       if (v > 0 && v < 100000) return v;
     }
     const raw = ((scope || findSlipRoot() || document.body)?.innerText || '').replace(/\s+/g, ' ');
-    const m = raw.match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);
+    const m = raw.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);
     if (m) return parseMoney(m[1]);
     return 0;
   }

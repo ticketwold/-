@@ -419,6 +419,12 @@ async function liveAmountSync(force) {
     amountSyncQueued = false;
     if (polyPreSynced) {
       $('statusHint').textContent = `동기화 OK — ${leg2PrefLabel(cfg.leg2)} $${snap.polyUsd.toFixed(2)} · ${leg1Label()} ${cfg.btiBetKrw.toLocaleString()}원`;
+    } else if (!polyRes?.ok) {
+      const detail = polyRes?.inputVal && polyRes?.stake && Math.abs(polyRes.inputVal - polyRes.stake) > 0.2
+        ? ` (입력 ${polyRes.inputVal} ≠ 총베팅 ${polyRes.stake})`
+        : '';
+      $('statusHint').textContent = (polyRes?.reason || 'BC.Game 금액 동기화 실패 — 슬립 금액란 확인') + detail;
+      logLine((polyRes?.reason || 'BC.Game 금액 동기화 실패') + detail, 'err');
     }
     setTimeout(() => refreshOddsLive(), 120);
   } catch (e) {
