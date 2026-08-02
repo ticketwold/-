@@ -84,7 +84,7 @@
 
   function shouldWatch(url) {
     const u = String(url || '');
-    return /bet|slip|sport|wager|stake|odd|coupon|ticket|selection|wager|bc\.game/i.test(u);
+    return /betby|slip|sport|wager|stake|odd|coupon|ticket|sptsportscdn|selection|bc\.game/i.test(u);
   }
 
   const _fetch = window.fetch;

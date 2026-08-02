@@ -2243,4 +2243,4 @@ try {
   }
 })();
 
-console.log(`[BC.Game v${chrome.runtime.getManifest().version}] content script loaded (${isBcSportsPage() ? 'sports' : 'predictions'}) — BetBy iframe은 betby/sptpub 도메인에 별도 주입`);
+console.log(`[BC.Game v${chrome.runtime.getManifest().version}] content script loaded (${isBcSportsPage() ? 'sports' : 'predictions'}) — BetBy: sptsportscdn/sptpub iframe`);

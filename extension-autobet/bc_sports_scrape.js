@@ -477,7 +477,7 @@
   window.__bcSetStake = setStakeAmount;
   window.__bcPlaceSportsBet = placeBcSportsBet;
 
-  if (/betby|sptpub|biahosted/i.test(location.hostname)) {
+  if (/betby|sptpub|biahosted|sptsportscdn|cocoesports/i.test(location.hostname)) {
     console.log(`[BC.Game BetBy frame scrape v${SCRAPE_VER}] ${location.hostname}`);
   }
 })();

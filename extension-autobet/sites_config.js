@@ -149,12 +149,15 @@ function scoreBtiFrameUrl(url) {
   return score;
 }
 
-function scoreBcLeg2FrameUrl(url, tabUrl) {
+function isBcBetbyFrameUrl(url) {
+  return /betby|sptpub|biahosted|sptsportscdn|cocoesports|sportradar|invisiblesport|bt-renderer/i.test(url || '');
+}
   if (!url) return 0;
   if (/tracker\.html|amazon-ivs|widgets?\.|doubleclick|googlesyndication/i.test(url)) return -200;
   let score = scoreBtiFrameUrl(url);
   if (/bti-sports\.(io|com)/i.test(url)) score += 90;
-  if (/betby|sptpub|sportradar|invisiblesport/i.test(url)) score += 70;
+  if (/betby|sptpub|sportradar|invisiblesport|sptsportscdn|cocoesports/i.test(url)) score += 70;
+  if (/sptsportscdn|bt-renderer|renderer/i.test(url)) score += 90;
   if (/renderer|sportsbook|\/bt\/|master_fe|Selections_selection/i.test(url)) score += 50;
   if (tabUrl && isBcGameSportsUrl(tabUrl) && score > 0) score += 25;
   if (isBcGameUrl(url) && /\/sports/i.test(url || '')) score += 15;

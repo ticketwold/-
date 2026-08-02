@@ -76,7 +76,7 @@ async function readBcSportsPerFrameDeep(polyTab) {
         delete slip.ok;
         if (isTrustedBcSlip(slip)) {
           let s = scorePolySlip(slip);
-          if (/betby|sptpub|biahosted|renderer/i.test(frameUrl)) s += 100;
+          if (typeof isBcBetbyFrameUrl === 'function' ? isBcBetbyFrameUrl(frameUrl) : /betby|sptpub|biahosted|sptsportscdn|cocoesports|renderer/i.test(frameUrl)) s += 100;
           if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
         }
       }
@@ -95,7 +95,7 @@ async function readBcSportsPerFrameDeep(polyTab) {
         delete slip.ok;
         if (isTrustedBcSlip(slip)) {
           let s = scorePolySlip(slip);
-          if (/betby|sptpub|biahosted|renderer/i.test(frameUrl)) s += 100;
+          if (typeof isBcBetbyFrameUrl === 'function' ? isBcBetbyFrameUrl(frameUrl) : /betby|sptpub|biahosted|sptsportscdn|cocoesports|renderer/i.test(frameUrl)) s += 100;
           if (s > (best?._score ?? -1)) best = { ...slip, frameId, frameUrl, _score: s };
         }
       }
@@ -600,8 +600,8 @@ async function injectBcSlipAllFrames(tabId) {
         if (!isTrustedBcSlip(slip)) continue;
         let s = scorePolySlip(slip);
         const frameUrl = frames.find((f) => f.frameId === frameId)?.url || '';
-        if (/betby|sptpub|biahosted|bti-sports/i.test(frameUrl)) s += 120;
-        if (frameId > 0 && /betby|sptpub|biahosted/i.test(frameUrl)) s += 80;
+        if (typeof isBcBetbyFrameUrl === 'function' ? isBcBetbyFrameUrl(frameUrl) : /betby|sptpub|biahosted|sptsportscdn|cocoesports|bti-sports/i.test(frameUrl)) s += 120;
+        if (frameId > 0 && (typeof isBcBetbyFrameUrl === 'function' ? isBcBetbyFrameUrl(frameUrl) : /betby|sptpub|biahosted|sptsportscdn|cocoesports/i.test(frameUrl))) s += 80;
         const prev = byFrame.get(frameId);
         if (!prev || s > prev._score) byFrame.set(frameId, { ...slip, frameId, frameUrl, _score: s });
       }
@@ -755,11 +755,11 @@ async function probeBcSlipFrames(polyTab) {
     for (const f of frames) {
       if (seen.has(f.frameId)) continue;
       const url = (f.url || '').replace(/^https?:\/\//, '').slice(0, 72);
-      if (f.frameId !== 0 && !/bc\.game|betby|sptpub|biahosted|bti-sports/i.test(url)) continue;
+      if (f.frameId !== 0 && !/bc\.game|betby|sptpub|biahosted|sptsportscdn|cocoesports|bti-sports/i.test(url)) continue;
       out.push({ frameId: f.frameId, url, odds: null, kind: isBcFrameSkippable(f.url) ? 'skip-tracker' : 'no-inject', inputs: 0, len: 0, flags: '' });
     }
     out.sort((a, b) => (b.odds || 0) - (a.odds || 0));
-    return out.filter((p) => p.frameId === 0 || /bc\.game|betby|sptpub|biahosted|bti-sports/i.test(p.url || ''));
+    return out.filter((p) => p.frameId === 0 || /bc\.game|betby|sptpub|biahosted|sptsportscdn|cocoesports|bti-sports/i.test(p.url || ''));
   } catch (e) {
     return [{ frameId: -1, url: '', odds: null, kind: e.message || 'probe-fail' }];
   }
