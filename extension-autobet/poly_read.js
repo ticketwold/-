@@ -421,6 +421,14 @@ function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
 
 function mergePolySlipWithCache(tabId, slip) {
   slip = normalizePolySlip(slip);
+  if (slip?.odds > 1) {
+    const cached = getCachedPolyOdds(tabId, 8000);
+    if (cached?.odds > 1 && typeof stabilizeSportsOdds === 'function') {
+      slip = { ...slip, odds: stabilizeSportsOdds(cached.odds, slip.odds) };
+    } else if (typeof normalizeSportsOdds === 'function') {
+      slip = { ...slip, odds: normalizeSportsOdds(slip.odds) || slip.odds };
+    }
+  }
   if (slip?.odds > 1 && isStrikeBcSlip(slip)) {
     cachePolyOdds(tabId, slip);
     return slip;
@@ -444,7 +452,11 @@ function mergePolySlipWithCache(tabId, slip) {
 
 function normalizePolySlip(slip) {
   if (!slip) return slip;
-  if (slip.odds > 1) return slip;
+  if (slip.odds > 1) {
+    const n = typeof normalizeSportsOdds === 'function' ? normalizeSportsOdds(slip.odds) : slip.odds;
+    if (n) return { ...slip, odds: n };
+    return slip;
+  }
   const cents = slip.priceCents || (slip.price > 0 && slip.price < 1 ? slip.price * 100 : null);
   if (cents > 0 && cents < 100) {
     const odds = 100 / cents;

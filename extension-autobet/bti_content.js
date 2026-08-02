@@ -2016,24 +2016,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ── MutationObserver: BTI 배당/슬립 변화 즉시 감지 ──
 (function startBtiObserver() {
   let lastOddsKey = '';
+  let lastStableBtiOdds = 0;
   let pending = false;
 
   function oddsKey(slip) {
     if (!slip?.odds || slip.odds <= 1) return '';
-    return `${slip.odds}_${slip.marketKey || ''}_${slip.selectionText || ''}_${slip.teamLabel || ''}`;
+    const o = Math.round(slip.odds * 100) / 100;
+    return `${o.toFixed(2)}_${slip.marketKey || ''}_${slip.selectionText || ''}_${slip.teamLabel || ''}`;
+  }
+
+  function stabilizeBtiSlip(slip) {
+    if (!slip?.odds || slip.odds <= 1) return slip;
+    let o = Math.round(slip.odds * 100) / 100;
+    if (lastStableBtiOdds > 1 && Math.abs(o - lastStableBtiOdds) < 0.02) {
+      o = lastStableBtiOdds;
+    } else {
+      lastStableBtiOdds = o;
+    }
+    return o === slip.odds ? slip : { ...slip, odds: o };
   }
 
   function checkAndNotify() {
-    const slip = readBtiOdds();
-    if (!slip || !slip.odds || slip.odds <= 1) {
+    const raw = readBtiOdds();
+    if (!raw || !raw.odds || raw.odds <= 1) {
       if (lastOddsKey !== '') {
         lastOddsKey = '';
+        lastStableBtiOdds = 0;
         try {
           chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, suspended: true });
         } catch (e) {}
       }
       return;
     }
+    const slip = stabilizeBtiSlip(raw);
     const key = oddsKey(slip);
     if (key === lastOddsKey) return;
     lastOddsKey = key;

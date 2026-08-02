@@ -251,6 +251,7 @@ function parseBcNativeSlipText(raw) {
   if (!(odds > 1.01)) return null;
   const confirmed = stake > 0 && payout > stake;
   if (!confirmed && !teamLabel && !eventText) return null;
+  odds = Math.round(odds * 100) / 100;
   return { odds, teamLabel, eventText, stake: stake || null, payout: payout || null };
 }
 
@@ -2395,18 +2396,31 @@ try {
 
 (function observe() {
   let last = '';
+  let lastStableOdds = 0;
   let pending = false;
 
   function slipKey(slip) {
     if (!slip) return '';
-    const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
-    const c = slip.priceCents > 0 ? slip.priceCents.toFixed(2) : 'c';
-    return `${c}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}_${slip.pendingToWin ? 'p' : ''}`;
+    const o = slip.odds > 1 ? (Math.round(slip.odds * 100) / 100) : 0;
+    const c = slip.priceCents > 0 ? slip.priceCents.toFixed(1) : 'c';
+    return `${o.toFixed(2)}_${c}_${slip.teamLabel || ''}_${slip.pendingToWin ? 'p' : ''}`;
+  }
+
+  function stabilizeObservedOdds(slip) {
+    if (!slip?.odds || slip.odds <= 1) return slip;
+    let o = Math.round(slip.odds * 100) / 100;
+    if (lastStableOdds > 1 && Math.abs(o - lastStableOdds) < 0.02) {
+      o = lastStableOdds;
+    } else {
+      lastStableOdds = o;
+    }
+    return o === slip.odds ? slip : { ...slip, odds: o };
   }
 
   function tick() {
-    const slip = readLeg2Slip();
-    if (!slip) return;
+    const raw = readLeg2Slip();
+    if (!raw) return;
+    const slip = stabilizeObservedOdds(raw);
     const key = slipKey(slip);
     if (key === last) return;
     last = key;

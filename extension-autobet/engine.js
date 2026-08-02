@@ -1024,8 +1024,8 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   const arbBti = await readBtiOddsOnce(found.btiTab, poly);
   const bti = arbBti;
 
-  const polyO = poly?.odds > 1 && isStrikeBcSlip(poly) ? poly.odds : null;
-  const btiO = arbBti?.odds > 1 ? arbBti.odds : null;
+  const polyO = poly?.odds > 1 && isStrikeBcSlip(poly) ? normalizeSportsOdds(poly.odds) : null;
+  const btiO = arbBti?.odds > 1 ? normalizeSportsOdds(arbBti.odds) : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
 

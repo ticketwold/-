@@ -8,6 +8,7 @@ const AMOUNT_SYNC_ARMED_MS = 80;
 const PANEL_LOOP_MS = 400;
 const PANEL_LOOP_ARMED_MS = 16;
 const ODDS_GAP_FILL_MS = 5000;
+const ODDS_STABLE_EPS = typeof ODDS_MIN_CHANGE === 'number' ? ODDS_MIN_CHANGE : 0.02;
 
 const $ = (id) => document.getElementById(id);
 
@@ -197,12 +198,15 @@ function applyInstantOdds(msg) {
   if (!msg?.slip?.odds || msg.slip.odds <= 1) return false;
   if (msg.source !== 'bti' && typeof isStrikeBcSlip === 'function' && !isStrikeBcSlip(msg.slip)) return false;
   const cfg = getConfig();
-  const o = msg.slip.odds;
+  const o = normalizeSportsOdds(msg.slip.odds);
+  if (!o) return false;
   const now = Date.now();
   if (msg.source === 'bti') {
+    if (lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.btiO = o;
     lastKnownOdds.btiAt = now;
   } else {
+    if (lastKnownOdds.polyO > 1 && !oddsChangedSignificantly(lastKnownOdds.polyO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.polyO = o;
     lastKnownOdds.polyAt = now;
     lastKnownOdds.polyTrusted = true;
@@ -229,15 +233,27 @@ function updateStatusFromSnap(snap, cfg) {
 function stabilizeSnap(snap, cfg) {
   const now = Date.now();
   if (snap.btiO > 1) {
-    lastKnownOdds.btiO = snap.btiO;
-    lastKnownOdds.btiAt = now;
+    const next = normalizeSportsOdds(snap.btiO);
+    if (lastKnownOdds.btiO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.btiO, next, ODDS_STABLE_EPS)) {
+      snap.btiO = lastKnownOdds.btiO;
+    } else if (next) {
+      snap.btiO = next;
+      lastKnownOdds.btiO = next;
+      lastKnownOdds.btiAt = now;
+    }
   } else if (lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
     snap.btiO = lastKnownOdds.btiO;
   }
   if (snap.polyO > 1 && (typeof isStrikeBcSlip === 'function' ? isStrikeBcSlip(snap.poly) : isTrustedBcSlip(snap.poly))) {
-    lastKnownOdds.polyO = snap.polyO;
-    lastKnownOdds.polyAt = now;
-    lastKnownOdds.polyTrusted = true;
+    const next = normalizeSportsOdds(snap.polyO);
+    if (lastKnownOdds.polyO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.polyO, next, ODDS_STABLE_EPS)) {
+      snap.polyO = lastKnownOdds.polyO;
+    } else if (next) {
+      snap.polyO = next;
+      lastKnownOdds.polyO = next;
+      lastKnownOdds.polyAt = now;
+      lastKnownOdds.polyTrusted = true;
+    }
   } else if (snap.reason && /BC\.Game.*(배당|슬립)/.test(snap.reason)) {
     lastKnownOdds.polyO = null;
     lastKnownOdds.polyAt = 0;
@@ -388,8 +404,8 @@ function needsAmountResync(snap, cfg) {
   if (!snap?.polyUsd || !snap.btiO || !snap.polyO) return false;
   if (Math.abs(snap.polyUsd - lastSynced.polyUsd) >= 0.01) return true;
   if (cfg.btiBetKrw !== lastSynced.btiKrw) return true;
-  if (Math.abs((snap.btiO || 0) - lastSynced.btiO) > 0.003) return true;
-  if (Math.abs((snap.polyO || 0) - lastSynced.polyO) > 0.003) return true;
+  if (Math.abs((snap.btiO || 0) - lastSynced.btiO) > ODDS_STABLE_EPS) return true;
+  if (Math.abs((snap.polyO || 0) - lastSynced.polyO) > ODDS_STABLE_EPS) return true;
   return Date.now() - lastSynced.at > 1000;
 }
 

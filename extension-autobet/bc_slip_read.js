@@ -75,6 +75,23 @@
   }
 
   /** 슬립 텍스트에서 단일 배당 추출 — 보드의 12.1 같은 오탐 대신 1.31 같은 실제 슬립 배당 우선 */
+  let lastPickStableOdds = 0;
+
+  function roundOdds(n) {
+    const v = parseFloat(n);
+    if (!Number.isFinite(v) || v <= 1.01 || v >= 100) return null;
+    return Math.round(v * 100) / 100;
+  }
+
+  function stabilizePickedOdds(next) {
+    const n = roundOdds(next);
+    if (!n) return null;
+    const p = roundOdds(lastPickStableOdds);
+    if (p && Math.abs(n - p) < 0.02) return p;
+    lastPickStableOdds = n;
+    return n;
+  }
+
   function pickBestSlipOdds(text, opts) {
     const stake = opts?.stake || 0;
     const payout = opts?.payout || 0;
@@ -87,7 +104,7 @@
       t.match(/(?:coefficient|decimal\s*odds?)\s*[:@=]?\s*(\d+\.\d{2,3})/i),
       t.match(/(?:odds?)\s*[:@]\s*(\d+\.\d{2,3})/i)
     ].map((m) => (m ? po(m[1]) : null)).filter(Boolean);
-    if (labeled.length) return labeled[0];
+    if (labeled.length) return stabilizePickedOdds(labeled[0]);
 
     const skip = new Set([stake, payout, 10, 20, 50, 100, 300].filter((n) => n > 0));
     const nums = [...t.matchAll(/\b(\d+\.\d{1,3})\b/g)]
@@ -95,13 +112,23 @@
       .filter((n) => n && !skip.has(n) && Math.abs(n - stake) > 0.4);
     if (!nums.length) return null;
 
+    const prefer = opts?.preferOdds > 1 ? opts.preferOdds : lastPickStableOdds;
     const plausible = nums.filter((n) => n >= 1.01 && n <= maxSingle);
-    if (plausible.length) return Math.min(...plausible);
+    if (plausible.length) {
+      if (prefer > 1) {
+        const close = plausible.filter((n) => Math.abs(n - prefer) < 0.12);
+        if (close.length) {
+          const best = close.reduce((a, b) => (Math.abs(a - prefer) <= Math.abs(b - prefer) ? a : b));
+          return stabilizePickedOdds(best);
+        }
+      }
+      return stabilizePickedOdds(Math.min(...plausible));
+    }
 
     const sportsRange = nums.filter((n) => n >= 1.01 && n < 20);
-    if (sportsRange.length) return Math.min(...sportsRange);
+    if (sportsRange.length) return stabilizePickedOdds(Math.min(...sportsRange));
 
-    return nums[nums.length - 1];
+    return stabilizePickedOdds(nums[nums.length - 1]);
   }
 
   function isBcHistoryText(t) {

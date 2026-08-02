@@ -99,6 +99,35 @@ function krwToUsd(krw, rate) {
   return Math.round((krw / r) * 100) / 100;
 }
 
+/** 스포츠 배당 최소 유의 변동 — 이보다 작으면 노이즈로 간주 */
+const ODDS_MIN_CHANGE = 0.02;
+
+function normalizeSportsOdds(o) {
+  const n = parseFloat(o);
+  if (!Number.isFinite(n) || n <= 1.01 || n >= 100) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function oddsDelta(a, b) {
+  return Math.abs((normalizeSportsOdds(a) || 0) - (normalizeSportsOdds(b) || 0));
+}
+
+function oddsChangedSignificantly(prev, next, eps = ODDS_MIN_CHANGE) {
+  const n = normalizeSportsOdds(next);
+  if (!n) return false;
+  const p = normalizeSportsOdds(prev);
+  if (!p) return true;
+  return oddsDelta(p, n) >= eps;
+}
+
+function stabilizeSportsOdds(prev, next, eps = ODDS_MIN_CHANGE) {
+  const n = normalizeSportsOdds(next);
+  if (!n) return normalizeSportsOdds(prev);
+  const p = normalizeSportsOdds(prev);
+  if (!p) return n;
+  return oddsDelta(p, n) < eps ? p : n;
+}
+
 function resolveTotalPayout(stake, toWinDisplay) {
   if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
   return toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
