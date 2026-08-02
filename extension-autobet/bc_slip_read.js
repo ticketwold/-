@@ -1,6 +1,6 @@
 // bc_slip_read.js — CSP-safe isolated-world BC.Game 슬립 파서
 (function () {
-  const VER = 8;
+  const VER = 9;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -124,13 +124,124 @@
     walkNodes(document.documentElement, (node) => {
       if (node.nodeType !== 1) return;
       const tag = node.tagName;
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(tag === 'DIV' && node.isContentEditable)) return;
+      const editable = tag === 'DIV' && (node.isContentEditable || node.getAttribute?.('contenteditable') === 'true');
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !editable) return;
       const val = String(node.value ?? node.textContent ?? node.getAttribute?.('value') ?? '').trim();
-      const blob = `${val} ${node.placeholder || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''}`;
-      if (/search|검색|email|password/i.test(blob)) return;
-      if (/USDT|usdt|stake|amount|베팅|counter|bet/i.test(blob) || /\d/.test(val)) fields.push(node);
+      const blob = `${val} ${node.placeholder || ''} ${node.getAttribute?.('aria-label') || ''} ${node.className || ''} ${node.id || ''}`;
+      if (/search|검색|email|password|login|phone/i.test(blob)) return;
+      if (/USDT|usdt|stake|amount|베팅|counter|bet|wager|inputmode/i.test(blob) || node.getAttribute?.('inputmode') === 'decimal' || /\d/.test(val)) {
+        fields.push(node);
+      }
     }, 0);
     return fields;
+  }
+
+  function readStakeValue(field) {
+    if (!field) return 0;
+    const raw = field.value ?? field.textContent ?? field.getAttribute?.('value') ?? '';
+    const m = String(raw).replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
+    const v = m ? parseFloat(m[1]) : 0;
+    return Number.isFinite(v) && v > 0 && v < 100000 ? v : 0;
+  }
+
+  function findBestStakeInput() {
+    const fields = collectStakeFields();
+    if (!fields.length) return null;
+    let best = null;
+    let bestScore = -1;
+    const vw = window.innerWidth || 1200;
+    for (const field of fields) {
+      let score = 0;
+      const scope = scopeTextFromEl(field);
+      if (/bet\s*slip|betslip|total\s*stake|place\s*(a\s*)?bet|베팅\s*슬립|총\s*베팅|potential\s*win/i.test(scope)) score += 220;
+      const blob = `${field.id || ''} ${field.className || ''} ${field.placeholder || ''} ${field.getAttribute?.('aria-label') || ''}`;
+      if (/USDT|stake|amount|counter|베팅|wager/i.test(blob)) score += 90;
+      if (field.getAttribute?.('inputmode') === 'decimal' || field.type === 'number' || field.inputMode === 'decimal') score += 50;
+      const r = field.getBoundingClientRect?.();
+      if (r && r.width > 30 && r.height > 8) score += 25;
+      if (r && r.x > vw * 0.5) score += 70;
+      if (field === document.activeElement) score += 20;
+      if (score > bestScore) { bestScore = score; best = field; }
+    }
+    return best || fields[0];
+  }
+
+  function applyNativeValue(el, text) {
+    const str = String(text);
+    el.focus?.();
+    try { el.click?.(); } catch (_) {}
+    if (el.isContentEditable || el.getAttribute?.('contenteditable') === 'true') {
+      el.textContent = str;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      return;
+    }
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    try {
+      el.select?.();
+      document.execCommand?.('selectAll', false, null);
+    } catch (_) {}
+    if (setter) setter.call(el, '');
+    else el.value = '';
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    if (setter) setter.call(el, str);
+    else el.value = str;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  }
+
+  async function typeChars(el, text) {
+    const str = String(text);
+    el.focus?.();
+    try { el.select?.(); } catch (_) {}
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, '');
+    else el.value = '';
+    for (const ch of str) {
+      const cur = el.value || '';
+      const next = cur + ch;
+      if (setter) setter.call(el, next);
+      else el.value = next;
+      el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ch }));
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ch }));
+      await new Promise((r) => setTimeout(r, 18));
+    }
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  }
+
+  async function setStakeAmount(amount) {
+    const rounded = Math.max(0.01, Math.round(Number(amount) * 100) / 100);
+    const str = String(rounded);
+    const inp = findBestStakeInput();
+    if (!inp) return { ok: false, reason: 'stake-input-missing' };
+
+    const attempts = [
+      () => applyNativeValue(inp, str),
+      () => typeChars(inp, str),
+      () => applyNativeValue(inp, `${str} USDT`)
+    ];
+    for (let i = 0; i < attempts.length; i++) {
+      await attempts[i]();
+      await new Promise((r) => setTimeout(r, i === 1 ? 120 : 70));
+      const stake = readStakeValue(inp);
+      if (stake > 0 && Math.abs(stake - rounded) < 0.2) {
+        return { ok: true, stake, method: ['native', 'chars', 'usdt'][i], target: rounded };
+      }
+    }
+    const finalStake = readStakeValue(inp);
+    return {
+      ok: finalStake > 0 && Math.abs(finalStake - rounded) < 0.5,
+      stake: finalStake,
+      reason: finalStake > 0 ? 'stake-partial' : 'stake-not-accepted',
+      target: rounded
+    };
   }
 
   function scopeTextFromEl(start) {
@@ -620,4 +731,6 @@
   window.__bcSlipReadVer = VER;
   window.__bcReadNativeSlip = readNativeSlip;
   window.__bcDiagReport = diagReport;
+  window.__bcSetStake = setStakeAmount;
+  window.__bcReadStake = () => readStakeValue(findBestStakeInput());
 })();

@@ -1,6 +1,6 @@
 // bc_sports_scrape.js — BC.Game 네이티브 슬립 + Betby/BTi MAIN world 스크랩
 (function () {
-  const SCRAPE_VER = 12;
+  const SCRAPE_VER = 13;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -475,18 +475,37 @@
     const inp = findStakeInput();
     if (!inp) return { ok: false, reason: 'stake-input-missing' };
     const str = String(rounded);
-    inp.focus?.();
-    inp.value = str;
-    inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
-    inp.dispatchEvent(new Event('change', { bubbles: true }));
+    const proto = inp instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+    function apply(val) {
+      inp.focus?.();
+      try { inp.click?.(); } catch (_) {}
+      if (setter) setter.call(inp, val);
+      else inp.value = val;
+      inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: val, inputType: 'insertFromPaste' }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    }
+
+    apply(str);
     let stake = readStake();
     if (!stake || Math.abs(stake - rounded) > 0.5) {
-      inp.value = `${str} USDT`;
-      inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      apply(`${str} USDT`);
       stake = readStake();
     }
-    return { ok: stake > 0, stake, method: 'native-usdt', target: rounded };
+    if (!stake || Math.abs(stake - rounded) > 0.5) {
+      for (const ch of str) {
+        const next = (inp.value || '') + ch;
+        if (setter) setter.call(inp, next);
+        else inp.value = next;
+        inp.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+      }
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      stake = readStake();
+    }
+    return { ok: stake > 0 && Math.abs(stake - rounded) < 0.5, stake, method: 'native-usdt', target: rounded };
   }
 
   function findBetButton() {

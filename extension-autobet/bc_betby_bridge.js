@@ -75,17 +75,17 @@
     try {
       const d = e?.data;
       if (!d || typeof d !== 'object') return;
-      const slip = window.__bcApiSlip;
-      if (typeof window.__bcApiHooked === 'undefined') return;
       const odds = parseFloat(d.odds ?? d.price ?? d.coefficient ?? d.decimalOdds);
       if (!(odds > 1.01 && odds < 100)) return;
+      const stake = parseFloat(d.stake ?? d.amount);
+      const payout = parseFloat(d.payout ?? d.potentialWin ?? d.toWin);
       window.__bcApiSlip = {
         odds,
-        stake: parseFloat(d.stake ?? d.amount) || null,
-        payout: parseFloat(d.payout ?? d.potentialWin ?? d.toWin) || null,
+        stake: Number.isFinite(stake) && stake > 0 ? stake : null,
+        payout: Number.isFinite(payout) && payout > 0 ? payout : null,
         source: 'bcgame',
         sourceKind: 'bc-api',
-        fromPayout: false,
+        fromPayout: !!(stake > 0 && payout > stake),
         capturedAt: Date.now(),
         via: 'postMessage-bridge'
       };

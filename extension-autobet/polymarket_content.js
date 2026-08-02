@@ -55,25 +55,58 @@ function getDeepPageText() {
 }
 
 function findBcSportsStakeInput() {
-  const direct = document.getElementById('counter')
-    || document.querySelector('input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[placeholder*="Stake"], input[class*="counter"], input[class*="Counter"]');
-  if (direct && visible(direct)) return direct;
-
-  for (const inp of document.querySelectorAll('input, textarea')) {
-    if (!visible(inp)) continue;
-    const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''} ${inp.getAttribute('aria-label') || ''} ${inp.value || ''}`;
-    if (/search|검색|email|password/i.test(blob)) continue;
-    if (/USDT|usdt|counter|Counter|베팅|stake|amount|bet/i.test(blob)) return inp;
-    const parentText = (inp.parentElement?.textContent || '').slice(0, 120);
-    if (/USDT|총\s*베팅|베팅\s*금액/i.test(parentText)) return inp;
+  const candidates = [];
+  function walk(node, depth) {
+    if (!node || depth > 120) return;
+    if (node.nodeType === 1) {
+      const tag = node.tagName;
+      const editable = tag === 'DIV' && (node.isContentEditable || node.getAttribute?.('contenteditable') === 'true');
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || editable) {
+        if (visible(node)) candidates.push(node);
+      }
+      let sr = node.shadowRoot;
+      if (!sr && typeof chrome !== 'undefined' && chrome.dom?.openOrClosedShadowRoot) {
+        try { sr = chrome.dom.openOrClosedShadowRoot(node); } catch (_) {}
+      }
+      if (sr) walk(sr, depth + 1);
+      for (const c of node.childNodes) walk(c, depth + 1);
+      return;
+    }
+    if (node.nodeType === 11) {
+      for (const c of node.childNodes) walk(c, depth + 1);
+    }
   }
-  return null;
+  walk(document.documentElement, 0);
+
+  let best = null;
+  let bestScore = -1;
+  const vw = window.innerWidth || 1200;
+  for (const inp of candidates) {
+    const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''} ${inp.getAttribute?.('aria-label') || ''} ${inp.value || ''}`;
+    if (/search|검색|email|password|login|phone/i.test(blob)) continue;
+    let score = 0;
+    let el = inp;
+    let scope = '';
+    for (let i = 0; i < 12 && el; i++) {
+      scope += ` ${(el.innerText || el.textContent || '').slice(0, 200)}`;
+      el = el.parentElement || el.getRootNode?.()?.host || null;
+    }
+    if (/bet\s*slip|betslip|total\s*stake|place\s*(a\s*)?bet|베팅\s*슬립|총\s*베팅/i.test(scope)) score += 200;
+    if (/USDT|usdt|counter|Counter|베팅|stake|amount|bet|wager/i.test(blob)) score += 80;
+    if (inp.getAttribute?.('inputmode') === 'decimal' || inp.inputMode === 'decimal') score += 40;
+    const r = inp.getBoundingClientRect?.();
+    if (r && r.x > vw * 0.5) score += 60;
+    if (inp.id === 'counter') score += 30;
+    if (score > bestScore) { bestScore = score; best = inp; }
+  }
+  return best;
 }
 
 function readBcSportsStake() {
   const input = findBcSportsStakeInput();
   if (input) {
-    const m = String(input.value || '').replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
+    const raw = input.value ?? input.textContent ?? input.getAttribute?.('value') ?? '';
+    const m = String(raw).replace(/,/g, '').match(/([\d]+(?:\.\d+)?)/);
     if (m) {
       const v = parseFloat(m[1]);
       if (Number.isFinite(v) && v > 0 && v < 100000) return v;
@@ -391,11 +424,33 @@ async function setBcSportsAmount(amountUsd, force = true) {
     return { ok: true, stake: existing, method: 'unchanged' };
   }
 
-  await typeIntoField(input, String(rounded));
-  await sleep(80);
-  const stake = readBcSportsStake();
-  if (stake > 0) return { ok: true, stake, method: 'type', target: rounded };
-  return { ok: false, reason: `금액 입력 실패 — $${rounded} 직접 입력`, stake: existing || 0 };
+  const str = String(rounded);
+  await typeIntoField(input, str);
+  await sleep(100);
+  let stake = readBcSportsStake();
+  if (!(stake > 0) || Math.abs(stake - rounded) > 0.2) {
+    await typeIntoField(input, `${str} USDT`);
+    await sleep(100);
+    stake = readBcSportsStake();
+  }
+  if (!(stake > 0) || Math.abs(stake - rounded) > 0.2) {
+    input.focus?.();
+    for (const ch of str) {
+      const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      const next = (input.value || '') + ch;
+      if (setter) setter.call(input, next);
+      else input.value = next;
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+      await sleep(20);
+    }
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    await sleep(80);
+    stake = readBcSportsStake();
+  }
+  if (stake > 0 && Math.abs(stake - rounded) < 0.5) return { ok: true, stake, method: 'type', target: rounded };
+  return { ok: false, reason: `금액 입력 실패 — $${rounded} 직접 입력`, stake: existing || stake || 0 };
 }
 
 async function clickBcSportsOutcome(teamHint) {
@@ -1580,6 +1635,7 @@ async function typeIntoField(el, text) {
   el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
   await sleep(80);
   return true;
 }

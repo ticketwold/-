@@ -705,6 +705,26 @@ async function injectPolyMain(tabId) {
   }
 }
 
+async function setPolyAmountViaSlipRead(polyTab, amountUsd, frameId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      files: ['bc_slip_read.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [frameId] },
+      func: async (amount) => {
+        if (typeof window.__bcSetStake !== 'function') return { ok: false, reason: 'no-set-stake' };
+        return await window.__bcSetStake(amount);
+      },
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || { ok: false, reason: 'slip-read-set-fail' };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
 async function setPolyAmountViaDeep(polyTab, amountUsd, frameId) {
   try {
     await ensureBcScrapeScript(polyTab.id, frameId);
@@ -741,18 +761,35 @@ async function setPolyAmount(polyTab, amountUsd) {
     const frameIds = await orderBcLeg2FrameIds(polyTab.id, polyTab.url);
     if (lastBcLeg2Frame?.tabId === polyTab.id && !frameIds.includes(lastBcLeg2Frame.frameId)) {
       frameIds.unshift(lastBcLeg2Frame.frameId);
+    } else if (lastBcLeg2Frame?.tabId === polyTab.id) {
+      const idx = frameIds.indexOf(lastBcLeg2Frame.frameId);
+      if (idx > 0) {
+        frameIds.splice(idx, 1);
+        frameIds.unshift(lastBcLeg2Frame.frameId);
+      }
     }
     for (const frameId of frameIds.slice(0, BTI_MAX_FRAMES)) {
+      const slipRead = await setPolyAmountViaSlipRead(polyTab, amountUsd, frameId);
+      if (slipRead?.ok) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return slipRead;
+      }
       const deep = await setPolyAmountViaDeep(polyTab, amountUsd, frameId);
       if (deep?.ok) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId };
         return deep;
       }
-      await ensureBtiScript(polyTab.id, frameId);
-      const res = await sendBti(polyTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountUsd });
+      await ensurePolyScript(polyTab.id, frameId);
+      const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true }, frameId);
       if (res?.ok) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId };
         return res;
+      }
+      await ensureBtiScript(polyTab.id, frameId);
+      const btiRes = await sendBti(polyTab.id, frameId, { type: 'SET_BTI_AMOUNT', amount: amountUsd });
+      if (btiRes?.ok) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId };
+        return btiRes;
       }
     }
     return { ok: false, reason: 'BC.Game 금액 입력 실패 — 슬립 열기' };
