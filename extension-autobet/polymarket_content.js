@@ -250,13 +250,14 @@ function parseBcNativeSlipText(raw) {
 
   if (!(odds > 1.01)) return null;
   const confirmed = stake > 0 && payout > stake;
-  if (!confirmed && !teamLabel && !eventText) return null;
-  odds = Math.round(odds * 100) / 100;
+  const hasLabeledOdds = /(?:total\s*odds?|combined\s*odds?|@)\s*[:=]?\s*\d+\.\d{2,3}/i.test(text);
+  if (!confirmed && !teamLabel && !eventText && !hasLabeledOdds) return null;
+  odds = Math.round(odds * 1000) / 1000;
   return { odds, teamLabel, eventText, stake: stake || null, payout: payout || null };
 }
 
 function readNativeBcGameSlip() {
-  if (isBcSlipEmpty()) return null;
+  if (isBcSlipClosed()) return null;
 
   const slipRoot = findBcNativeSlipRoot();
   if (!slipRoot || isBcHistoryElement(slipRoot)) return null;

@@ -9,6 +9,7 @@ const PANEL_LOOP_MS = 400;
 const PANEL_LOOP_ARMED_MS = 16;
 const ODDS_GAP_FILL_MS = 5000;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
+const BTI_REAL_CHANGE_EPS = 0.03;
 
 function isScanPolySlip(slip) {
   if (typeof isScanBcSlip === 'function') return isScanBcSlip(slip);
@@ -230,7 +231,9 @@ function applyInstantOdds(msg) {
   if (!o) return false;
   const now = Date.now();
   if (msg.source === 'bti') {
-    if (lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
+    const slipSource = msg.slip?.source || '';
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched';
+    if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.btiO = o;
     lastKnownOdds.btiAt = now;
   } else {
@@ -268,8 +271,21 @@ function stabilizeSnap(snap, cfg) {
 
   if (snap.btiO > 1) {
     const next = normalizeSportsOdds(snap.btiO);
-    if (lastKnownOdds.btiO > 1 && next && !oddsChangedSignificantly(lastKnownOdds.btiO, next, ODDS_STABLE_EPS)) {
-      snap.btiO = lastKnownOdds.btiO;
+    const slipSource = snap.bti?.source || '';
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched';
+    if (lastKnownOdds.btiO > 1 && next) {
+      const delta = oddsDelta(lastKnownOdds.btiO, next);
+      if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
+        snap.btiO = next;
+        lastKnownOdds.btiO = next;
+        lastKnownOdds.btiAt = now;
+      } else if (!oddsChangedSignificantly(lastKnownOdds.btiO, next, ODDS_STABLE_EPS)) {
+        snap.btiO = lastKnownOdds.btiO;
+      } else {
+        snap.btiO = next;
+        lastKnownOdds.btiO = next;
+        lastKnownOdds.btiAt = now;
+      }
     } else if (next) {
       snap.btiO = next;
       lastKnownOdds.btiO = next;

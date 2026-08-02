@@ -225,6 +225,32 @@ function readBtiSlip(hint) {
   return best;
 }
 
+let btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+
+function finalizeBtiOdds(slip) {
+  if (!(slip?.odds > 1.01)) return slip;
+  const o = Math.round(slip.odds * 1000) / 1000;
+  const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}`;
+  const fromSlip = slip.fromSlip === true
+    || slip.source === 'slip-display'
+    || slip.source === 'slip-card'
+    || slip.source === 'slip-latched';
+
+  if (fromSlip) {
+    btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+    return { ...slip, odds: o };
+  }
+
+  if (btiOddsLatch.source === 'slip' && btiOddsLatch.key === key
+    && Date.now() - btiOddsLatch.at < 5000
+    && Math.abs(o - btiOddsLatch.odds) >= 0.015) {
+    return { ...slip, odds: btiOddsLatch.odds, source: 'slip-latched' };
+  }
+
+  btiOddsLatch = { odds: o, source: slip.source || 'board', at: Date.now(), key };
+  return { ...slip, odds: o };
+}
+
 function parseSlipFromCard(card) {
   if (!card) return null;
   if (isSlipCardSuspended(card)) return null;
@@ -243,24 +269,28 @@ function parseSlipFromCard(card) {
 
   const allText = selectionText + ' ' + mktText + ' ' + marketTitleText;
   const slipMktType = detectMarketType(allText);
+  const slipCardOdds = readOddsFromSlipCard(card);
 
-  // W1/W2 슬립 — 선택된 배당판 버튼 우선
+  // W1/W2 슬립 — 슬립 카드 배당 우선, 없을 때만 보드
   if (/^W[12]$/i.test(selectionText.trim())) {
-    let boardOdds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
-    if (!boardOdds) boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-    if (!boardOdds) {
-      const teams = parseEventTeams(eventText);
-      const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
-      const teamLabel = side === 'away' ? teams.away : teams.home;
-      if (teamLabel) boardOdds = readOddsFromBoardForSelection(teamLabel, allText, slipMktType);
+    let odds = slipCardOdds;
+    if (!odds) {
+      odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
+      if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+      if (!odds) {
+        const teams = parseEventTeams(eventText);
+        const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+        const teamLabel = side === 'away' ? teams.away : teams.home;
+        if (teamLabel) odds = readOddsFromBoardForSelection(teamLabel, allText, slipMktType);
+      }
     }
-    if (!boardOdds) return null;
+    if (!odds) return null;
     const period = 'ft';
     const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
     const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
     const teams = parseEventTeams(resolvedEventText);
     return {
-      odds: boardOdds,
+      odds: Math.round(odds * 1000) / 1000,
       eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
       marketKind: 'ml',
       period,
@@ -272,13 +302,13 @@ function parseSlipFromCard(card) {
       eventText: resolvedEventText,
       homeTeam: teams.home,
       awayTeam: teams.away,
-      fromSlip: false,
-      source: 'board-live'
+      fromSlip: !!slipCardOdds,
+      source: slipCardOdds ? 'slip-card' : 'board-live'
     };
   }
 
-  // ── 배당: 실시간 배당판만 (슬립/베팅내역 @배당 X) ──
-  let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  // 슬립 카드 배당 우선 — 보드는 카드에 배당 없을 때만
+  let odds = slipCardOdds || 0;
 
   let matchedLine = null;
   let matchedSide = null;
@@ -456,13 +486,12 @@ function parseSlipFromCard(card) {
 
   if (!odds) odds = 0;
 
-  const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-  if (boardOdds && boardOdds > 1.01) {
-    odds = Math.round(boardOdds * 100) / 100;
+  if (!odds) {
+    odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
   }
-  if (!boardOdds && isSlipCardSuspended(card)) return null;
+  if (!odds && isSlipCardSuspended(card)) return null;
   if (!odds || odds <= 1.01) return null;
-  odds = Math.round(odds * 100) / 100;
+  odds = Math.round(odds * 1000) / 1000;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
   function detectPeriod(text) {
@@ -515,7 +544,7 @@ function parseSlipFromCard(card) {
   // URL에서 이벤트 ID 추출
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
   const eventId = urlMatch ? urlMatch[1] : null;
-  const usedBoard = boardOdds > 1.01 && Math.abs(odds - boardOdds) < 0.001;
+  const fromSlipCard = !!slipCardOdds;
 
   return {
     odds,
@@ -528,8 +557,8 @@ function parseSlipFromCard(card) {
     mktText,
     selectionText,  // "언더 16", "삼성 라이온스" 등 실제 선택명 (기준점 검증용)
     eventText,      // "KIA 타이거즈 vs SSG 랜더스"
-    fromSlip: false,
-    source: usedBoard ? 'board-live' : 'board'
+    fromSlip: fromSlipCard,
+    source: fromSlipCard ? 'slip-card' : 'board-live'
   };
 }
 
@@ -647,7 +676,7 @@ function readActiveSlipDisplayOdds() {
             eventText,
             mktText: marketTitleText,
             source: 'slip-display',
-            fromSlip: false,
+            fromSlip: true,
             marketKind: mktType
           });
         }
@@ -663,27 +692,10 @@ function readActiveSlipDisplayOdds() {
             eventText,
             mktText: marketTitleText,
             source: 'slip-display',
-            fromSlip: false,
+            fromSlip: true,
             marketKind: mktType
           });
         }
-      }
-
-      const boardOdds = readOddsFromBoardForSelection(
-        selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
-        allText,
-        mktType
-      );
-      if (boardOdds > 1.01) {
-        return enrichBtiSlip({
-          odds: boardOdds,
-          selectionText,
-          eventText,
-          mktText: marketTitleText,
-          source: 'board-live',
-          fromSlip: false,
-          marketKind: mktType
-        });
       }
 
       const nums = [];
@@ -701,7 +713,7 @@ function readActiveSlipDisplayOdds() {
           eventText,
           mktText: marketTitleText,
           source: 'slip-display',
-          fromSlip: false,
+          fromSlip: true,
           marketKind: mktType
         });
       }
@@ -1751,51 +1763,69 @@ function readEmergencyBoardOdds(hint = {}) {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
-  if (!isActiveBetslipOpen()) return null;
-
-  // 1) 사용자 슬립 선택 — Poly 힌트 무시 (홈↔원정 전환 시에도 읽기)
-  if (getRealSlipCards().length > 0) {
-    const slipFromCard = readBtiSlip({ preferActiveSlip: true });
-    if (slipFromCard?.odds > 1.01) return slipFromCard;
+  if (!isActiveBetslipOpen()) {
+    btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+    return null;
   }
 
-  const slipDisplay = readActiveSlipDisplayOdds();
-  if (slipDisplay?.odds > 1.01) return slipDisplay;
+  const wrap = (slip) => (slip?.odds > 1.01 ? finalizeBtiOdds(slip) : slip);
+  const hasCards = getRealSlipCards().length > 0;
 
-  // 2) Poly 반대편 힌트로 보드 탐색 (자동 매칭)
+  // 1) 슬립 UI 배당 (UpdateNotification 등) — 보드보다 우선
+  const slipDisplay = readActiveSlipDisplayOdds();
+  if (slipDisplay?.odds > 1.01) return wrap(slipDisplay);
+
+  // 2) 슬립 카드 파싱
+  let slipFromCard = null;
+  if (hasCards) {
+    slipFromCard = readBtiSlip({ preferActiveSlip: true });
+    if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
+  }
+
+  // 슬립이 열려 있고 최근 슬립 배당이 있으면 보드로 덮어쓰지 않음
+  if (hasCards && btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
+    && Date.now() - btiOddsLatch.at < 8000) {
+    return wrap(enrichBtiSlip({
+      odds: btiOddsLatch.odds,
+      selectionText: (slipDisplay || slipFromCard)?.selectionText || '',
+      source: 'slip-latched',
+      fromSlip: true
+    }));
+  }
+
+  // 3) Poly 반대편 힌트로 보드 탐색 (자동 매칭)
   if (hintObj.excludeTeam || hintObj.polyTeam) {
     const arbSlip = readBtiSlip({ ...hintObj, forArbPick: true });
-    if (arbSlip?.odds > 1.01) return arbSlip;
+    if (arbSlip?.odds > 1.01) return wrap(arbSlip);
   }
 
   const board = readBtiBoardOdds(hintObj);
   if (board?.odds > 1.01) {
-    return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
+    return wrap(enrichBtiSlip({ ...board, source: 'board', fromSlip: false }));
   }
 
   if (hintObj.excludeTeam || hintObj.polyTeam) {
     const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
     if (plain?.odds > 1.01) {
-      return enrichBtiSlip({ ...plain, source: 'board', fromSlip: false });
+      return wrap(enrichBtiSlip({ ...plain, source: 'board', fromSlip: false }));
     }
   }
 
-  const hasCards = getRealSlipCards().length > 0;
   if (hasCards) {
     const slip = readBtiSlip({ preferActiveSlip: true });
     if (slip?.selectionText) {
       const live = readLiveBoardOddsForSlip(slip);
-      if (live?.odds > 1.01) return live;
+      if (live?.odds > 1.01) return wrap(live);
     }
   }
 
   const any = readBtiBoardOdds({});
   if (any?.odds > 1.01) {
-    return enrichBtiSlip({ ...any, source: 'board', fromSlip: false });
+    return wrap(enrichBtiSlip({ ...any, source: 'board', fromSlip: false }));
   }
 
   const emergency = readEmergencyBoardOdds(hintObj);
-  if (emergency?.odds > 1.01) return emergency;
+  if (emergency?.odds > 1.01) return wrap(emergency);
 
   return null;
 }
@@ -2028,14 +2058,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   function stabilizeBtiSlip(slip) {
-    if (!slip?.odds || slip.odds <= 1) return slip;
-    let o = Math.round(slip.odds * 1000) / 1000;
-    if (lastStableBtiOdds > 1 && Math.abs(o - lastStableBtiOdds) < 0.008) {
-      o = lastStableBtiOdds;
-    } else {
-      lastStableBtiOdds = o;
-    }
-    return o === slip.odds ? slip : { ...slip, odds: o };
+    return finalizeBtiOdds(slip);
   }
 
   function checkAndNotify() {
@@ -2044,6 +2067,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (lastOddsKey !== '') {
         lastOddsKey = '';
         lastStableBtiOdds = 0;
+        btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
         try {
           chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, suspended: true });
         } catch (e) {}
