@@ -8,6 +8,8 @@ let armed = false;
 let config = {
   minProfit: 1,
   leg2: 'bcgame',
+  leg2Synced: false,
+  leg2SyncedSite: '',
   btiBetKrw: 10000,
   usdRate: 1400,
   cooldownMs: 0,

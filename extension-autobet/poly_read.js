@@ -509,7 +509,12 @@ function normalizePolySlip(slip) {
 
 function isTrustedBcSlip(slip) {
   if (!(slip?.odds > 1.01)) return false;
+  const src = slip.source || '';
   const kind = slip.sourceKind || '';
+  if (src === 'stake' || kind === 'stake-native-slip' || kind === 'stake-api' || kind === 'stake-board-selected') {
+    if (slip.odds > 12 && !(slip.fromPayout && slip.stake > 0)) return false;
+    return true;
+  }
   if (kind === 'sports-text') return false;
   const confirmed = slip.fromPayout && slip.stake > 0;
   const hasSelection = !!(slip.teamLabel || slip.outcome || slip.selectionText || slip.eventText);
@@ -534,6 +539,7 @@ function isStrikeBcSlip(slip) {
   if (!isTrustedBcSlip(slip)) return false;
   const kind = slip.sourceKind || '';
   const method = slip.method || '';
+  if (kind === 'stake-board-selected' || method === 'board-selected') return false;
   if (kind === 'sports-board-selected' || kind === 'sports-board' || method === 'board-selected') return false;
   if (/storage|window-|script-json|all-text|board-selected/i.test(method)) return false;
   if (kind === 'bc-api' && slip.capturedAt && Date.now() - slip.capturedAt > 120000) return false;
@@ -919,9 +925,133 @@ async function probeBcSlipFrames(polyTab) {
   }
 }
 
+async function ensureStakeApiHook(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['stake_api_hook.js'],
+      world: 'MAIN'
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function injectStakeSlipRead(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['stake_slip_read.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      func: () => (typeof window.__stakeReadNativeSlip === 'function' ? window.__stakeReadNativeSlip() : null)
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function readStakeSportsSlip(polyTab, opts = {}) {
+  if (!polyTab?.id) return null;
+  const fastScan = opts.fastScan === true;
+  const focusTab = opts.focusTab === true;
+  const waitMs = opts.waitMs || (focusTab && !fastScan ? 1500 : 0);
+  const maxAttempts = fastScan ? 2 : (focusTab ? 4 : 2);
+
+  if (focusTab && waitMs > 0 && typeof focusBcTabForRead === 'function') {
+    await focusBcTabForRead(polyTab.id, waitMs);
+  }
+
+  await ensureLeg2Script(polyTab.id, 0, polyTab.url);
+  await ensureStakeApiHook(polyTab.id);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), 3500, 'Stake read');
+      if (isTrustedBcSlip(res?.slip)) {
+        lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+        return res.slip;
+      }
+    } catch (_) {}
+
+    const injected = await injectStakeSlipRead(polyTab.id);
+    if (isTrustedBcSlip(injected)) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+      return injected;
+    }
+
+    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, fastScan ? 250 : 400));
+  }
+  return null;
+}
+
+async function probeStakeSlipFrames(polyTab) {
+  if (!polyTab?.id) return [];
+  await ensureLeg2Script(polyTab.id, 0, polyTab.url);
+  await ensureStakeApiHook(polyTab.id);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, allFrames: true },
+      files: ['stake_slip_read.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [0] },
+      func: () => {
+        const slip = typeof window.__stakeReadNativeSlip === 'function' ? window.__stakeReadNativeSlip() : null;
+        const diag = typeof window.__stakeDiagReport === 'function' ? window.__stakeDiagReport() : null;
+        return { slip, diag };
+      }
+    });
+    const hit = results?.[0]?.result;
+    const slip = hit?.slip;
+    const diag = hit?.diag;
+    const url = (polyTab.url || '').replace(/^https?:\/\//, '').slice(0, 72);
+    if (slip?.odds > 1.01) {
+      return [{
+        frameId: 0,
+        url,
+        odds: slip.odds,
+        kind: slip.sourceKind || slip.method || 'stake-slip',
+        inputs: diag?.inputCount || 0,
+        len: diag?.textLen || 0,
+        stake: slip.stake || null
+      }];
+    }
+    return [{
+      frameId: 0,
+      url,
+      odds: null,
+      kind: diag?.hasBetBtn ? 'stake-no-odds' : 'stake-miss',
+      inputs: diag?.inputCount || 0,
+      len: diag?.textLen || 0,
+      rootCount: diag?.rootCount || 0
+    }];
+  } catch (e) {
+    return [{ frameId: 0, url: '', odds: null, kind: e.message || 'stake-probe-fail' }];
+  }
+}
+
+async function probeLeg2SlipFrames(polyTab, leg2Pref) {
+  const pref = leg2Pref || leg2SiteKey(polyTab?.url) || 'bcgame';
+  if (pref === 'stake') return probeStakeSlipFrames(polyTab);
+  return probeBcSlipFrames(polyTab);
+}
+
 async function readPolyOddsOnce(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
-  const siteKey = 'bcgame';
+  const siteKey = leg2SiteKey(polyTab.url) || opts.leg2Pref || 'bcgame';
+  if (siteKey === 'stake') {
+    const native = await readStakeSportsSlip(polyTab, opts);
+    if (isStrikeBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
+    const scanHit = acceptBcSlipForScan(native);
+    if (scanHit) return scanHit;
+    polyOddsCache.delete(polyTab.id);
+    return null;
+  }
+
   const isSports = typeof isBcGameSportsUrl === 'function' && isBcGameSportsUrl(polyTab.url);
 
   if (isSports) {
