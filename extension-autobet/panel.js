@@ -108,7 +108,7 @@ async function verifyBtiSite() {
     status.textContent = '확인 중…';
     status.className = 'sync-badge';
   }
-  logLine('텐텐뱃 연결 확인 중… (스포츠 탭을 먼저 클릭하세요)', 'info');
+  logLine('텐텐뱃 연결 확인 중…', 'info');
   try {
     const res = await withTimeout(
       new Promise((resolve, reject) => {
@@ -154,19 +154,49 @@ async function verifyBtiSite() {
   }
 }
 
-async function findTabsViaBackground(leg2Pref) {
+async function sendBgMessage(type, payload = {}) {
   return withTimeout(
     new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'FIND_TABS', leg2: leg2Pref }, (response) => {
+      chrome.runtime.sendMessage({ type, ...payload }, (response) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else if (!response) reject(new Error('탭 탐색 응답 없음'));
-        else if (!response.ok) reject(new Error(response.reason || '탭 탐색 실패'));
-        else resolve({ btiTab: response.btiTab, polyTab: response.polyTab });
+        else if (!response) reject(new Error('응답 없음'));
+        else resolve(response);
       });
     }),
     60000,
-    '탭 탐색'
+    type
   );
+}
+
+async function findTabsViaBackground(leg2Pref) {
+  const response = await sendBgMessage('FIND_TABS', { leg2: leg2Pref });
+  if (!response.ok) throw new Error(response.reason || '탭 탐색 실패');
+  return { btiTab: response.btiTab, polyTab: response.polyTab };
+}
+
+async function openLeg1Site() {
+  logLine('텐텐뱃 탭 여는 중…', 'info');
+  try {
+    const res = await sendBgMessage('OPEN_LEG1_TAB');
+    if (!res.ok) throw new Error(res.reason || '탭 열기 실패');
+    logLine('텐텐뱃 탭 열림 — 로그인 후 스포츠 화면 → [연결확인]', 'ok');
+    $('statusHint').textContent = '텐텐뱃 로그인 후 스포츠 화면에서 [연결확인]';
+  } catch (e) {
+    logLine(`텐텐뱃 열기 실패: ${e.message}`, 'err');
+  }
+}
+
+async function openLeg2Site() {
+  const cfg = getConfig();
+  logLine(`${leg2PrefLabel(cfg.leg2)} 탭 여는 중…`, 'info');
+  try {
+    const res = await sendBgMessage('OPEN_LEG2_TAB', { leg2: cfg.leg2 });
+    if (!res.ok) throw new Error(res.reason || '탭 열기 실패');
+    logLine(`${leg2PrefLabel(cfg.leg2)} 탭 열림 — 스포츠 화면 → [연결]`, 'ok');
+    $('statusHint').textContent = `${leg2PrefLabel(cfg.leg2)} 스포츠 화면에서 [연결]`;
+  } catch (e) {
+    logLine(`사이트 열기 실패: ${e.message}`, 'err');
+  }
 }
 
 async function syncLeg2Site() {
@@ -174,16 +204,16 @@ async function syncLeg2Site() {
   leg2SyncBusy = true;
   const cfg = getConfig();
   saveConfig();
-  logLine(`${leg2PrefLabel(cfg.leg2)} 연결 중… (텐텐뱃·${leg2PrefShort(cfg.leg2)} 탭을 먼저 클릭하세요)`, 'info');
+  logLine(`${leg2PrefLabel(cfg.leg2)} 연결 중…`, 'info');
   $('syncBtn').disabled = true;
   try {
     const found = await findTabsViaBackground(cfg.leg2);
     if (!found.btiTab) {
-      logLine('텐텐뱃 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 다시 [연결확인]', 'err');
+      logLine('텐텐뱃 탭 없음 — [텐텐뱃 열기] → 로그인·스포츠 → [연결확인]', 'err');
       return;
     }
     if (!found.polyTab) {
-      logLine(`${leg2PrefLabel(cfg.leg2)} 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 다시 [연결]`, 'err');
+      logLine(`${leg2PrefLabel(cfg.leg2)} 탭 없음 — [사이트 열기] → 스포츠 → [연결]`, 'err');
       return;
     }
     leg2Synced = true;
@@ -1299,7 +1329,9 @@ $('leg2Site')?.addEventListener('change', () => {
   $('statusHint').textContent = `${leg2PrefLabel(getConfig().leg2)} 선택됨 — [연결] 버튼을 눌러주세요`;
 });
 
+$('btiOpenBtn')?.addEventListener('click', () => openLeg1Site());
 $('btiVerifyBtn')?.addEventListener('click', () => verifyBtiSite());
+$('leg2OpenBtn')?.addEventListener('click', () => openLeg2Site());
 $('syncBtn')?.addEventListener('click', () => syncLeg2Site());
 
 chrome.runtime.onMessage.addListener((msg) => {

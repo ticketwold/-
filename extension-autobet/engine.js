@@ -391,6 +391,47 @@ async function getTabUrl(tabId) {
   }
 }
 
+async function enumerateAllTabs() {
+  const seen = new Map();
+  try {
+    for (const t of await chrome.tabs.query({})) {
+      if (t?.id) seen.set(t.id, t);
+    }
+  } catch (_) {}
+  try {
+    const wins = await chrome.windows.getAll({ populate: true });
+    for (const w of wins) {
+      for (const t of w.tabs || []) {
+        if (t?.id) seen.set(t.id, t);
+      }
+    }
+  } catch (_) {}
+  return [...seen.values()];
+}
+
+function noteOpenedWebTab(tabId) {
+  if (!tabId) return;
+  recentWebTabIds = [tabId, ...recentWebTabIds.filter((id) => id !== tabId)].slice(0, 8);
+}
+
+async function openLeg1Tab(useAlt = false) {
+  const url = useAlt ? leg1OpenUrlAlt() : leg1OpenUrl();
+  const tab = await chrome.tabs.create({ url, active: true });
+  noteOpenedWebTab(tab.id);
+  await saveTabBindings({ btiTabId: tab.id });
+  tabUrlProbeCache.set(tab.id, { url, at: Date.now() });
+  return { ok: true, tabId: tab.id, url };
+}
+
+async function openLeg2Tab(leg2Pref = 'bcgame') {
+  const url = leg2OpenUrl(leg2Pref);
+  const tab = await chrome.tabs.create({ url, active: true });
+  noteOpenedWebTab(tab.id);
+  await saveTabBindings({ leg2TabId: tab.id, leg2Pref });
+  tabUrlProbeCache.set(tab.id, { url, at: Date.now() });
+  return { ok: true, tabId: tab.id, url };
+}
+
 async function queryTabsByUrlPatterns(patterns) {
   const seen = new Map();
   if (!patterns?.length) return [];
@@ -741,7 +782,7 @@ async function findBtiTabByFrameProbe(tabs, activeId, recentIds = []) {
 
 async function findTabs(leg2Pref = 'bcgame') {
   const [allTabs, leg1PatternTabs, leg2PatternTabs, bindings] = await Promise.all([
-    chrome.tabs.query({}),
+    enumerateAllTabs(),
     queryTabsByUrlPatterns(leg1TabUrlPatterns()),
     queryTabsByUrlPatterns(leg2TabUrlPatterns(leg2Pref)),
     loadTabBindings()
@@ -787,22 +828,22 @@ async function findTabs(leg2Pref = 'bcgame') {
   }
 
   let polyTab = await tryBoundLeg2Tab(bindings, leg2Pref, activeId);
-  let bestScore = -1;
-  for (const { tab, url } of leg2Tabs) {
-    const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref) + scoreTabTitleForLeg2(tab, leg2Pref);
-    if (score > bestScore) { bestScore = score; polyTab = polyTab || tab; }
-  }
-
-  if (!polyTab && leg2PatternTabs.length) {
-    for (const tab of leg2PatternTabs) {
-      const url = await resolveTabUrlEnhanced(tab);
+  if (!polyTab) {
+    let bestScore = -1;
+    for (const { tab, url } of leg2Tabs) {
       const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref) + scoreTabTitleForLeg2(tab, leg2Pref);
       if (score > bestScore) { bestScore = score; polyTab = tab; }
     }
-  }
-
-  if (!polyTab) {
-    polyTab = await findLeg2TabByProbe(tabs, leg2Pref, activeId, recentIds);
+    if (!polyTab && leg2PatternTabs.length) {
+      for (const tab of leg2PatternTabs) {
+        const url = await resolveTabUrlEnhanced(tab);
+        const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref) + scoreTabTitleForLeg2(tab, leg2Pref);
+        if (score > bestScore) { bestScore = score; polyTab = tab; }
+      }
+    }
+    if (!polyTab) {
+      polyTab = await findLeg2TabByProbe(tabs, leg2Pref, activeId, recentIds);
+    }
   }
 
   if (btiTab?.id) saveTabBindings({ btiTabId: btiTab.id }).catch(() => {});
@@ -1059,12 +1100,10 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
 async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const found = await findTabs(leg2Pref);
   if (!found.btiTab) {
-    const tabs = await chrome.tabs.query({});
-    const labels = [...new Set(tabs.map((t) => tabLabelForHint(t)).filter(Boolean))].slice(0, 8);
-    const hint = labels.length ? ` (탭 ${tabs.length}개 · ${labels.join(' | ')})` : ` (탭 ${tabs.length}개)`;
+    const tabs = await enumerateAllTabs();
     return {
       ok: false,
-      reason: `텐텐뱃 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 [연결확인]${hint}`
+      reason: formatTabDiscoveryHint(tabs)
     };
   }
   const board = await searchBtiBoardFromFrames(found.btiTab);

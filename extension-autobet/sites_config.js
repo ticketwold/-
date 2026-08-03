@@ -1,7 +1,7 @@
 // 텐텐뱃 (x10x10s) + 멀티 leg2 (BC.Game, Stake.com)
 const SITE_CONFIG = {
-  // 텐텐뱃 상위 탭 도메인 (미러 포함)
-  WRAPPER_HOSTS: ['x10x10s.com', 'live8588.com', 'fxf774.com'],
+  // 텐텐뱃 상위 탭 도메인 (미러·pbc00 포털 포함)
+  WRAPPER_HOSTS: ['x10x10s.com', 'live8588.com', 'fxf774.com', 'pbc00.com'],
   BCGAME_HOSTS: ['bc.game'],
   STAKE_HOSTS: ['stake.com'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
@@ -10,7 +10,7 @@ const SITE_CONFIG = {
     'sptpub.com', 'sptsportscdn.com', 'biahosted.com', 'cocoesports.com'
   ],
   BTI_INJECTABLE_HOSTS: [
-    'bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com',
+    'bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com', 'pbc00.com',
     'sptpub.com', 'sptsportscdn.com', 'biahosted.com', 'cocoesports.com'
   ],
   LEG1_LABEL: '텐텐뱃',
@@ -117,9 +117,32 @@ function scoreTabTitleForLeg1(tab) {
   const title = String(tab?.title || '');
   if (!title) return 0;
   let score = 0;
-  if (/x10x10|10x10|텐텐|tenten|live8588|fxf774/i.test(title)) score += 65;
+  if (/x10x10|10x10|텐텐|tenten|live8588|fxf774|pbc00|10벳/i.test(title)) score += 65;
   if (/스포츠|sports|sport/i.test(title)) score += 12;
   return score;
+}
+
+function leg1OpenUrl() {
+  return 'https://www.x10x10s.com/?gamecode=19';
+}
+
+function leg1OpenUrlAlt() {
+  return 'https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N';
+}
+
+function leg2OpenUrl(pref) {
+  if (pref === 'stake') return 'https://stake.com/sports/home';
+  return 'https://bc.game/ko/sports';
+}
+
+function formatTabDiscoveryHint(tabs) {
+  const labels = [...new Set(tabs.map((t) => tabLabelForHint(t)).filter(Boolean))].slice(0, 6);
+  const labelStr = labels.length ? labels.join(' | ') : '(없음)';
+  const webCount = tabs.filter((t) => /^https?:/i.test(tabEffectiveUrl(t))).length;
+  if (webCount === 0) {
+    return `이 Chrome에 사이트 탭이 없습니다 (총 ${tabs.length}개: ${labelStr}). [텐텐뱃 열기]를 누르세요. Edge·다른 Chrome 창이 아닌 **이 브라우저**에서 열어야 합니다.`;
+  }
+  return `텐텐뱃 탭 없음 (사이트 ${webCount}개 · ${labelStr}). [텐텐뱃 열기] 후 스포츠 화면에서 [연결확인]하세요.`;
 }
 
 function scoreTabTitleForLeg2(tab, pref) {

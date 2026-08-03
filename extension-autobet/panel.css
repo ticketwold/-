@@ -189,8 +189,26 @@ body {
 
 .site-sync-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
+}
+
+.site-sync-row .input-select {
+  grid-column: 1 / -1;
+}
+
+.site-sync-row:has(.input-select) {
+  grid-template-columns: 1fr auto auto;
+}
+
+.site-sync-row:has(.input-select) .input-select {
+  grid-column: 1 / -1;
+}
+
+.field-hint.warn-hint {
+  color: #fbbf24;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .field { margin-bottom: 12px; }
@@ -337,6 +355,18 @@ body {
 
 .btn-accent:hover:not(:disabled) {
   background: rgba(59, 130, 246, 0.25);
+}
+
+.btn-open {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #86efac;
+  min-width: 88px;
+  font-size: 12px;
+}
+
+.btn-open:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.22);
 }
 
 .btn-danger {

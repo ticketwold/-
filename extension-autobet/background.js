@@ -109,6 +109,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'OPEN_LEG1_TAB') {
+    openLeg1Tab(!!msg.useAlt)
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '텐텐뱃 탭 열기 실패' }));
+    return true;
+  }
+
+  if (msg.type === 'OPEN_LEG2_TAB') {
+    openLeg2Tab(msg.leg2 || config.leg2 || 'bcgame')
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '사이트 탭 열기 실패' }));
+    return true;
+  }
+
   if (msg.type === 'OPEN_AUTOBET_PANEL') {
     openPanel().then((id) => sendResponse({ ok: true, windowId: id })).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

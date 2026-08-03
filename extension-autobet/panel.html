@@ -15,7 +15,7 @@
       <div class="brand-mark" aria-hidden="true">⚡</div>
       <div class="brand-text">
         <h1>양방 자동배팅</h1>
-        <p class="version" id="versionLabel">Pro · v2.3.9</p>
+        <p class="version" id="versionLabel">Pro · v2.4.0</p>
       </div>
     </div>
     <div id="armStatus" class="status-pill disarmed" role="status">대기</div>
@@ -41,10 +41,10 @@
       <span id="btiSyncStatus" class="sync-badge">미확인</span>
     </div>
     <div class="site-sync-row">
-      <span class="site-sync-label">x10x10s.com</span>
+      <button id="btiOpenBtn" type="button" class="btn btn-open">텐텐뱃 열기</button>
       <button id="btiVerifyBtn" type="button" class="btn btn-accent">연결확인</button>
     </div>
-    <p class="field-hint">① 텐텐뱃 스포츠 탭 클릭 → ② [연결확인] (탭을 클릭해야 인식됩니다)</p>
+    <p class="field-hint warn-hint">⚠ 같은 Chrome에서 [텐텐뱃 열기] → 로그인·스포츠 → [연결확인] (Edge/다른 창 X)</p>
   </section>
 
   <section class="card">
@@ -57,9 +57,10 @@
         <option value="bcgame">BC.Game</option>
         <option value="stake">Stake.com</option>
       </select>
+      <button id="leg2OpenBtn" type="button" class="btn btn-open">사이트 열기</button>
       <button id="syncBtn" type="button" class="btn btn-accent">연결</button>
     </div>
-    <p class="field-hint">① Stake 스포츠 탭 클릭 → ② [연결] (탭을 클릭해야 인식됩니다)</p>
+    <p class="field-hint warn-hint">⚠ [사이트 열기] → 스포츠 페이지 → [연결]</p>
   </section>
 
   <section class="card">
