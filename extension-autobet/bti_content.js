@@ -29,11 +29,11 @@ function shouldSkipBtiContentFrame(href) {
 if (shouldSkipBtiContentFrame(location.href)) return;
 window.__btiContentLoaded = true;
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.9');
-  document.documentElement.setAttribute('data-autobet-hook', '2.5.9');
+  document.documentElement.setAttribute('data-autobet-bti', '2.6.0');
+  document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
 } catch (_) {}
 
-// BTI content script v2.5.9
+// BTI content script v2.6.0
 
 function parseOddsText(txt) {
   const t = String(txt || '').trim();
@@ -481,7 +481,7 @@ function parseSlipFromCard(card) {
 
   if (/^W[12]$/i.test(selectionText.trim())) {
     let odds = slipUiOdds;
-    if (!odds && !isInMyBetsPanel(card)) {
+    if (!odds && !isInMyBetsPanel(card) && !isWidgetsXBetslipFrame()) {
       odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
       if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
       if (!odds) {
@@ -2035,11 +2035,41 @@ function acceptBtiOddsForScan(slip) {
   return slip;
 }
 
+function readSlipAtOddsFromCards() {
+  const cards = getRealSlipCards();
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = cards[i];
+    if (isHistoryBetCard(card) || !slipCardVisible(card)) continue;
+    const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
+    const selectionText = titleEls[0]?.textContent?.trim() || '';
+    let odds = readSlipCardSelectionOdds(card);
+    if (!(odds > 1.01)) {
+      const txt = (card.textContent || '').replace(/\s+/g, ' ');
+      const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+      if (at) odds = parseOddsText(at[1]);
+    }
+    if (odds > 1.01) {
+      const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
+      const eventText = eventEl?.textContent?.trim() || '';
+      const teams = parseEventTeams(eventText);
+      return enrichBtiSlip({
+        odds: Math.round(odds * 1000) / 1000,
+        selectionText,
+        eventText,
+        homeTeam: teams.home,
+        awayTeam: teams.away,
+        source: 'slip-card',
+        fromSlip: true
+      });
+    }
+  }
+  return null;
+}
+
 function readSlipRootOddsExcludingBoard(root) {
   if (!root) return null;
   const patterns = [
-    /@\s*(\d+\.\d{2,4})/,
-    /(?:총|합계|total)\s*(?:배당|odds)?[^\d]{0,10}(\d+\.\d{2,4})/i
+    /@\s*(\d+\.\d{2,4})/
   ];
   const nodes = [root];
   for (const el of root.querySelectorAll('[class*="betInformation"], [class*="BetSecondary"], [class*="betslip"], [class*="Betslip"]')) {
@@ -2086,6 +2116,7 @@ function readLiveSlipCartOdds(hint = {}) {
   if (!hasActiveBetslipSelection()) return null;
 
   const readers = [
+    () => readSlipAtOddsFromCards(),
     () => readCounterAnchoredSlipOdds(),
     () => readActiveSlipDisplayOdds(),
     () => readBtiSlip({ preferActiveSlip: true, ...hint }),
@@ -2928,7 +2959,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   function checkAndNotify() {
     if (Date.now() < suppressReadUntil) return;
 
-    const raw = readBtiOdds();
+    const raw = readBtiOdds({ preferActiveSlip: true, forScan: true });
     if (!raw || !raw.odds || raw.odds <= 1) {
       if (lastOddsKey !== '') {
         lastOddsKey = '';
@@ -2991,7 +3022,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃 v2.5.9] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
+console.log('[텐텐뱃 v2.6.0] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 
 function buildBtiDiagPayload() {
   const href = location.href || '';
@@ -3028,7 +3059,8 @@ function installBtiDiagBridge() {
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.9');
+  document.documentElement.setAttribute('data-autobet-bti', '2.6.0');
+  document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();

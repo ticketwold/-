@@ -674,11 +674,7 @@ function applyInstantOdds(msg) {
     }
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
-      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
-      || slipSource === 'in-play-at' || slipSource === 'inline-bootstrap'
-      || slipSource === 'brute-dom' || slipSource === 'brute-inject'
-      || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
-      || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
+      || slipSource === 'in-play-at' || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at';
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     cartOpen.bti = true;
@@ -731,11 +727,7 @@ function stabilizeSnap(snap, cfg) {
     const next = normalizeSportsOdds(snap.btiO);
     const slipSource = snap.bti?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
-      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
-      || slipSource === 'in-play-at' || slipSource === 'inline-bootstrap'
-      || slipSource === 'brute-dom' || slipSource === 'brute-inject'
-      || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
-      || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
+      || slipSource === 'in-play-at' || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at';
     const selKey = slipSelectionKey(snap.bti);
     if (selKey && knownOddsMeta.btiSel && selKey !== knownOddsMeta.btiSel) {
       snap.btiO = next;
@@ -761,8 +753,6 @@ function stabilizeSnap(snap, cfg) {
       lastKnownOdds.btiAt = now;
       if (selKey) knownOddsMeta.btiSel = selKey;
     }
-  } else if (!btiMissing && !isOddsTransition(now) && cartOpen.bti && lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
-    snap.btiO = lastKnownOdds.btiO;
   } else if (!btiMissing && !isOddsTransition(now)) {
     cartOpen.bti = false;
     snap.btiO = 0;

@@ -183,6 +183,11 @@ async function injectReadBtiFrame(tabId, frameId) {
         const eventText = eventEl?.textContent?.trim() || '';
 
         let odds = readSlipCardOdds(card);
+        if (!(odds > 1.01)) {
+          const txt = (card.textContent || '').replace(/\s+/g, ' ');
+          const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+          if (at) odds = parseOddsText(at[1]);
+        }
         const source = 'slip-card';
         if (!odds) return null;
         return { odds, selectionText, eventText, source, fromSlip: true, hasInput };

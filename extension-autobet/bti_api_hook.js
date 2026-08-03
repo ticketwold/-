@@ -7,7 +7,7 @@
   if (/streambridge\.feedconstruct\.com\/player/i.test(href)) return;
   if (/accounts-iframe|amazon-ivs|tracker\.html/i.test(href)) return;
   try {
-    document.documentElement.setAttribute('data-autobet-hook', '2.5.9');
+    document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
   } catch (_) {}
   window.__btiApiHooked = true;
   window.__btiApiSlip = null;
@@ -70,10 +70,17 @@
     }
     if (typeof obj !== 'object') return null;
 
+    const sels = obj.Selections || obj.selections || obj.Bets || obj.bets || obj.items;
+    if (Array.isArray(sels) && sels.length) {
+      for (let i = sels.length - 1; i >= 0; i--) {
+        const h = fromSelection(sels[i], obj);
+        if (h) return h;
+      }
+    }
+
     const total = po(obj.totalOdds ?? obj.combinedOdds ?? obj.TotalOdds ?? obj.CombinedOdds);
-    if (total) {
-      const sels = obj.Selections || obj.selections || obj.Bets || obj.bets || obj.items;
-      const first = Array.isArray(sels) ? sels[0] : null;
+    if (total && Array.isArray(sels) && sels.length > 1) {
+      const first = sels[0];
       return pack(total, {
         selectionText: first?.Name || first?.TeamName || first?.SelectionName || '',
         eventText: obj.EventName || obj.eventName || first?.EventName || ''
@@ -83,19 +90,6 @@
     const direct = pickOdds(obj);
     if (direct && (obj.Name || obj.TeamName || obj.SelectionName || obj.SelectionId || obj.selectionId)) {
       return fromSelection(obj, ctx || obj);
-    }
-
-    if (Array.isArray(obj.Selections) && obj.Selections.length) {
-      for (let i = obj.Selections.length - 1; i >= 0; i--) {
-        const h = fromSelection(obj.Selections[i], obj);
-        if (h) return h;
-      }
-    }
-    if (Array.isArray(obj.selections) && obj.selections.length) {
-      for (let i = obj.selections.length - 1; i >= 0; i--) {
-        const h = fromSelection(obj.selections[i], obj);
-        if (h) return h;
-      }
     }
 
     for (const key of [
@@ -234,7 +228,7 @@
     window.__btiReadOdds = function(hint) { return autobetBridgeCall('readOdds', hint || {}); };
     window.__btiReadOdds.__autobetBridge = true;
     try {
-      document.documentElement.setAttribute('data-autobet-hook', '2.5.9');
+      document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
     } catch (_) {}
   }
 })();

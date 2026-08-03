@@ -13,7 +13,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 const BTI_PROBE_MS = 3000;
 const BTI_PROBE_FAST_MS = 1400;
-const BTI_READ_INSTANT_MS = 180;
+const BTI_READ_INSTANT_MS = 900;
 const BTI_READ_FAST_MS = 500;
 const BTI_READ_DEEP_MS = 2400;
 const BTI_MAX_FRAMES = 16;
@@ -38,9 +38,17 @@ function parseBtiApiSlipData(data) {
     const x = parseFloat(n);
     return Number.isFinite(x) && x > 1.01 && x < 500 ? x : null;
   }
-  function pickOdds(obj) {
+  function pickSelOdds(obj) {
     if (!obj || typeof obj !== 'object') return null;
-    for (const k of ['Price', 'DisplayPrice', 'Odds', 'Decimal', 'totalOdds', 'combinedOdds', 'odds', 'price', 'coefficient', 'decimal']) {
+    for (const k of ['Price', 'DisplayPrice', 'Odds', 'Decimal', 'DecimalOdds', 'odds', 'price', 'coefficient', 'decimal']) {
+      const v = po(obj[k]);
+      if (v) return v;
+    }
+    return null;
+  }
+  function pickTotalOdds(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (const k of ['totalOdds', 'combinedOdds', 'TotalOdds', 'CombinedOdds']) {
       const v = po(obj[k]);
       if (v) return v;
     }
@@ -60,20 +68,10 @@ function parseBtiApiSlipData(data) {
       return best;
     }
     if (typeof obj !== 'object') return null;
-    const total = pickOdds(obj);
     const sels = obj.Selections || obj.selections || obj.Bets || obj.bets || obj.items;
-    if (total && (Array.isArray(sels) || obj.Name || obj.TeamName)) {
-      const first = Array.isArray(sels) ? sels[sels.length - 1] : obj;
-      return {
-        odds: Math.round(total * 1000) / 1000,
-        selectionText: first?.Name || first?.TeamName || first?.SelectionName || '',
-        eventText: obj.EventName || obj.eventName || first?.EventName || '',
-        source: 'bti-api', fromSlip: true, sourceKind: 'bti-api-fetch'
-      };
-    }
-    if (Array.isArray(sels)) {
+    if (Array.isArray(sels) && sels.length) {
       for (let i = sels.length - 1; i >= 0; i--) {
-        const o = pickOdds(sels[i]);
+        const o = pickSelOdds(sels[i]);
         if (o) {
           return {
             odds: Math.round(o * 1000) / 1000,
@@ -84,7 +82,17 @@ function parseBtiApiSlipData(data) {
         }
       }
     }
-    const direct = pickOdds(obj);
+    const total = pickTotalOdds(obj);
+    if (total && Array.isArray(sels) && sels.length > 1) {
+      const first = sels[sels.length - 1];
+      return {
+        odds: Math.round(total * 1000) / 1000,
+        selectionText: first?.Name || first?.TeamName || first?.SelectionName || '',
+        eventText: obj.EventName || obj.eventName || first?.EventName || '',
+        source: 'bti-api', fromSlip: true, sourceKind: 'bti-api-fetch'
+      };
+    }
+    const direct = pickSelOdds(obj);
     if (direct && (obj.Name || obj.TeamName || obj.SelectionName || obj.SelectionId)) {
       return {
         odds: Math.round(direct * 1000) / 1000,
@@ -213,18 +221,23 @@ async function fetchBtiSlipViaApi(tabId, opts = {}) {
 async function buildBtiFastFrameIds(tabId) {
   const ids = [];
   const tabUrl = await getTabUrl(tabId);
-  if (typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(tabUrl)) {
-    ids.push(0);
-  }
+  const inPlay = typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(tabUrl);
   try {
     const frames = await getAllFrames(tabId);
     for (const f of frames) {
+      if (isJunkBtiFrameUrl(f.url)) continue;
+      if (typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(f.url)) {
+        if (!ids.includes(f.frameId)) ids.unshift(f.frameId);
+      }
+    }
+    for (const f of frames) {
+      if (isJunkBtiFrameUrl(f.url)) continue;
       if (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(f.url)) {
         if (!ids.includes(f.frameId)) ids.push(f.frameId);
       }
     }
   } catch (_) {}
-  if (lastBtiSlipFrame?.tabId === tabId && !ids.includes(lastBtiSlipFrame.frameId)) ids.push(lastBtiSlipFrame.frameId);
+  if (lastBtiSlipFrame?.tabId === tabId && !ids.includes(lastBtiSlipFrame.frameId)) ids.unshift(lastBtiSlipFrame.frameId);
   if (lastBtiFrame?.tabId === tabId && !ids.includes(lastBtiFrame.frameId)) ids.push(lastBtiFrame.frameId);
   if (lastBtiBoardFrame?.tabId === tabId && !ids.includes(lastBtiBoardFrame.frameId)) ids.push(lastBtiBoardFrame.frameId);
   try {
@@ -233,21 +246,32 @@ async function buildBtiFastFrameIds(tabId) {
       if (!ids.includes(fid)) ids.push(fid);
     }
   } catch (_) {}
+  if (!inPlay && !ids.includes(0)) ids.push(0);
   return ids.length ? ids : [0];
 }
 
 async function readBtiOddsFromFrame(tabId, frameId, readHint, timeoutMs = BTI_READ_FAST_MS) {
   await Promise.all([ensureBtiScript(tabId, frameId), ensureBtiApiHook(tabId, frameId)]);
-  const hits = await Promise.all([
-    withTimeout(
-      sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: readHint }),
-      timeoutMs,
-      'BTI read'
-    ).then((res) => res?.slip || null).catch(() => null),
-    readBtiApiSlipHook(tabId, frameId).catch(() => null),
-    withTimeout(injectReadBtiFrame(tabId, frameId), timeoutMs, 'BTI scrape').catch(() => null)
-  ]);
-  for (const slip of hits) {
+  const readers = readHint.forScan
+    ? [
+        () => withTimeout(
+          sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: readHint }),
+          timeoutMs,
+          'BTI read'
+        ).then((res) => res?.slip || null).catch(() => null),
+        () => withTimeout(injectReadBtiFrame(tabId, frameId), timeoutMs, 'BTI scrape').catch(() => null)
+      ]
+    : [
+        () => withTimeout(
+          sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: readHint }),
+          timeoutMs,
+          'BTI read'
+        ).then((res) => res?.slip || null).catch(() => null),
+        () => readBtiApiSlipHook(tabId, frameId).catch(() => null),
+        () => withTimeout(injectReadBtiFrame(tabId, frameId), timeoutMs, 'BTI scrape').catch(() => null)
+      ];
+  for (const fn of readers) {
+    const slip = await fn();
     if (slip?.odds > 1.01) {
       if (readHint.forScan && !isBtiSlipOddsSource(slip)) continue;
       lastBtiFrame = { tabId, frameId };
@@ -264,7 +288,7 @@ function scoreBtiReadHit(slip, frameId, tabId) {
   const src = slip.source || slip.sourceKind || '';
   if (/slip-card|slip-display/.test(src)) score += 1200;
   if (/slip-latched|in-play-at|widgets-x-slip|widgets-x-at/.test(src)) score += 900;
-  if (src.includes('bti-api')) score += 800;
+  if (src.includes('bti-api')) score += 150;
   if (src === 'board-slip-match') score += 150;
   if (lastBtiSlipFrame?.tabId === tabId && lastBtiSlipFrame.frameId === frameId) score += 600;
   if (lastBtiFrame?.tabId === tabId && lastBtiFrame.frameId === frameId) score += 300;
@@ -1696,6 +1720,13 @@ async function readBtiOddsOnce(btiTab, poly, opts = {}) {
   } else {
     let hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: true });
     if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
+  }
+
+  if (hint.forScan) {
+    try {
+      const merged = await readBtiFromAllFrames(btiTab.id, hint, true);
+      if (merged.slip?.odds > 1.01) return attachBtiFrameMeta(merged.slip, merged.frameId);
+    } catch (_) {}
   }
 
   if (deep) {
