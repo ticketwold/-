@@ -19,7 +19,8 @@
     "paths": {
       "@shared/*": ["src/shared/*"],
       "@engine/*": ["src/engine/*"],
-      "@panel/*": ["src/panel/*"]
+      "@panel/*": ["src/panel/*"],
+      "@scanner/*": ["src/scanner/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],

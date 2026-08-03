@@ -48,6 +48,7 @@ export default defineConfig({
       '@shared': resolve(root, 'src/shared'),
       '@engine': resolve(root, 'src/engine'),
       '@panel': resolve(root, 'src/panel'),
+      '@scanner': resolve(root, 'src/scanner'),
     },
   },
   build: {

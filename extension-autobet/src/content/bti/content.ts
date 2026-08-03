@@ -1,23 +1,18 @@
 import './content.legacy';
-import { startBetslipIframeLifecycle } from './iframe-lifecycle';
-import { detectSlipFrameKind, frameCanHostBetSlip } from './slip-frame-kind';
-import { slipDocContext } from './slip-doc-context';
-import { markSlipFrameOnDom, probeSlipDom, readSlipOddsFromProbedDom } from './slip-probe';
-import { startSlipDomObserverInDocument } from './slip-observer';
+import type { OddsPayload } from '@scanner/types';
+import { startScanner } from '@scanner/bootstrap';
+import { detectSiteId } from '@scanner/site-detector';
 
 declare global {
   interface Window {
-    __btiSlipProbe?: () => ReturnType<typeof probeSlipDom>;
-    __btiReadSlipOdds?: () => ReturnType<typeof readSlipOddsFromProbedDom>;
+    __btiSlipProbe?: () => ReturnType<ReturnType<typeof startScanner>['probe']>;
+    __btiReadSlipOdds?: () => ReturnType<ReturnType<typeof startScanner>['readOdds']>;
+    __domScannerActive?: boolean;
   }
 }
 
-const kind = detectSlipFrameKind();
-const ctx = slipDocContext();
-markSlipFrameOnDom(ctx);
-
-window.__btiSlipProbe = () => probeSlipDom(ctx);
-window.__btiReadSlipOdds = () => readSlipOddsFromProbedDom(ctx);
+const detected = detectSiteId(location.href);
+const siteId = detected === 'unknown' ? 'x10' : detected;
 
 function notifyOdds(slip: Record<string, unknown> | null, cartChange?: boolean) {
   try {
@@ -27,28 +22,27 @@ function notifyOdds(slip: Record<string, unknown> | null, cartChange?: boolean) 
       slip: slip || null,
       suspended: !slip,
       cartChange: !!cartChange,
-      frameKind: kind,
+      frameKind: slip?.frameLabel ?? 'scanner',
     });
   } catch {
     /* extension context invalidated */
   }
 }
 
-/**
- * Top shell: body MO → betslip iframe 감지 → load → contentDocument → 내부 MO
- * Betslip iframe (CS 직접 주입): 해당 document 내부 MO
- */
-if (window === window.top || kind === 'shell-top') {
-  startBetslipIframeLifecycle(notifyOdds);
-}
+const scanner = startScanner({
+  source: 'bti',
+  siteId: siteId === 'x10' ? 'x10' : undefined,
+  onOddsChange: (slip: OddsPayload | null, cartChange?: boolean) =>
+    notifyOdds(slip as Record<string, unknown> | null, cartChange),
+});
 
-if (frameCanHostBetSlip(kind)) {
-  startSlipDomObserverInDocument(document, notifyOdds, location.href, 'native-frame');
-}
+window.__domScannerActive = true;
+window.__btiSlipProbe = () => scanner.probe();
+window.__btiReadSlipOdds = () => scanner.readOdds();
 
 console.log(
-  '[텐텐뱃 slip-lifecycle]',
-  kind,
+  '[DOM Scanner / 텐텐뱃]',
+  siteId,
   window === window.top ? 'top' : 'iframe',
   (location.href || '').slice(0, 80)
 );
