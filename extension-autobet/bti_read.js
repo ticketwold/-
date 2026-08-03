@@ -99,6 +99,7 @@ async function injectReadBtiFrame(tabId, frameId) {
         }
 
         const isWidgetsX = /widgets-x/i.test(location.href)
+          || /\/api\/sportscenter\/betslip/i.test(location.href)
           || !!document.querySelector('[class*="betslip-root"], [id*="betslip-root"]');
 
         let hasInput = false;

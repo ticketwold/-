@@ -203,6 +203,10 @@ function readSlipCardSelectionOdds(card) {
   return readOddsFromSlipCard(card);
 }
 
+function isSportscenterBetslipUrl(url) {
+  return /\/api\/sportscenter\/betslip/i.test(String(url || ''));
+}
+
 function isBoardSelectionButton(btn) {
   if (!btn) return false;
   const cn = String(btn.className || '');
@@ -2467,6 +2471,7 @@ function readAnyVisibleBoardOdds(hint = {}) {
 function isWidgetsXBetslipFrame() {
   const href = location.href || '';
   if (/widgets-x/i.test(href)) return true;
+  if (isSportscenterBetslipUrl(href)) return true;
   if (document.querySelector('[class*="betslip-root"], [class*="BetslipRoot"], [id*="betslip-root"]')) return true;
   const hasInput = !!findBtiBetInput();
   const boardBtns = queryBoardButtons().length;
@@ -2955,9 +2960,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 console.log('[텐텐뱃 v5] content script loaded', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 
 function buildBtiDiagPayload() {
+  const href = location.href || '';
   return {
-    href: location.href,
+    href,
     isTop: window === window.top,
+    frameKind: isSportscenterBetslipUrl(href) ? 'sportscenter-betslip'
+      : (/widgets-x/i.test(href) ? 'widgets-x' : (window === window.top ? 'top' : 'iframe')),
     marker: document.documentElement.getAttribute('data-autobet-bti'),
     slip: readBtiOdds({ preferActiveSlip: true, forScan: true }),
     liveSlip: readLiveSlipCartOdds({ forScan: true }),
@@ -3020,7 +3028,7 @@ function installMainWorldBtiBridge() {
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.4');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.5');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();

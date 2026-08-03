@@ -609,7 +609,7 @@ async function injectAllBtiFramesTab(tabId, force = false) {
   if (probe.framesWithScript === 0) {
     await injectBtiInlineBootstrap(tabId, 0);
     for (const f of frames.slice(1, 12)) {
-      if (/widgets-x|betslip|bti-sports/i.test(f.url || '')) {
+      if (/widgets-x|bti-sports|betslip|sportscenter/i.test(f.url || '')) {
         await injectBtiInlineBootstrap(tabId, f.frameId);
       }
     }
@@ -1241,9 +1241,10 @@ function updateBtiFrameRoles(tabId, results, frameUrls = {}) {
   let boardScore = -1;
   for (const r of results) {
     const url = frameUrls[r.frameId] || '';
-    const widgetsBoost = /widgets-x/i.test(url) ? 800 : 0;
-    if (r.hasInput || widgetsBoost) {
-      const s = widgetsBoost + (r.slip?.odds > 1.01 ? 1000 : 0) + (r.ping?.hasInput ? 500 : 0);
+    const slipUrlBoost = /widgets-x/i.test(url) ? 800
+      : (typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(url) ? 900 : 0);
+    if (r.hasInput || slipUrlBoost) {
+      const s = slipUrlBoost + (r.slip?.odds > 1.01 ? 1000 : 0) + (r.ping?.hasInput ? 500 : 0);
       if (s > slipScore) { slipScore = s; slipFrame = r.frameId; }
     }
     if (r.hasBoard) {
@@ -1486,6 +1487,7 @@ async function probeBtiFramesDiagnostic(btiTab) {
       frameId: f.frameId,
       url: f.url || '',
       widgetsX: /widgets-x/i.test(f.url || ''),
+      sportscenterBetslip: typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(f.url || ''),
       buttons,
       slipOdds,
       hasInput: !!ping?.hasInput,
@@ -1493,8 +1495,8 @@ async function probeBtiFramesDiagnostic(btiTab) {
       pingOk: !!ping?.ok
     };
   })).then((rows) => rows.filter(Boolean).sort((a, b) => {
-    const sa = (a.hasInput ? 1000 : 0) + (a.hasSlip ? 500 : 0) + (a.pingOk ? 100 : 0);
-    const sb = (b.hasInput ? 1000 : 0) + (b.hasSlip ? 500 : 0) + (b.pingOk ? 100 : 0);
+    const sa = (a.sportscenterBetslip ? 1500 : 0) + (a.hasInput ? 1000 : 0) + (a.hasSlip ? 500 : 0) + (a.pingOk ? 100 : 0);
+    const sb = (b.sportscenterBetslip ? 1500 : 0) + (b.hasInput ? 1000 : 0) + (b.hasSlip ? 500 : 0) + (b.pingOk ? 100 : 0);
     return sb - sa;
   }));
 }

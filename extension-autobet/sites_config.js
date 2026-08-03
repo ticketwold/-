@@ -311,8 +311,12 @@ function isInjectableBtiUrl(url) {
   return /master_fe|betslip|sportsbook|bti-sports|Selections_selection|sportscenter|widgets-x/i.test(url || '');
 }
 
+function isSportscenterBetslipUrl(url) {
+  return /\/api\/sportscenter\/betslip/i.test(String(url || ''));
+}
+
 function isWidgetsXBetslipUrl(url) {
-  return /widgets-x|betslip-root|betslip/i.test(url || '');
+  return /widgets-x|betslip-root|sportscenter\/betslip/i.test(url || '');
 }
 
 function scoreBtiFrameUrl(url) {
@@ -323,6 +327,7 @@ function scoreBtiFrameUrl(url) {
     if (url.includes(h)) score += 50;
   }
   if (/widgets-x/i.test(url)) score += 130;
+  if (isSportscenterBetslipUrl(url)) score += 240;
   if (/betslip-root|betslip-root-provider/i.test(url)) score += 90;
   if (/\/sports/i.test(url)) score += 30;
   if (/sportsbook|bti|master_fe|Selections_selection|betslip_fe/i.test(url)) score += 25;
