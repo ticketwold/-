@@ -260,10 +260,11 @@ async function orderBtiFrameIds(tabId) {
 
   for (const f of frames) {
     const url = f.url || '';
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha|facebook\.com/i.test(url)) continue;
     let score = scoreBtiFrameUrl(url);
     if (score < -100) continue;
-    if (f.frameId === 0) score += 3;
-    else if (!isInjectableBtiUrl(url) && score < 8) continue;
+    if (f.frameId === 0) score += 5;
+    else if (!isInjectableBtiUrl(url)) score = Math.max(score, 2);
     scored.push({ frameId: f.frameId, score, url });
   }
 
@@ -474,6 +475,7 @@ function isBtiSlipOddsSource(slip) {
   const src = slip.source || slip.sourceKind || '';
   return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'scan-any'
+    || src === 'board-slip-match' || src === 'brute-dom' || src === 'brute-inject'
     || src === 'bti-api' || String(src).includes('bti-api');
 }
 
@@ -671,20 +673,144 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
   if (!btiTab?.id) {
     return { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
   }
-  const order = await orderBtiFrameIds(btiTab.id);
-  let best = null;
-  for (const frameId of order.slice(0, BTI_MAX_FRAMES)) {
-    await ensureBtiScript(btiTab.id, frameId);
-    const board = await sendBti(
-      btiTab.id,
-      frameId,
-      query ? { type: 'SEARCH_ODDS', query } : { type: 'SCRAPE_BOARD' }
-    );
-    if (!board) continue;
-    const score = (board.eventCount || 0) * 25 + (board.buttonCount || 0) + (board.hitCount || 0) * 10;
-    if (!best || score > best.score) best = { ...board, frameId, score };
+  const frames = await getAllFrames(btiTab.id);
+  const msg = query ? { type: 'SEARCH_ODDS', query } : { type: 'SCRAPE_BOARD' };
+  const results = await Promise.all(frames.map(async (f) => {
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
+    try {
+      await ensureBtiScript(btiTab.id, f.frameId);
+      const board = await withTimeout(sendBti(btiTab.id, f.frameId, msg), 2200, 'BTI board');
+      if (!board) return null;
+      const score = (board.eventCount || 0) * 25 + (board.buttonCount || 0) + (board.hitCount || 0) * 10;
+      return { ...board, frameId: f.frameId, score };
+    } catch (_) {
+      return null;
+    }
+  }));
+  const scored = results.filter(Boolean).sort((a, b) => b.score - a.score);
+  return scored[0] || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
+}
+
+async function probeBtiFramesDiagnostic(btiTab) {
+  if (!btiTab?.id) return [];
+  const frames = await getAllFrames(btiTab.id);
+  return Promise.all(frames.slice(0, 20).map(async (f) => {
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
+    let ping = null;
+    let slipOdds = 0;
+    let buttons = 0;
+    try {
+      await ensureBtiScript(btiTab.id, f.frameId);
+      ping = await withTimeout(sendBti(btiTab.id, f.frameId, { type: 'PING' }), 1500, 'ping');
+      const res = await withTimeout(
+        sendBti(btiTab.id, f.frameId, { type: 'READ_BTI_ODDS', hint: { preferActiveSlip: true, forScan: true } }),
+        1800,
+        'read'
+      );
+      slipOdds = res?.slip?.odds > 1.01 ? res.slip.odds : 0;
+      buttons = ping?.buttonCount || 0;
+    } catch (_) {}
+    return {
+      frameId: f.frameId,
+      url: f.url || '',
+      buttons,
+      slipOdds,
+      hasInput: !!ping?.hasInput,
+      hasSlip: !!ping?.hasSlip,
+      pingOk: !!ping?.ok
+    };
+  })).then((rows) => rows.filter(Boolean).sort((a, b) => (b.slipOdds || 0) - (a.slipOdds || 0)));
+}
+
+async function bruteReadBtiOdds(tabId) {
+  const frames = await getAllFrames(tabId);
+  const hits = await Promise.all(frames.map(async (f) => {
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
+    try {
+      const injected = await withTimeout(injectReadBtiFrame(tabId, f.frameId), 1400, 'brute-inject');
+      if (injected?.odds > 1.01) return { ...injected, source: injected.source || 'brute-inject', _frameId: f.frameId };
+    } catch (_) {}
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [f.frameId] },
+        func: () => {
+          function po(t) {
+            const n = parseFloat(String(t || '').trim());
+            return n > 1.01 && n < 100 ? n : null;
+          }
+          let best = null;
+          let bestScore = -1;
+          const slipSel = document.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
+          const selClean = slipSel.replace(/\s+/g, '').toLowerCase();
+          for (const btn of document.querySelectorAll('button')) {
+            const r = btn.getBoundingClientRect();
+            if (!r || r.width < 2 || r.height < 2) continue;
+            const cls = String(btn.className || '');
+            const selected = /selected|active|pressed|highlight/i.test(cls)
+              || btn.getAttribute('aria-pressed') === 'true'
+              || btn.getAttribute('data-selected') === 'true';
+            const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+            let o = po(oddsEl?.textContent);
+            if (!o) {
+              const m = (btn.textContent || '').match(/(\d+\.\d{2,3})(?:\s*$)/);
+              if (m) o = po(m[1]);
+            }
+            if (!o) continue;
+            let score = selected ? 2000 : 20;
+            if (/Selections_selection|master_fe_Selections/i.test(cls)) score += 200;
+            const btnClean = (btn.textContent || '').replace(/\s+/g, '').toLowerCase();
+            if (selClean.length > 2 && btnClean.includes(selClean.slice(0, Math.min(selClean.length, 6)))) score += 500;
+            if (score > bestScore) {
+              bestScore = score;
+              best = { odds: o, selectionText: slipSel, selected };
+            }
+          }
+          if (!best) {
+            const counter = document.querySelector('#counter, input[class*="Counter"], input[placeholder*="베팅"]');
+            const root = counter?.closest('[class*="betslip"], [class*="Betslip"]') || document.body;
+            const at = (root.textContent || '').match(/@\s*(\d+\.\d{2,4})/);
+            if (at) best = { odds: po(at[1]), selectionText: slipSel, selected: false };
+          }
+          return best;
+        }
+      });
+      const hit = results?.[0]?.result;
+      if (hit?.odds > 1.01) {
+        return {
+          odds: hit.odds,
+          selectionText: hit.selectionText || '',
+          source: 'brute-dom',
+          fromSlip: false,
+          _frameId: f.frameId
+        };
+      }
+    } catch (_) {}
+    return null;
+  }));
+  const found = hits.filter(Boolean).sort((a, b) => {
+    const sa = (a.selected ? 1000 : 0) + a.odds;
+    const sb = (b.selected ? 1000 : 0) + b.odds;
+    return sb - sa;
+  });
+  if (found.length) {
+    lastBtiFrame = { tabId, frameId: found[0]._frameId };
+    return found[0];
   }
-  return best || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
+  return null;
+}
+
+function buildBtiReadHint(poly, opts = {}) {
+  const forScan = opts.forScan === true || (opts.focusTab === true && opts.forStrike !== true);
+  if (forScan) {
+    return {
+      preferActiveSlip: true,
+      forScan: true,
+      fastScan: opts.fastScan,
+      focusTab: opts.focusTab,
+      deepScan: opts.deepScan
+    };
+  }
+  return { preferActiveSlip: true, ...(poly ? btiHintFromPoly(poly) : {}), ...opts };
 }
 
 function attachBtiFrameMeta(slip, frameId) {
@@ -694,20 +820,26 @@ function attachBtiFrameMeta(slip, frameId) {
 
 async function readBtiOddsOnce(btiTab, poly, opts = {}) {
   if (!btiTab?.id) return null;
-  const hint = { ...(poly ? btiHintFromPoly(poly) : {}), ...opts };
-  const forceFull = opts.fastScan === false || opts.deepScan === true || opts.focusTab === true;
+  const hint = buildBtiReadHint(poly, opts);
+  const deep = opts.forScan === true || opts.focusTab === true || opts.fastScan === false;
 
-  const fastHit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: !forceFull });
-  if (fastHit?.odds > 1.01) return attachBtiFrameMeta(fastHit, fastHit._frameId);
+  let hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: true });
+  if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
 
-  if (!forceFull) return null;
+  if (deep) {
+    try {
+      const merged = await readBtiFromAllFrames(btiTab.id, hint, true);
+      if (merged.slip?.odds > 1.01) return attachBtiFrameMeta(merged.slip, merged.frameId);
+    } catch (_) {}
 
-  try {
-    const merged = await readBtiFromAllFrames(btiTab.id, hint, true);
-    if (merged.slip?.odds > 1.01) return attachBtiFrameMeta(merged.slip, merged.frameId);
-  } catch (_) {}
+    hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: false });
+    if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
 
-  return readBtiOddsFast(btiTab.id, { ...hint, fastScan: false });
+    hit = await bruteReadBtiOdds(btiTab.id);
+    if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
+  }
+
+  return null;
 }
 
 async function sendBtiToFrames(tabId, frameIds, msg) {
@@ -1407,7 +1539,12 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
     focusTab: opts.focusTab === true,
     fastScan: opts.fastScan !== false
   };
-  const btiReadOpts = { fastScan: readOpts.fastScan, deepScan: readOpts.focusTab, focusTab: readOpts.focusTab };
+  const btiReadOpts = {
+    fastScan: readOpts.fastScan,
+    deepScan: readOpts.focusTab,
+    focusTab: readOpts.focusTab,
+    forScan: true
+  };
   const scanAttempts = readOpts.focusTab ? 2 : (readOpts.fastScan ? 1 : 2);
   const scanDelay = readOpts.focusTab ? 400 : 250;
 
@@ -1415,7 +1552,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   let arbBti = null;
   for (let attempt = 0; attempt < scanAttempts; attempt++) {
     try {
-      [arbBti, poly] = await Promise.all([
+      const [btiTry, polyTry] = await Promise.all([
         readBtiOddsOnce(found.btiTab, null, btiReadOpts),
         (async () => {
           const multi = await readPolySlipAllBcTabs(leg2Pref, readOpts);
@@ -1424,16 +1561,17 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
           return readPolyOddsOnce(found.polyTab, readOpts);
         })()
       ]);
+      if (btiTry?.odds > 1.01) arbBti = btiTry;
+      if (polyTry && polyOddsForScan(polyTry)) poly = polyTry;
     } catch (_) {}
 
-    const polyO = polyOddsForScan(poly);
-    if ((arbBti?.odds > 1.01) && polyO) break;
+    if ((arbBti?.odds > 1.01) && polyOddsForScan(poly)) break;
     if (attempt < scanAttempts - 1) await sleep(scanDelay);
   }
 
-  if (!(arbBti?.odds > 1.01) && poly) {
+  if (!(arbBti?.odds > 1.01)) {
     try {
-      arbBti = await readBtiOddsOnce(found.btiTab, poly, btiReadOpts);
+      arbBti = await bruteReadBtiOdds(found.btiTab.id);
     } catch (_) {}
   }
   const bti = arbBti;

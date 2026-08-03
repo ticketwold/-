@@ -928,6 +928,15 @@ $('scanBtn')?.addEventListener('click', async () => {
     } else {
       logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
       if (snap.btiDebug) logLine(`  debug: ${JSON.stringify(snap.btiDebug)}`, 'info');
+      if (snap.found?.btiTab?.id && typeof probeBtiFramesDiagnostic === 'function') {
+        try {
+          const probes = await probeBtiFramesDiagnostic(snap.found.btiTab);
+          for (const p of probes.slice(0, 8)) {
+            const line = `  f${p.frameId}: btn${p.buttons} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'} ping${p.pingOk ? 'Y' : 'N'}`;
+            logLine(`${line} · ${(p.url || '(main)').slice(-48)}`, p.slipOdds > 1 ? 'ok' : 'info');
+          }
+        } catch (_) {}
+      }
     }
     if (snap.polyO > 1) {
       const kind = snap.poly?.sourceKind ? ` [${snap.poly.sourceKind}]` : '';

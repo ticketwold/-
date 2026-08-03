@@ -269,7 +269,7 @@ function readBtiSlip(hint) {
   for (let i = realCards.length - 1; i >= 0; i--) {
     const slip = parseSlipFromCard(realCards[i]);
     if (!slip?.odds || slip.odds <= 1.01) continue;
-    if (hint?.excludeTeam || hint?.polyTeam) {
+    if (!hint?.forScan && (hint?.excludeTeam || hint?.polyTeam)) {
       const oppose = hint.excludeTeam || hint.polyTeam;
       const sel = slip.selectionText || slip.teamLabel || '';
       if (teamNamesMatch(sel, oppose)) continue;
@@ -299,6 +299,7 @@ function finalizeBtiOdds(slip) {
   const trusted = slip.fromSlip === true
     || src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'board-slip-match'
+    || src === 'brute-dom' || src === 'brute-inject'
     || src === 'bti-api' || src.includes('bti-api')
     || src === 'scan-any' || (slip.odds > 1.01 && slip.odds < 80);
   if (!trusted) return null;
@@ -2003,7 +2004,7 @@ function readEmergencyBoardOdds(hint = {}) {
     .filter((p) => p?.odds && p.element && boardButtonVisible(p.element));
   if (!parsed.length) return null;
 
-  const oppose = hint.excludeTeam || hint.polyTeam;
+  const oppose = hint.forScan ? '' : (hint.excludeTeam || hint.polyTeam);
   let pick = null;
   if (oppose) {
     pick = parsed.find((p) => !teamNamesMatch(p.label, oppose) && !teamNamesMatch(p.rawText, oppose));
@@ -2034,7 +2035,7 @@ function readEmergencyBoardOdds(hint = {}) {
 }
 
 function readAnyVisibleBoardOdds(hint = {}) {
-  const oppose = hint.excludeTeam || hint.polyTeam;
+  const oppose = hint.forScan ? '' : (hint.excludeTeam || hint.polyTeam);
   const slipSel = getActiveSlipSelectionText();
   if (slipSel) {
     for (const btn of queryBoardButtons()) {
