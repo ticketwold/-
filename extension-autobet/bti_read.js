@@ -110,10 +110,12 @@ async function injectReadBtiFrame(tabId, frameId) {
           if (!vis(inp)) continue;
           const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
           if (!/counter|Counter|베팅/i.test(blob)) continue;
-          let node = inp;
-          for (let i = 0; i < 22 && node; i++) {
-            if (node.querySelector?.('[class*="betInformation__title"], [class*="BetSecondary_bet"]')) {
+          let node = inp.parentElement;
+          while (node) {
+            const hasCard = [...node.querySelectorAll('[class*="betInformation__title"], [class*="BetSecondary_bet"]')].some(vis);
+            if (hasCard) {
               slipPanel = node;
+              break;
             }
             node = node.parentElement;
           }
@@ -122,7 +124,11 @@ async function injectReadBtiFrame(tabId, frameId) {
 
         function isHistoryCard(card) {
           const txt = (card.textContent || '').replace(/\s+/g, ' ');
-          if (/진행\s*중|미정산|정산|적중|미적중|캐시\s*아웃|cash\s*out|내\s*베팅|베팅\s*완료|배팅\s*완료/i.test(txt)) return true;
+          if (/mybets|my-bets|openbets|bethistory|내베팅|베팅내역|배팅내역/i.test(txt)) return true;
+          for (const p of document.querySelectorAll('[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="betHistory"]')) {
+            if (p.contains(card)) return true;
+          }
+          if (/캐시\s*아웃|cash\s*out|베팅\s*번호|티켓\s*번호|정산\s*완료|미적중|적중금|낙첨/i.test(txt)) return true;
           if (slipPanel && !slipPanel.contains(card)) return true;
           return false;
         }
@@ -151,6 +157,10 @@ async function injectReadBtiFrame(tabId, frameId) {
 
         let odds = readSlipCardOdds(card);
         let source = 'slip-card';
+        if (!odds) {
+          odds = readBoardOddsForSelection(selectionText);
+          source = 'board-live';
+        }
         if (!odds) return null;
         return { odds, selectionText, eventText, source, fromSlip: source === 'slip-card', hasInput };
       }

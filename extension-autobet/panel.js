@@ -546,7 +546,11 @@ async function getSnap(cfg, progressLabel, opts = {}) {
     };
   }
   if (progressLabel) logLine(progressLabel, 'info');
-  const snapOpts = { fastScan: true, leg2Synced: true, ...opts };
+  const snapOpts = {
+    leg2Synced: true,
+    fastScan: opts.focusTab ? false : (opts.fastScan !== false),
+    ...opts
+  };
   let snap = await withTimeout(
     new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({

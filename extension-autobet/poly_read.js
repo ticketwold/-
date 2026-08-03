@@ -789,6 +789,16 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
 
   let clicked = false;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const leg2 = await readBcLeg2FromBtiFrames(polyTab);
+    if (isTrustedBcSlip(leg2)) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: leg2.frameId ?? 0 };
+      return leg2;
+    }
+    if (isRelaxedBcSlip(leg2) && attempt >= 1) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: leg2.frameId ?? 0 };
+      return leg2;
+    }
+
     const apiHit = await readBcApiSlipAllFrames(polyTab.id);
     if (isTrustedBcSlip(apiHit)) {
       lastBcLeg2Frame = { tabId: polyTab.id, frameId: apiHit.frameId ?? 0 };
@@ -959,8 +969,8 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const fastScan = opts.fastScan === true;
   const focusTab = opts.focusTab === true;
-  const waitMs = opts.waitMs || (focusTab && !fastScan ? 1500 : 0);
-  const maxAttempts = fastScan ? 2 : (focusTab ? 4 : 2);
+  const waitMs = opts.waitMs || (focusTab ? 1500 : 0);
+  const maxAttempts = focusTab ? 5 : (fastScan ? 3 : 4);
 
   if (focusTab && waitMs > 0 && typeof focusBcTabForRead === 'function') {
     await focusBcTabForRead(polyTab.id, waitMs);
@@ -968,17 +978,21 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
 
   await ensureLeg2Script(polyTab.id, 0, polyTab.url);
   await ensureStakeApiHook(polyTab.id);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: polyTab.id, frameIds: [0] },
+      files: ['stake_slip_read.js']
+    });
+  } catch (_) {}
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      if (attempt === 0 && typeof window.__stakeEnsureSlipOpen === 'function') {
-        await chrome.scripting.executeScript({
-          target: { tabId: polyTab.id, frameIds: [0] },
-          func: async () => {
-            if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
-          }
-        });
-      }
+      await chrome.scripting.executeScript({
+        target: { tabId: polyTab.id, frameIds: [0] },
+        func: async () => {
+          if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
+        }
+      });
       const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), 4500, 'Stake read');
       if (isTrustedBcSlip(res?.slip)) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
@@ -992,7 +1006,7 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
       return injected;
     }
 
-    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, fastScan ? 250 : 400));
+    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, focusTab ? 450 : 300));
   }
   return null;
 }

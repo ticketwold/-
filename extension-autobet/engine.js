@@ -221,13 +221,14 @@ async function readBtiOddsFast(tabId, hint = {}) {
   if (!tabId) return null;
   const readHint = { preferActiveSlip: true, ...hint };
   const frameIds = await buildBtiFastFrameIds(tabId);
+  const firstPass = hint.fastScan === false ? 6 : 4;
 
-  for (const frameId of frameIds.slice(0, 3)) {
+  for (const frameId of frameIds.slice(0, firstPass)) {
     const hit = await readBtiOddsFromFrame(tabId, frameId, readHint);
     if (hit) return hit;
   }
 
-  const rest = frameIds.slice(3, 6);
+  const rest = frameIds.slice(firstPass, 8);
   if (rest.length) {
     const hits = await Promise.all(rest.map((fid) => readBtiOddsFromFrame(tabId, fid, readHint)));
     const found = hits.find((h) => h?.odds > 1.01);
@@ -686,9 +687,9 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
   return best || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
 }
 
-async function readBtiOddsOnce(btiTab, poly) {
+async function readBtiOddsOnce(btiTab, poly, opts = {}) {
   if (!btiTab?.id) return null;
-  const hint = poly ? btiHintFromPoly(poly) : {};
+  const hint = { ...(poly ? btiHintFromPoly(poly) : {}), ...opts };
   return readBtiOddsFast(btiTab.id, hint);
 }
 
@@ -1373,24 +1374,33 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
     focusTab: opts.focusTab === true,
     fastScan: opts.fastScan !== false
   };
+  const btiReadOpts = { fastScan: readOpts.fastScan };
+  const scanAttempts = readOpts.focusTab ? 3 : (readOpts.fastScan ? 1 : 2);
+  const scanDelay = readOpts.focusTab ? 600 : 350;
 
   let poly = null;
   let arbBti = null;
-  try {
-    [arbBti, poly] = await Promise.all([
-      readBtiOddsOnce(found.btiTab, null),
-      (async () => {
-        const multi = await readPolySlipAllBcTabs(leg2Pref, readOpts);
-        if (multi?.tab) found.polyTab = multi.tab;
-        if (multi?.slip?.odds > 1.01) return multi.slip;
-        return readPolyOddsOnce(found.polyTab, readOpts);
-      })()
-    ]);
-  } catch (_) {}
+  for (let attempt = 0; attempt < scanAttempts; attempt++) {
+    try {
+      [arbBti, poly] = await Promise.all([
+        readBtiOddsOnce(found.btiTab, null, btiReadOpts),
+        (async () => {
+          const multi = await readPolySlipAllBcTabs(leg2Pref, readOpts);
+          if (multi?.tab) found.polyTab = multi.tab;
+          if (multi?.slip?.odds > 1.01) return multi.slip;
+          return readPolyOddsOnce(found.polyTab, readOpts);
+        })()
+      ]);
+    } catch (_) {}
+
+    const polyO = polyOddsForScan(poly);
+    if ((arbBti?.odds > 1.01) && polyO) break;
+    if (attempt < scanAttempts - 1) await sleep(scanDelay);
+  }
 
   if (!(arbBti?.odds > 1.01) && poly) {
     try {
-      arbBti = await readBtiOddsOnce(found.btiTab, poly);
+      arbBti = await readBtiOddsOnce(found.btiTab, poly, btiReadOpts);
     } catch (_) {}
   }
   const bti = arbBti;
