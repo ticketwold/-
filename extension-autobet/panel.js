@@ -601,6 +601,7 @@ function applyInstantOdds(msg) {
       if (isLeg2Connected() || msg.source === 'bti') {
         beginOddsTransition(msg.source === 'bti' ? 'bti' : 'poly');
       }
+      scheduleInstantRefresh();
     } else {
       setCartClosedOdds(msg.source === 'bti' ? 'bti' : 'poly');
     }

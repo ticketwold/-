@@ -226,9 +226,10 @@ async function readBtiOddsInstant(tabId, hint = {}) {
   if (lastBtiFrame?.tabId === tabId && !frameIds.includes(lastBtiFrame.frameId)) frameIds.push(lastBtiFrame.frameId);
   if (!frameIds.length) {
     const fast = await buildBtiFastFrameIds(tabId);
-    frameIds.push(...fast.slice(0, 3));
+    frameIds.push(...fast.slice(0, 6));
   }
-  for (const fid of frameIds.slice(0, 4)) {
+  frameIds = await prioritizeBtiFrameIds(tabId, frameIds, 8);
+  for (const fid of frameIds.slice(0, 6)) {
     const slip = await readBtiOddsFromFrame(tabId, fid, readHint, BTI_READ_INSTANT_MS);
     if (slip?.odds > 1.01) return slip;
   }
@@ -239,8 +240,9 @@ async function readBtiOddsFast(tabId, hint = {}) {
   if (!tabId) return null;
   const readHint = { preferActiveSlip: true, ...hint };
   const fast = hint.fastScan !== false;
-  const frameIds = await buildBtiFastFrameIds(tabId);
-  const batchSize = fast ? 8 : 12;
+  let frameIds = await buildBtiFastFrameIds(tabId);
+  frameIds = await prioritizeBtiFrameIds(tabId, frameIds, fast ? 12 : 16);
+  const batchSize = fast ? 10 : 14;
   const timeoutMs = fast ? BTI_READ_FAST_MS : BTI_READ_DEEP_MS;
   const batch = frameIds.slice(0, batchSize);
 
@@ -289,8 +291,13 @@ async function orderBtiFrameIds(tabId) {
     if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha|facebook\.com/i.test(url)) continue;
     let score = scoreBtiFrameUrl(url);
     if (score < -100) continue;
-    if (f.frameId === 0) score += 5;
-    else if (!isInjectableBtiUrl(url)) score = Math.max(score, 2);
+    if (f.frameId === 0 && typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(url)) {
+      score -= 300;
+    } else if (f.frameId === 0) {
+      score += 5;
+    } else if (!isInjectableBtiUrl(url)) {
+      score = Math.max(score, 2);
+    }
     scored.push({ frameId: f.frameId, score, url });
   }
 

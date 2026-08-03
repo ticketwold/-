@@ -179,7 +179,7 @@ function scoreLeg1Tab(url, activeId, tabId) {
   if (!isLeg1TabUrl(url)) return -1;
   let score = scoreWrapperBtiTab(url);
   if (isWrapperBtiUrl(url)) score += 20;
-  if (/\/sports|sportscenter|gamecode=/i.test(url || '')) score += 8;
+  if (/\/sports|sportscenter|gamecode=|\/in-play\/|\/match\//i.test(url || '')) score += 8;
   if (tabId === activeId) score += 5;
   return score;
 }
@@ -268,6 +268,18 @@ function getWrapperGamecode(url) {
   return m ? m[1] : null;
 }
 
+function isX10InPlayShellUrl(url) {
+  if (!url) return false;
+  if (/widgets-x|betslip|sportscenter|bti-sports|master_fe|Selections_selection/i.test(url)) return false;
+  try {
+    const u = new URL(url);
+    if (!hostMatches(url, ['x10x10s.com'])) return false;
+    return /\/in-play\/|\/match\//i.test(u.pathname);
+  } catch (_) {
+    return /x10x10s\.com.*\/(in-play|match)\//i.test(url);
+  }
+}
+
 function isWrapperBtiUrl(url) {
   if (!isWrapperUrl(url)) return false;
   const gc = getWrapperGamecode(url);
@@ -311,7 +323,8 @@ function scoreBtiFrameUrl(url) {
   if (/sportsbook|bti|master_fe|Selections_selection|betslip_fe/i.test(url)) score += 25;
   if (/sptpub|sptsportscdn|biahosted|cocoesports/i.test(url)) score += 40;
   if (/gamecode=/.test(url)) score += 10;
-  if (isWrapperUrl(url)) score += 5;
+  if (isX10InPlayShellUrl(url)) score -= 280;
+  else if (isWrapperUrl(url)) score += 5;
   return score;
 }
 
