@@ -2706,7 +2706,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 console.log('[텐텐뱃 v5] content script loaded');
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.4.7');
+  document.documentElement.setAttribute('data-autobet-bti', '2.4.8');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
 } catch (_) {}

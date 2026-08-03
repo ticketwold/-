@@ -446,6 +446,57 @@ function sendPoly(tabId, msg, frameId = 0) {
   });
 }
 
+async function injectBtiInlineBootstrap(tabId, frameId = 0) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => {
+        document.documentElement.setAttribute('data-autobet-bti', 'inline');
+        if (typeof window.__btiReadOdds === 'function') return;
+        window.__btiReadOdds = function readInline(hint) {
+          hint = hint || {};
+          function po(t) {
+            const n = parseFloat(String(t || '').trim());
+            return n > 1.01 && n < 100 ? n : null;
+          }
+          const counter = document.querySelector('#counter, input[class*="Counter"], input[placeholder*="베팅"]');
+          const root = counter?.closest('[class*="betslip"], [class*="Betslip"]') || document.body;
+          const at = (root.textContent || '').match(/@\s*(\d+\.\d{2,4})/);
+          if (at) {
+            return {
+              odds: po(at[1]),
+              source: 'inline-bootstrap',
+              fromSlip: true,
+              selectionText: root.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || ''
+            };
+          }
+          let best = null;
+          let bestScore = -1;
+          for (const btn of document.querySelectorAll('button')) {
+            const r = btn.getBoundingClientRect?.();
+            if (!r || r.width < 2) continue;
+            const cls = String(btn.className || '');
+            const selected = /selected|active|pressed/i.test(cls) || btn.getAttribute('aria-pressed') === 'true';
+            const m = (btn.textContent || '').match(/(\d+\.\d{2,3})/);
+            if (!m) continue;
+            const o = po(m[1]);
+            if (!o) continue;
+            const score = (selected ? 1000 : 10) + o;
+            if (score > bestScore) {
+              bestScore = score;
+              best = { odds: o, source: 'inline-board', fromSlip: false, selectionText: '' };
+            }
+          }
+          return best;
+        };
+      }
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function probeBtiInjectStatus(tabId) {
   const frames = await getAllFrames(tabId);
   const hits = [];
@@ -528,7 +579,17 @@ async function injectAllBtiFramesTab(tabId, force = false) {
   for (const f of frames) btiScriptReady.add(`${tabId}:${f.frameId}`);
 
   const probe = await probeBtiInjectStatus(tabId);
-  return { ok: probe.framesWithScript > 0, errors, ...probe };
+  if (probe.framesWithScript === 0) {
+    await injectBtiInlineBootstrap(tabId, 0);
+    for (const f of frames.slice(1, 12)) {
+      if (/widgets-x|betslip|bti-sports/i.test(f.url || '')) {
+        await injectBtiInlineBootstrap(tabId, f.frameId);
+      }
+    }
+    const reprobe = await probeBtiInjectStatus(tabId);
+    return { ok: reprobe.framesWithScript > 0, errors, inlineFallback: true, ...reprobe };
+  }
+  return { ok: probe.framesWithScript > 0, errors, inlineFallback: false, ...probe };
 }
 
 async function ensureBtiScript(tabId, frameId) {
@@ -1287,6 +1348,52 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
   }));
   const scored = results.filter(Boolean).sort((a, b) => b.score - a.score);
   return scored[0] || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
+}
+
+async function diagnoseBtiExtension(leg2Pref = 'bcgame') {
+  const manifest = chrome.runtime.getManifest();
+  const tabs = await enumerateAllTabs();
+  const webTabs = tabs.filter((t) => /^https?:/i.test(tabEffectiveUrl(t)));
+  const found = await findTabs(leg2Pref);
+  let inject = null;
+  let scriptingOk = false;
+  let scriptingErr = '';
+
+  if (found.btiTab?.id) {
+    try {
+      const ping = await chrome.scripting.executeScript({
+        target: { tabId: found.btiTab.id, frameIds: [0] },
+        func: () => ({ href: location.href, host: location.hostname })
+      });
+      scriptingOk = !!ping?.[0]?.result?.href;
+    } catch (e) {
+      scriptingErr = String(e?.message || e).slice(0, 120);
+    }
+    inject = await injectAllBtiFramesTab(found.btiTab.id, true);
+  }
+
+  let summary = '';
+  if (!found.btiTab) {
+    summary = '텐텐뱃 탭 없음 — [텐텐뱃 열기] 클릭';
+  } else if (!scriptingOk) {
+    summary = `탭 접근 실패: ${scriptingErr || '권한 없음'} — 같은 Chrome인지 확인`;
+  } else if (!(inject?.framesWithScript > 0)) {
+    summary = `스크립트 주입 실패 — chrome://extensions 에서 확장 활성화 확인 (ID ${chrome.runtime.id})`;
+  } else {
+    summary = `정상 — 스크립트 ${inject.framesWithScript}개 프레임`;
+  }
+
+  return {
+    ok: !!(found.btiTab && scriptingOk && inject?.framesWithScript > 0),
+    extensionId: chrome.runtime.id,
+    version: manifest.version,
+    webTabCount: webTabs.length,
+    btiTab: found.btiTab,
+    scriptingOk,
+    scriptingErr,
+    inject,
+    summary
+  };
 }
 
 async function verifyBtiConnection(leg2Pref = 'bcgame') {

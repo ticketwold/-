@@ -99,6 +99,28 @@ function updateSyncUi(cfg) {
   updateLeg2Labels(c);
 }
 
+async function runStartupDiagnose() {
+  const cfg = getConfig();
+  try {
+    const res = await sendBgMessage('DIAGNOSE_BTI', { leg2: cfg.leg2 });
+    logLine(`확장 v${res.version} · ID ${(res.extensionId || '').slice(0, 12)}…`, 'info');
+    if (res.btiTab?.id) {
+      logLine(`텐텐뱃 탭 #${res.btiTab.id} · ${(res.btiTab.url || '').replace(/^https?:\/\//, '').slice(0, 50)}`, 'info');
+    } else {
+      logLine('텐텐뱃 탭 없음 — [텐텐뱃 열기] 클릭', 'err');
+    }
+    logLine(res.summary || '진단 완료', res.ok ? 'ok' : 'err');
+    if (res.inject?.errors?.length) {
+      logLine(`주입오류: ${res.inject.errors.join(' · ')}`, 'err');
+    }
+    if (!res.ok) {
+      $('statusHint').textContent = res.summary || '확장 진단 실패 — chrome://extensions 확인';
+    }
+  } catch (e) {
+    logLine(`확장 진단 실패: ${e.message}`, 'err');
+  }
+}
+
 async function verifyBtiSite() {
   if (btiVerifyBusy) return;
   btiVerifyBusy = true;
@@ -1469,3 +1491,4 @@ setInterval(() => {
 setInterval(panelLoop, PANEL_LOOP_ARMED_MS);
 
 logLine(`v${chrome.runtime.getManifest().version} — BC.Game · Stake.com 지원`, 'info');
+runStartupDiagnose();

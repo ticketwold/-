@@ -102,6 +102,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'DIAGNOSE_BTI') {
+    diagnoseBtiExtension(msg.leg2 || 'bcgame')
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '진단 실패' }));
+    return true;
+  }
+
   if (msg.type === 'FIND_TABS') {
     findTabs(msg.leg2 || 'bcgame')
       .then((found) => sendResponse({ ok: true, ...found }))
