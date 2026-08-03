@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 자동배팅",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "텐텐뱃·BC.Game·Stake.com 양방 자동배팅 — 배당 스캔·금액 동기화",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom"],
   "host_permissions": [
@@ -31,7 +31,11 @@
         "*://*.bti-sports.com/*",
         "*://*.x10x10s.com/*",
         "*://*.live8588.com/*",
-        "*://*.fxf774.com/*"
+        "*://*.fxf774.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.biahosted.com/*",
+        "*://*.cocoesports.com/*"
       ],
       "js": ["bti_content.js"],
       "run_at": "document_idle",
@@ -43,7 +47,11 @@
         "*://*.bti-sports.com/*",
         "*://*.x10x10s.com/*",
         "*://*.live8588.com/*",
-        "*://*.fxf774.com/*"
+        "*://*.fxf774.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.biahosted.com/*",
+        "*://*.cocoesports.com/*"
       ],
       "js": ["bti_api_hook.js"],
       "run_at": "document_start",

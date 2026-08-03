@@ -242,7 +242,7 @@ async function readBtiOddsFast(tabId, hint = {}) {
 
   try {
     const merged = await readBtiFromAllFrames(tabId, readHint, false);
-    if (merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip)) return merged.slip;
+    if (merged.slip?.odds > 1.01) return merged.slip;
   } catch (_) {}
 
   return null;
@@ -266,10 +266,12 @@ async function orderBtiFrameIds(tabId) {
   const scored = [];
 
   for (const f of frames) {
-    if (f.frameId !== 0 && !isInjectableBtiUrl(f.url)) continue;
-    let score = scoreBtiFrameUrl(f.url || '');
+    const url = f.url || '';
+    let score = scoreBtiFrameUrl(url);
+    if (score < -100) continue;
     if (f.frameId === 0) score += 3;
-    scored.push({ frameId: f.frameId, score, url: f.url || '' });
+    else if (!isInjectableBtiUrl(url)) score = Math.max(score, 1);
+    scored.push({ frameId: f.frameId, score, url });
   }
 
   if (!scored.length) {
@@ -475,9 +477,10 @@ function scoreBtiProbe(ping, slip) {
 function isBtiSlipOddsSource(slip) {
   if (!slip) return false;
   if (slip.fromSlip === true) return true;
+  if (slip.odds > 1.01 && slip.odds < 80) return true;
   const src = slip.source || slip.sourceKind || '';
   return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
-    || src === 'board-live' || src === 'board' || src === 'board-emergency'
+    || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'scan-any'
     || src === 'bti-api' || String(src).includes('bti-api');
 }
 
@@ -598,7 +601,7 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
 
   if (!(merged.slip?.odds > 1.01)) {
     const scraped = await scrapeBtiFromAllFrames(tabId);
-    if (scraped.slip?.odds > 1.01 && isBtiSlipOddsSource(scraped.slip)) return scraped;
+    if (scraped.slip?.odds > 1.01) return scraped;
   }
 
   if (!(merged.slip?.odds > 1.01)) {
@@ -687,15 +690,21 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
   return best || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
 }
 
+function attachBtiFrameMeta(slip, frameId) {
+  if (!slip || frameId == null) return slip;
+  return { ...slip, _frameId: frameId };
+}
+
 async function readBtiOddsOnce(btiTab, poly, opts = {}) {
   if (!btiTab?.id) return null;
   const hint = { ...(poly ? btiHintFromPoly(poly) : {}), ...opts };
   const forceFull = opts.fastScan === false || opts.deepScan === true || opts.focusTab === true;
   try {
     const merged = await readBtiFromAllFrames(btiTab.id, hint, forceFull);
-    if (merged.slip?.odds > 1.01) return merged.slip;
+    if (merged.slip?.odds > 1.01) return attachBtiFrameMeta(merged.slip, merged.frameId);
   } catch (_) {}
-  return readBtiOddsFast(btiTab.id, hint);
+  const fast = await readBtiOddsFast(btiTab.id, hint);
+  return fast?.odds > 1.01 ? fast : null;
 }
 
 async function sendBtiToFrames(tabId, frameIds, msg) {
@@ -1432,7 +1441,13 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
     profit,
     polyUsd,
     reason,
-    hint: btiHintFromPoly(poly)
+    hint: btiHintFromPoly(poly),
+    btiDebug: bti ? {
+      source: bti.source || bti.sourceKind || '',
+      frameId: bti._frameId ?? null,
+      fromSlip: !!bti.fromSlip,
+      selectionText: bti.selectionText || bti.teamLabel || ''
+    } : null
   };
 }
 

@@ -4,8 +4,14 @@ const SITE_CONFIG = {
   BCGAME_HOSTS: ['bc.game'],
   STAKE_HOSTS: ['stake.com'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
-  BTI_HOST_HINTS: ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'],
-  BTI_INJECTABLE_HOSTS: ['bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com'],
+  BTI_HOST_HINTS: [
+    'bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com',
+    'sptpub.com', 'sptsportscdn.com', 'biahosted.com', 'cocoesports.com'
+  ],
+  BTI_INJECTABLE_HOSTS: [
+    'bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com',
+    'sptpub.com', 'sptsportscdn.com', 'biahosted.com', 'cocoesports.com'
+  ],
   LEG1_LABEL: '텐텐뱃',
   LEG1_SHORT: '텐텐',
   LEG2_SITES: {
@@ -164,22 +170,24 @@ function scoreWrapperBtiTab(url) {
 
 function isInjectableBtiUrl(url) {
   if (!url || url === 'about:blank') return false;
+  if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha|widgets?\./i.test(url)) return false;
   try {
     const h = new URL(url).hostname.toLowerCase();
-    return SITE_CONFIG.BTI_INJECTABLE_HOSTS.some((s) => h === s || h.endsWith('.' + s));
-  } catch (_) {
-    return false;
-  }
+    if (SITE_CONFIG.BTI_INJECTABLE_HOSTS.some((s) => h === s || h.endsWith('.' + s))) return true;
+  } catch (_) {}
+  return /master_fe|betslip|sportsbook|bti-sports|Selections_selection|sportscenter/i.test(url || '');
 }
 
 function scoreBtiFrameUrl(url) {
   if (!url) return 0;
+  if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(url)) return -500;
   let score = 0;
   for (const h of SITE_CONFIG.BTI_HOST_HINTS) {
     if (url.includes(h)) score += 50;
   }
   if (/\/sports/i.test(url)) score += 30;
-  if (/sportsbook|bti|master_fe/i.test(url)) score += 15;
+  if (/sportsbook|bti|master_fe|Selections_selection|betslip_fe/i.test(url)) score += 25;
+  if (/sptpub|sptsportscdn|biahosted|cocoesports/i.test(url)) score += 40;
   if (/gamecode=/.test(url)) score += 10;
   if (isWrapperUrl(url)) score += 5;
   return score;

@@ -105,7 +105,7 @@ async function syncLeg2Site() {
     });
     updateSyncUi(cfg);
     logLine(`${leg2PrefLabel(cfg.leg2)} 연결됨 (탭 ${found.polyTab.id})`, 'ok');
-    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 800, fastScan: true });
+    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 1200, fastScan: false });
     liveSnap = snap;
     updateStatusFromSnap(snap, cfg);
     amountSyncQueued = true;
@@ -328,7 +328,9 @@ function applyInstantOdds(msg) {
   const now = Date.now();
   if (msg.source === 'bti') {
     const slipSource = msg.slip?.source || '';
-    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched' || slipSource === 'board-live' || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
+      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'scan-any'
+      || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.btiO = o;
@@ -370,7 +372,9 @@ function stabilizeSnap(snap, cfg) {
   if (snap.btiO > 1) {
     const next = normalizeSportsOdds(snap.btiO);
     const slipSource = snap.bti?.source || '';
-    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched' || slipSource === 'board-live' || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
+      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'scan-any'
+      || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
@@ -889,8 +893,14 @@ $('scanBtn')?.addEventListener('click', async () => {
       }
     }
 
-    if (snap.btiO > 1) logLine(`${leg1Label()} ${snap.btiO.toFixed(3)}`, 'ok');
-    else logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
+    if (snap.btiO > 1) {
+      const dbg = snap.btiDebug;
+      const src = dbg?.source ? ` [${dbg.source}${dbg.frameId != null ? ` f${dbg.frameId}` : ''}]` : '';
+      logLine(`${leg1Label()} ${snap.btiO.toFixed(3)}${src}`, 'ok');
+    } else {
+      logLine(`${leg1Label()} 배당 없음 — 스포츠 페이지·배당 클릭`, 'err');
+      if (snap.btiDebug) logLine(`  debug: ${JSON.stringify(snap.btiDebug)}`, 'info');
+    }
     if (snap.polyO > 1) {
       const kind = snap.poly?.sourceKind ? ` [${snap.poly.sourceKind}]` : '';
       const cents = snap.poly?.priceCents ? `${snap.poly.priceCents}¢ · ` : '';
