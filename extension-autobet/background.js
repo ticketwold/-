@@ -158,6 +158,8 @@ chrome.action.onClicked.addListener(() => openPanel());
 chrome.windows.onRemoved.addListener((id) => { if (id === panelWindowId) panelWindowId = null; });
 
 chrome.runtime.onInstalled.addListener(() => {
+  if (typeof installLeg1ScriptWatcher === 'function') installLeg1ScriptWatcher();
+  if (typeof injectAllOpenLeg1Tabs === 'function') injectAllOpenLeg1Tabs().catch(() => {});
   openPanel().catch(() => {});
 });
 
@@ -169,6 +171,8 @@ chrome.runtime.onStartup.addListener(() => {
 
 loadConfig().then(() => {
   console.log('[자동배팅] background — 별도 창 패널');
+  if (typeof installLeg1ScriptWatcher === 'function') installLeg1ScriptWatcher();
+  if (typeof injectAllOpenLeg1Tabs === 'function') injectAllOpenLeg1Tabs().catch(() => {});
   if (typeof installRecentWebTabTracker === 'function') installRecentWebTabTracker();
   if (armed) openPanel().catch(() => {});
 });

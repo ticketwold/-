@@ -463,6 +463,7 @@ async function injectAllBtiFramesTab(tabId) {
     });
     btiAllInjectedFrames.set(tabId, count);
     btiScriptReady.add(`all:${tabId}`);
+    for (const f of frames) btiScriptReady.add(`${tabId}:${f.frameId}`);
   } catch (_) {}
 }
 
@@ -568,6 +569,40 @@ let recentWebTabIds = [];
 
 function getRecentWebTabIds() {
   return recentWebTabIds.slice();
+}
+
+function installLeg1ScriptWatcher() {
+  if (installLeg1ScriptWatcher._done) return;
+  installLeg1ScriptWatcher._done = true;
+
+  const scheduleInject = (tabId, url) => {
+    if (!tabId || !url || !/^https?:/i.test(url)) return;
+    if (typeof isLeg1TabUrl !== 'function' || !isLeg1TabUrl(url)) return;
+    injectAllBtiFramesTab(tabId).catch(() => {});
+  };
+
+  if (chrome.webNavigation?.onCompleted) {
+    chrome.webNavigation.onCompleted.addListener((details) => {
+      scheduleInject(details.tabId, details.url);
+    });
+  }
+  if (chrome.tabs?.onUpdated) {
+    chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+      if (info.status !== 'complete') return;
+      scheduleInject(tabId, tabEffectiveUrl(tab) || info.url || '');
+    });
+  }
+}
+
+async function injectAllOpenLeg1Tabs() {
+  const tabs = await enumerateAllTabs();
+  await Promise.all(tabs.map(async (tab) => {
+    if (!tab?.id) return;
+    const url = await resolveTabUrlEnhanced(tab);
+    if (url && typeof isLeg1TabUrl === 'function' && isLeg1TabUrl(url)) {
+      await injectAllBtiFramesTab(tab.id).catch(() => {});
+    }
+  }));
 }
 
 function installRecentWebTabTracker() {
