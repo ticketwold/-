@@ -513,7 +513,7 @@ function isTrustedBcSlip(slip) {
   if (kind === 'sports-text') return false;
   const confirmed = slip.fromPayout && slip.stake > 0;
   const hasSelection = !!(slip.teamLabel || slip.outcome || slip.selectionText || slip.eventText);
-  if (slip.odds > 7 && !confirmed) return false;
+  if (slip.odds > 12 && !confirmed) return false;
   if (slip.odds > 5.5 && !confirmed && (kind === 'sports-board-selected' || slip.method === 'board-selected')) return false;
   if (kind === 'bc-native-slip' && !confirmed && !hasSelection && !(slip.hasInput || slip.inputCount > 0 || slip.method)) return false;
   if (confirmed) return true;
@@ -766,15 +766,16 @@ async function autoOpenBcSportsSlip(tabId, teamHint) {
 
 async function readBcSportsNativeSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
+  const fastScan = opts.fastScan === true;
   const focusTab = opts.focusTab === true;
-  const waitMs = opts.waitMs || (focusTab ? 2000 : 0);
+  const waitMs = opts.waitMs || (focusTab && !fastScan ? 2000 : 0);
   const teamHint = opts.teamHint || opts.excludeTeam || '';
-  const maxAttempts = focusTab ? 6 : 2;
+  const maxAttempts = fastScan ? 2 : (focusTab ? 6 : 2);
 
   if (focusTab && waitMs > 0) await focusBcTabForRead(polyTab.id, waitMs);
   if (focusTab) {
-    await waitForBetbyRenderer(polyTab.id, 8000);
-    await waitForBcSportsFrame(polyTab.id, 6000);
+    await waitForBetbyRenderer(polyTab.id, fastScan ? 2500 : 8000);
+    await waitForBcSportsFrame(polyTab.id, fastScan ? 2000 : 6000);
   }
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);

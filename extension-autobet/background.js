@@ -86,6 +86,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
+  if (msg.type === 'READ_SNAPSHOT') {
+    readSnapshot(msg.leg2, msg.btiBetKrw, msg.usdRate, msg.opts || {})
+      .then((snap) => sendResponse(snap))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '배당 읽기 실패' }));
+    return true;
+  }
+
   if (msg.type === 'OPEN_AUTOBET_PANEL') {
     openPanel().then((id) => sendResponse({ ok: true, windowId: id })).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

@@ -1,6 +1,6 @@
 'use strict';
 
-const SNAP_TIMEOUT_MS = 20000;
+const SNAP_TIMEOUT_MS = 40000;
 const ODDS_POLL_MS = 250;
 const ODDS_POLL_ARMED_MS = 60;
 const AMOUNT_SYNC_INTERVAL_MS = 120;
@@ -451,8 +451,21 @@ async function refreshOddsLive() {
 
 async function getSnap(cfg, progressLabel, opts = {}) {
   if (progressLabel) logLine(progressLabel, 'info');
+  const snapOpts = { fastScan: true, ...opts };
   let snap = await withTimeout(
-    readSnapshot(cfg.leg2, cfg.btiBetKrw, cfg.usdRate, opts),
+    new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: 'READ_SNAPSHOT',
+        leg2: cfg.leg2,
+        btiBetKrw: cfg.btiBetKrw,
+        usdRate: cfg.usdRate,
+        opts: snapOpts
+      }, (response) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else if (!response) reject(new Error('배당 읽기 응답 없음'));
+        else resolve(response);
+      });
+    }),
     SNAP_TIMEOUT_MS,
     '배당 읽기'
   );
