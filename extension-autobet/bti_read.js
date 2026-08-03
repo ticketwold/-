@@ -149,7 +149,25 @@ async function injectReadBtiFrame(tabId, frameId) {
 
         if (!card && cards.length) card = cards[cards.length - 1];
 
-        if (!card) return null;
+        if (!card) {
+          for (const btn of document.querySelectorAll('button[class*="Selections_selection"], button[class*="selection"]')) {
+            if (!vis(btn)) continue;
+            const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+            const o = parseOdds(oddsEl?.textContent || btn.textContent);
+            if (!o) continue;
+            const cls = String(btn.className || '');
+            const selected = /selected|active|pressed/i.test(cls) || btn.getAttribute('aria-pressed') === 'true';
+            if (!selected) continue;
+            return { odds: o, selectionText: '', eventText: '', source: 'board-live', fromSlip: false, hasInput };
+          }
+          for (const btn of document.querySelectorAll('button[class*="Selections_selection"], button[class*="selection"]')) {
+            if (!vis(btn)) continue;
+            const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+            const o = parseOdds(oddsEl?.textContent || btn.textContent);
+            if (o) return { odds: o, selectionText: '', eventText: '', source: 'scan-any', fromSlip: false, hasInput };
+          }
+          return null;
+        }
         const txt = (card.textContent || '').trim();
         const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
         const selectionText = titleEls[0]?.textContent?.trim() || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : '');
