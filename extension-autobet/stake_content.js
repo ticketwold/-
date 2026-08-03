@@ -186,9 +186,11 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       if (!isStakeSportsPage()) return;
       const hit = e.target?.closest?.('button, [role="button"], [class*="selection"], [class*="Selection"], [class*="outcome"]');
       if (!hit) return;
-      suppressReadUntil = Date.now() + 140;
+      suppressReadUntil = Date.now() + 35;
       signalCartChange();
       schedule();
+      setTimeout(schedule, 40);
+      setTimeout(schedule, 100);
     }, true);
     document.addEventListener('click', schedule, true);
     document.addEventListener('input', schedule, true);

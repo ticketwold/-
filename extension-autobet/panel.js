@@ -2,19 +2,21 @@
 
 const SNAP_TIMEOUT_MS = 40000;
 const SCAN_TIMEOUT_MS = 90000;
-const ODDS_POLL_MS = 100;
-const ODDS_POLL_ARMED_MS = 100;
+const ODDS_POLL_MS = 16;
+const ODDS_POLL_ARMED_MS = 16;
 const AMOUNT_SYNC_INTERVAL_MS = 100;
 const AMOUNT_SYNC_ARMED_MS = 80;
 const PANEL_LOOP_MS = 200;
 const PANEL_LOOP_ARMED_MS = 16;
-const ODDS_GAP_FILL_MS = 3000;
-const ODDS_INSTANT_FRESH_MS = 800;
-const ODDS_TRANSITION_MS = 700;
+const ODDS_GAP_FILL_MS = 1200;
+const ODDS_INSTANT_FRESH_MS = 400;
+const ODDS_TRANSITION_MS = 80;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
 const BTI_REAL_CHANGE_EPS = 0.03;
 let btiVerifyBusy = false;
 let leg2SyncBusy = false;
+let instantRefreshQueued = false;
+let instantRefreshBusy = false;
 
 function isBcSlipUiSource(slip) {
   if (!slip) return false;
@@ -567,6 +569,32 @@ function selectionLabelChanged(a, b) {
   return true;
 }
 
+function mergeInstantSnap(msg, cfg) {
+  const btiO = msg.source === 'bti' && msg.slip?.odds > 1
+    ? normalizeSportsOdds(msg.slip.odds)
+    : (lastKnownOdds.btiO > 1.01 ? lastKnownOdds.btiO : (lastKnownOdds.btiO === 0 ? 0 : liveSnap?.btiO ?? null));
+  const polyO = msg.source !== 'bti' && msg.slip?.odds > 1
+    ? normalizeSportsOdds(msg.slip.odds)
+    : (lastKnownOdds.polyO > 1.01 ? lastKnownOdds.polyO : (lastKnownOdds.polyO === 0 ? 0 : liveSnap?.polyO ?? null));
+  const snap = {
+    ok: true,
+    ...(liveSnap?.ok ? liveSnap : {}),
+    found: tabCache || liveSnap?.found || null,
+    bti: msg.source === 'bti' ? msg.slip : (liveSnap?.bti || null),
+    poly: msg.source !== 'bti' ? msg.slip : (liveSnap?.poly || null),
+    btiO,
+    polyO,
+    reason: liveSnap?.reason || ''
+  };
+  if (btiO > 1.01 && polyO > 1.01) {
+    snap.profit = calcProfit(btiO, polyO);
+    snap.polyUsd = calcPolyBetUsd(cfg.btiBetKrw, btiO, polyO, cfg.usdRate);
+  } else {
+    snap.profit = null;
+  }
+  return stabilizeSnap(snap, cfg);
+}
+
 function applyInstantOdds(msg) {
   if (msg.suspended || !msg?.slip?.odds || msg.slip.odds <= 1) {
     if (msg.cartChange) {
@@ -626,9 +654,9 @@ function applyInstantOdds(msg) {
   }
   lastSynced.at = 0;
   amountSyncQueued = true;
-  const patched = patchSnapFromKnown(liveSnap.ok ? liveSnap : {}, cfg);
-  liveSnap = patched;
-  updateStatusFromSnap(patched, cfg);
+  liveSnap = mergeInstantSnap(msg, cfg);
+  updateStatusFromSnap(liveSnap, cfg);
+  scheduleInstantRefresh();
   return true;
 }
 
@@ -829,12 +857,53 @@ async function maybeStrikeOnSnap(snap, cfg, label = 'instant') {
   return true;
 }
 
+async function refreshOddsInstant() {
+  if (!isLeg2Connected() || instantRefreshBusy) return;
+  instantRefreshBusy = true;
+  const cfg = getConfig();
+  try {
+    const snap = await getSnap(cfg, null, { instant: true, fastScan: true });
+    liveSnap = snap;
+    if (!snap.ok) {
+      if (snap.reason) $('statusHint').textContent = snap.reason;
+      return;
+    }
+    updateStatusFromSnap(snap, cfg);
+    if (snap.btiO > 1 && snap.polyO > 1) {
+      amountSyncQueued = true;
+      if (armedLocal && !haltAutoBet && snap.profit != null && snap.profit >= cfg.minProfit) {
+        maybeStrikeOnSnap(snap, cfg, 'instant');
+      }
+    }
+  } catch (_) {
+  } finally {
+    instantRefreshBusy = false;
+    if (instantRefreshQueued) {
+      instantRefreshQueued = false;
+      scheduleInstantRefresh();
+    }
+  }
+}
+
+function scheduleInstantRefresh() {
+  if (!isLeg2Connected()) return;
+  if (instantRefreshBusy) {
+    instantRefreshQueued = true;
+    return;
+  }
+  requestAnimationFrame(() => refreshOddsInstant());
+}
+
 async function refreshOddsLive() {
-  if (oddsReadBusy || strikeLock || !isLeg2Connected()) return;
+  if (!isLeg2Connected()) return;
+  if (instantRefreshBusy || oddsReadBusy) {
+    scheduleInstantRefresh();
+    return;
+  }
   oddsReadBusy = true;
   const cfg = getConfig();
   try {
-    const snap = await getSnap(cfg);
+    const snap = await getSnap(cfg, null, { instant: true, fastScan: true });
     liveSnap = snap;
     if (!snap.ok) {
       polyPreSynced = false;
@@ -867,6 +936,7 @@ async function getSnap(cfg, progressLabel, opts = {}) {
   const snapOpts = {
     leg2Synced: true,
     fastScan: opts.connectLight ? true : (opts.focusTab ? false : (opts.fastScan !== false)),
+    instant: opts.instant === true,
     ...opts
   };
   const timeoutMs = opts.focusTab ? SCAN_TIMEOUT_MS : SNAP_TIMEOUT_MS;
@@ -1342,9 +1412,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   if (msg.type === 'AUTOBET_LOG' && msg.entry) logLine(msg.entry.text, msg.entry.level);
   if (msg.type === 'ODDS_CHANGED') {
-    applyInstantOdds(msg);
+    const applied = applyInstantOdds(msg);
     amountSyncQueued = true;
-    if (armedLocal && liveSnap?.ok) {
+    if (applied && armedLocal && liveSnap?.ok) {
       maybeStrikeOnSnap(patchSnapFromKnown(liveSnap, getConfig()), getConfig(), 'odds-event');
     }
     if ($('preSync')?.checked) liveAmountSync(true);

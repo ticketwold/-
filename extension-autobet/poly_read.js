@@ -988,10 +988,12 @@ async function injectStakeSlipRead(tabId) {
 
 async function readStakeSportsSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
-  const fastScan = opts.fastScan === true;
+  const instant = opts.instant === true;
+  const fastScan = opts.fastScan === true || instant;
   const focusTab = opts.focusTab === true;
-  const waitMs = opts.waitMs || (focusTab ? 1500 : 0);
-  const maxAttempts = focusTab ? 5 : (fastScan ? 3 : 4);
+  const waitMs = opts.waitMs || (focusTab && !instant ? 1500 : 0);
+  const maxAttempts = instant ? 1 : (focusTab ? 5 : (fastScan ? 2 : 4));
+  const readTimeout = instant ? 400 : 4500;
 
   if (focusTab && waitMs > 0 && typeof focusBcTabForRead === 'function') {
     await focusBcTabForRead(polyTab.id, waitMs);
@@ -1014,7 +1016,7 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
           if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
         }
       });
-      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), 4500, 'Stake read');
+      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), readTimeout, 'Stake read');
       if (isTrustedBcSlip(res?.slip)) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
         return res.slip;

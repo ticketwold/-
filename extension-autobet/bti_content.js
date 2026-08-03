@@ -940,6 +940,11 @@ function getHistoryPanels() {
 
 function hasActiveBetslipSelection() {
   if (isMyBetsTabActive()) return false;
+  if (findBtiBetInput()) return true;
+  if (isWidgetsXBetslipFrame()) {
+    const wx = readWidgetsXBetslipOdds();
+    if (wx?.odds > 1.01) return true;
+  }
   for (const card of getRealSlipCards()) {
     if (isHistoryBetCard(card)) continue;
     const title = card.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
@@ -2312,7 +2317,7 @@ function readWidgetsXBetslipOdds() {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
-  if (isMyBetsTabActive() || !hasActiveBetslipSelection()) {
+  if (isMyBetsTabActive()) {
     btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
     return null;
   }
@@ -2323,6 +2328,27 @@ function readBtiOdds(hint) {
     if (fin?.odds > 1.01) return fin;
     return finalizeBtiOdds({ ...slip, source: slip.source || 'scan-any' });
   };
+
+  try {
+    const wx = readWidgetsXBetslipOdds();
+    if (wx?.odds > 1.01) {
+      const out = wrap(wx);
+      if (out?.odds > 1.01) return out;
+    }
+  } catch (_) {}
+
+  if (!hasActiveBetslipSelection()) {
+    if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
+      && Date.now() - btiOddsLatch.at < 8000 && latchMatchesCurrentSlip()) {
+      return wrap(enrichBtiSlip({
+        odds: btiOddsLatch.odds,
+        source: 'slip-latched',
+        fromSlip: true,
+        selectionText: getActiveSlipSelectionText()
+      }));
+    }
+    return null;
+  }
 
   const tryList = [
     () => readWidgetsXBetslipOdds(),
@@ -2658,8 +2684,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!btn) return;
       lastBoardClickAt = Date.now();
       lastBoardClickBtn = btn;
-      suppressReadUntil = Date.now() + 140;
+      suppressReadUntil = Date.now() + 35;
       signalCartChange();
+      notifyNow();
+      setTimeout(notifyNow, 40);
+      setTimeout(notifyNow, 100);
       requestAnimationFrame(() => requestAnimationFrame(notifyNow));
     }, true);
 
