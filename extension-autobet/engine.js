@@ -177,12 +177,20 @@ async function fetchBtiSlipViaApi(tabId) {
 
 async function buildBtiFastFrameIds(tabId) {
   const ids = [];
-  if (lastBtiSlipFrame?.tabId === tabId) ids.push(lastBtiSlipFrame.frameId);
+  try {
+    const frames = await getAllFrames(tabId);
+    for (const f of frames) {
+      if (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(f.url)) {
+        if (!ids.includes(f.frameId)) ids.push(f.frameId);
+      }
+    }
+  } catch (_) {}
+  if (lastBtiSlipFrame?.tabId === tabId && !ids.includes(lastBtiSlipFrame.frameId)) ids.push(lastBtiSlipFrame.frameId);
   if (lastBtiFrame?.tabId === tabId && !ids.includes(lastBtiFrame.frameId)) ids.push(lastBtiFrame.frameId);
   if (lastBtiBoardFrame?.tabId === tabId && !ids.includes(lastBtiBoardFrame.frameId)) ids.push(lastBtiBoardFrame.frameId);
   try {
     const order = await orderBtiFrameIds(tabId);
-    for (const fid of order.slice(0, 6)) {
+    for (const fid of order.slice(0, 10)) {
       if (!ids.includes(fid)) ids.push(fid);
     }
   } catch (_) {}
@@ -306,9 +314,17 @@ function slipToProbeResult(frameId, slip, ping) {
   };
 }
 
+async function getFrameUrlMap(tabId) {
+  const frames = await getAllFrames(tabId);
+  const map = {};
+  for (const f of frames) map[f.frameId] = f.url || '';
+  return map;
+}
+
 async function scrapeBtiFromAllFrames(tabId) {
   const order = await orderBtiFrameIds(tabId);
   const toProbe = order.slice(0, BTI_MAX_FRAMES);
+  const frameUrls = await getFrameUrlMap(tabId);
   const results = await Promise.all(toProbe.map(async (frameId) => {
     try {
       await ensureBtiApiHook(tabId, frameId);
@@ -319,7 +335,7 @@ async function scrapeBtiFromAllFrames(tabId) {
     } catch (_) {}
     return slipToProbeResult(frameId, null, null);
   }));
-  updateBtiFrameRoles(tabId, results);
+  updateBtiFrameRoles(tabId, results, frameUrls);
   const merged = mergeBtiFrameResults(results);
   if (merged.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: merged.frameId };
   return merged;
@@ -476,6 +492,7 @@ function isBtiSlipOddsSource(slip) {
   return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'scan-any'
     || src === 'board-slip-match' || src === 'brute-dom' || src === 'brute-inject'
+    || src === 'widgets-x-slip' || src === 'widgets-x-at'
     || src === 'bti-api' || String(src).includes('bti-api');
 }
 
@@ -543,14 +560,16 @@ async function probeBtiFrame(tabId, frameId, hint = {}, fast = true) {
   }
 }
 
-function updateBtiFrameRoles(tabId, results) {
+function updateBtiFrameRoles(tabId, results, frameUrls = {}) {
   let slipFrame = null;
   let slipScore = -1;
   let boardFrame = null;
   let boardScore = -1;
   for (const r of results) {
-    if (r.hasInput) {
-      const s = (r.slip?.odds > 1.01 ? 1000 : 0) + (r.ping?.hasInput ? 500 : 0);
+    const url = frameUrls[r.frameId] || '';
+    const widgetsBoost = /widgets-x/i.test(url) ? 800 : 0;
+    if (r.hasInput || widgetsBoost) {
+      const s = widgetsBoost + (r.slip?.odds > 1.01 ? 1000 : 0) + (r.ping?.hasInput ? 500 : 0);
       if (s > slipScore) { slipScore = s; slipFrame = r.frameId; }
     }
     if (r.hasBoard) {
@@ -584,14 +603,15 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
   }
 
   await Promise.all(toProbe.map((fid) => ensureBtiScript(tabId, fid)));
+  const frameUrls = await getFrameUrlMap(tabId);
   const results = await Promise.all(toProbe.map((fid) => probeBtiFrame(tabId, fid, hint, probeFast)));
-  updateBtiFrameRoles(tabId, results);
+  updateBtiFrameRoles(tabId, results, frameUrls);
   let merged = mergeBtiFrameResults(results);
 
   if (!(merged.slip?.odds > 1.01) && forceFull && toProbe.length < order.length) {
     const rest = order.slice(toProbe.length, BTI_MAX_FRAMES);
     const more = await Promise.all(rest.map((fid) => probeBtiFrame(tabId, fid, hint, false)));
-    updateBtiFrameRoles(tabId, more);
+    updateBtiFrameRoles(tabId, more, frameUrls);
     merged = mergeBtiFrameResults([...results, ...more]);
   }
 
@@ -724,7 +744,12 @@ async function probeBtiFramesDiagnostic(btiTab) {
 
 async function bruteReadBtiOdds(tabId) {
   const frames = await getAllFrames(tabId);
-  const hits = await Promise.all(frames.map(async (f) => {
+  const sorted = [...frames].sort((a, b) => {
+    const sa = (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(a.url) ? 1000 : 0) + scoreBtiFrameUrl(a.url || '');
+    const sb = (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(b.url) ? 1000 : 0) + scoreBtiFrameUrl(b.url || '');
+    return sb - sa;
+  });
+  const hits = await Promise.all(sorted.map(async (f) => {
     if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
     try {
       const injected = await withTimeout(injectReadBtiFrame(tabId, f.frameId), 1400, 'brute-inject');

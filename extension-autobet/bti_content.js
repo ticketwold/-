@@ -300,6 +300,7 @@ function finalizeBtiOdds(slip) {
     || src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'board-slip-match'
     || src === 'brute-dom' || src === 'brute-inject'
+    || src === 'widgets-x-slip' || src === 'widgets-x-at'
     || src === 'bti-api' || src.includes('bti-api')
     || src === 'scan-any' || (slip.odds > 1.01 && slip.odds < 80);
   if (!trusted) return null;
@@ -925,7 +926,10 @@ function getRealSlipCards() {
   const selectors = [
     '[class*="betslip_fe_BetSecondary_bet"]',
     '[class*="BetSecondary_bet"]',
-    '[class*="betslip"][class*="bet"]'
+    '[class*="betslip"][class*="bet"]',
+    '[class*="BetslipBet"]',
+    '[data-testid*="bet-slip"]',
+    '[data-testid*="betslip"]'
   ];
   const seen = new Set();
   const scored = [];
@@ -951,6 +955,16 @@ function getRealSlipCards() {
           || el.querySelector('[class*="odds"], [class*="Odds"]')
           || /\b\d+\.\d{2,3}\b/.test(txt);
         if (!hasTitle && !hasOdds) continue;
+        consider(el);
+      }
+    }
+
+    if (!scored.length && /widgets-x/i.test(location.href)) {
+      for (const el of searchRoot.querySelectorAll('[class*="bet"], [class*="Bet"], [class*="selection"], [class*="Selection"]')) {
+        const txt = el.textContent || '';
+        if (txt.length < 10 || txt.length > 900) continue;
+        if (!/betInformation|@\s*\d+\.\d|W[12]/i.test(txt)) continue;
+        if (isInsideBetHistory(el) || isInMyBetsPanel(el)) continue;
         consider(el);
       }
     }
@@ -1882,7 +1896,7 @@ function pickBoardSelection(pool, hint = {}) {
   });
   if (clicked) return clicked;
 
-  const oppose = excludeTeam || polyTeam;
+  const oppose = hint.forScan ? '' : (excludeTeam || polyTeam);
   if (oppose) {
     let pick = pool.find((s) => !teamNamesMatch(s.selectionText, oppose) && !teamNamesMatch(s.label, oppose));
     if (!pick && pool.length >= 2) {
@@ -2091,6 +2105,72 @@ function readAnyVisibleBoardOdds(hint = {}) {
   return best?.slip || null;
 }
 
+function isWidgetsXBetslipFrame() {
+  const href = location.href || '';
+  if (/widgets-x/i.test(href)) return true;
+  if (document.querySelector('[class*="betslip-root"], [class*="BetslipRoot"], [id*="betslip-root"]')) return true;
+  const hasInput = !!findBtiBetInput();
+  const boardBtns = queryBoardButtons().length;
+  return hasInput && boardBtns === 0;
+}
+
+function readWidgetsXBetslipOdds() {
+  if (!isWidgetsXBetslipFrame()) return null;
+
+  const anchored = readCounterAnchoredSlipOdds();
+  if (anchored?.odds > 1.01) {
+    return enrichBtiSlip({ ...anchored, source: 'widgets-x-slip', fromSlip: true });
+  }
+
+  for (const card of getRealSlipCards()) {
+    const titleEls = card.querySelectorAll('[class*="betInformation__title"], [class*="title"]');
+    const selectionText = titleEls[0]?.textContent?.trim() || '';
+    let odds = readOddsFromSlipCard(card);
+    if (!(odds > 1.01)) {
+      const txt = (card.textContent || '').replace(/\s+/g, ' ');
+      const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+      if (at) odds = parseOddsText(at[1]);
+    }
+    if (!(odds > 1.01)) {
+      for (const el of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="price"], [class*="Price"], [class*="coefficient"], [class*="Coefficient"]')) {
+        const o = parseOddsText(el.textContent);
+        if (o) { odds = o; break; }
+      }
+    }
+    if (odds > 1.01) {
+      const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"], [class*="event"]');
+      const eventText = eventEl?.textContent?.trim() || '';
+      const teams = parseEventTeams(eventText);
+      return enrichBtiSlip({
+        odds: Math.round(odds * 1000) / 1000,
+        selectionText,
+        eventText,
+        homeTeam: teams.home,
+        awayTeam: teams.away,
+        marketKind: detectMarketType(selectionText),
+        source: 'widgets-x-slip',
+        fromSlip: true
+      });
+    }
+  }
+
+  const roots = document.querySelectorAll('[class*="betslip"], [class*="Betslip"], [id*="betslip"], main, [role="main"]');
+  for (const root of roots) {
+    const txt = (root.textContent || '').replace(/\s+/g, ' ');
+    if (txt.length < 16 || txt.length > 6000) continue;
+    if (/내베팅|mybets|cash\s*out|캐시\s*아웃|정산\s*완료/i.test(txt)) continue;
+    const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+    if (at) {
+      const o = parseOddsText(at[1]);
+      if (o) {
+        const sel = root.querySelector('[class*="betInformation__title"], [class*="title"], [class*="selection"]')?.textContent?.trim() || '';
+        return enrichBtiSlip({ odds: o, selectionText: sel, source: 'widgets-x-at', fromSlip: true });
+      }
+    }
+  }
+  return null;
+}
+
 function readBtiOdds(hint) {
   const hintObj = hint || {};
   const wrap = (slip) => {
@@ -2101,6 +2181,7 @@ function readBtiOdds(hint) {
   };
 
   const tryList = [
+    () => readWidgetsXBetslipOdds(),
     () => readCounterAnchoredSlipOdds(),
     () => readBoardOddsForCurrentSlip(),
     () => readOddsFromLastBoardClick(),

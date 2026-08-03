@@ -357,6 +357,8 @@ function applyInstantOdds(msg) {
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
       || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
+      || slipSource === 'brute-dom' || slipSource === 'brute-inject'
+      || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
@@ -401,6 +403,8 @@ function stabilizeSnap(snap, cfg) {
     const slipSource = snap.bti?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
       || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
+      || slipSource === 'brute-dom' || slipSource === 'brute-inject'
+      || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);

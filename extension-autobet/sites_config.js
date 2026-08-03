@@ -170,12 +170,18 @@ function scoreWrapperBtiTab(url) {
 
 function isInjectableBtiUrl(url) {
   if (!url || url === 'about:blank') return false;
-  if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha|widgets?\./i.test(url)) return false;
+  if (/widgets-x/i.test(url)) return true;
+  if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(url)) return false;
+  if (/widgets?\./i.test(url) && !/widgets-x/i.test(url)) return false;
   try {
     const h = new URL(url).hostname.toLowerCase();
     if (SITE_CONFIG.BTI_INJECTABLE_HOSTS.some((s) => h === s || h.endsWith('.' + s))) return true;
   } catch (_) {}
-  return /master_fe|betslip|sportsbook|bti-sports|Selections_selection|sportscenter/i.test(url || '');
+  return /master_fe|betslip|sportsbook|bti-sports|Selections_selection|sportscenter|widgets-x/i.test(url || '');
+}
+
+function isWidgetsXBetslipUrl(url) {
+  return /widgets-x|betslip-root|betslip/i.test(url || '');
 }
 
 function scoreBtiFrameUrl(url) {
@@ -185,6 +191,8 @@ function scoreBtiFrameUrl(url) {
   for (const h of SITE_CONFIG.BTI_HOST_HINTS) {
     if (url.includes(h)) score += 50;
   }
+  if (/widgets-x/i.test(url)) score += 130;
+  if (/betslip-root|betslip-root-provider/i.test(url)) score += 90;
   if (/\/sports/i.test(url)) score += 30;
   if (/sportsbook|bti|master_fe|Selections_selection|betslip_fe/i.test(url)) score += 25;
   if (/sptpub|sptsportscdn|biahosted|cocoesports/i.test(url)) score += 40;
