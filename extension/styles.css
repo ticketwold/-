@@ -1,0 +1,148 @@
+* { box-sizing: border-box; }
+
+body {
+  width: 380px;
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", sans-serif;
+  background: #0f1419;
+  color: #e7e9ea;
+  font-size: 13px;
+}
+
+header {
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid #2f3336;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.sub {
+  margin: 4px 0 0;
+  color: #71767b;
+  font-size: 11px;
+}
+
+.card {
+  padding: 12px 16px;
+  border-bottom: 1px solid #2f3336;
+}
+
+label {
+  display: block;
+  margin: 8px 0 4px;
+  color: #71767b;
+  font-size: 11px;
+}
+
+input, select, button {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #2f3336;
+  background: #16181c;
+  color: #e7e9ea;
+  font-size: 13px;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+button.primary {
+  background: #1d9bf0;
+  border-color: #1d9bf0;
+  color: #fff;
+}
+
+button.secondary {
+  background: #2f3336;
+}
+
+.row-btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.row-btns button {
+  font-size: 11px;
+  padding: 6px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.status {
+  padding: 10px;
+  border-radius: 8px;
+  background: #16181c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.status.ok { border-left: 3px solid #00ba7c; }
+.status.warn { border-left: 3px solid #ffad1f; }
+.status.err { border-left: 3px solid #f4212e; }
+
+.empty, .hint {
+  color: #71767b;
+  font-size: 12px;
+}
+
+.opp {
+  background: #16181c;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 10px;
+  border: 1px solid #2f3336;
+}
+
+.opp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.margin {
+  color: #00ba7c;
+  font-weight: 700;
+}
+
+.profit {
+  color: #71767b;
+  font-size: 11px;
+  margin: 4px 0 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+th, td {
+  padding: 4px 6px;
+  text-align: left;
+  border-top: 1px solid #2f3336;
+}
+
+pre {
+  background: #000;
+  color: #0f0;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
