@@ -1,6 +1,7 @@
 // 텐텐뱃 (x10x10s) + 멀티 leg2 (BC.Game, Stake.com)
 const SITE_CONFIG = {
-  WRAPPER_HOSTS: ['x10x10s.com'],
+  // 텐텐뱃 상위 탭 도메인 (미러 포함)
+  WRAPPER_HOSTS: ['x10x10s.com', 'live8588.com', 'fxf774.com'],
   BCGAME_HOSTS: ['bc.game'],
   STAKE_HOSTS: ['stake.com'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
@@ -65,9 +66,36 @@ function hostMatches(url, hosts) {
   }
 }
 
+function tabEffectiveUrl(tab) {
+  if (!tab) return '';
+  return String(tab.pendingUrl || tab.url || '').trim();
+}
+
 function isWrapperUrl(url) {
-  if (!url) return false;
-  return SITE_CONFIG.WRAPPER_HOSTS.some((h) => url.includes(h));
+  return hostMatches(url, SITE_CONFIG.WRAPPER_HOSTS);
+}
+
+/** 상위 탭이 텐텐뱃/스포츠북 래퍼인지 (URL·gamecode·미러) */
+function isLeg1TabUrl(url) {
+  if (!url || /^chrome:|^edge:|^about:/i.test(url)) return false;
+  if (isWrapperUrl(url)) return true;
+  const gc = getWrapperGamecode(url);
+  if (gc && SITE_CONFIG.BTI_GAMECODES.includes(gc)) {
+    try {
+      const h = new URL(url).hostname.toLowerCase();
+      if (SITE_CONFIG.BTI_INJECTABLE_HOSTS.some((s) => h === s || h.endsWith('.' + s))) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+function scoreLeg1Tab(url, activeId, tabId) {
+  if (!isLeg1TabUrl(url)) return -1;
+  let score = scoreWrapperBtiTab(url);
+  if (isWrapperBtiUrl(url)) score += 20;
+  if (/\/sports|sportscenter|gamecode=/i.test(url || '')) score += 8;
+  if (tabId === activeId) score += 5;
+  return score;
 }
 
 function isBcGameUrl(url) {

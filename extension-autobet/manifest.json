@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 자동배팅",
-  "version": "2.3.6",
+  "version": "2.3.7",
   "description": "텐텐뱃·BC.Game·Stake.com 양방 자동배팅 — 배당 스캔·금액 동기화",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom"],
   "host_permissions": [
@@ -77,7 +77,7 @@
       "all_frames": true
     },
     {
-      "matches": ["*://*.x10x10s.com/*", "*://bc.game/*", "*://*.bc.game/*", "*://stake.com/*", "*://*.stake.com/*"],
+      "matches": ["*://*.x10x10s.com/*", "*://*.live8588.com/*", "*://*.fxf774.com/*", "*://bc.game/*", "*://*.bc.game/*", "*://stake.com/*", "*://*.stake.com/*"],
       "js": ["arb_bridge.js"],
       "run_at": "document_start",
       "world": "MAIN"

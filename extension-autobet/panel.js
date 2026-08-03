@@ -13,6 +13,8 @@ const ODDS_INSTANT_FRESH_MS = 800;
 const ODDS_TRANSITION_MS = 700;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
 const BTI_REAL_CHANGE_EPS = 0.03;
+let btiVerifyBusy = false;
+let leg2SyncBusy = false;
 
 function isBcSlipUiSource(slip) {
   if (!slip) return false;
@@ -96,6 +98,8 @@ function updateSyncUi(cfg) {
 }
 
 async function verifyBtiSite() {
+  if (btiVerifyBusy) return;
+  btiVerifyBusy = true;
   const cfg = getConfig();
   const btn = $('btiVerifyBtn');
   const status = $('btiSyncStatus');
@@ -146,10 +150,13 @@ async function verifyBtiSite() {
     if (status) status.textContent = '미확인';
   } finally {
     if (btn) btn.disabled = false;
+    btiVerifyBusy = false;
   }
 }
 
 async function syncLeg2Site() {
+  if (leg2SyncBusy) return;
+  leg2SyncBusy = true;
   const cfg = getConfig();
   saveConfig();
   logLine(`${leg2PrefLabel(cfg.leg2)} 연결 중…`, 'info');
@@ -191,6 +198,7 @@ async function syncLeg2Site() {
   } finally {
     $('syncBtn').disabled = false;
     updateSyncUi(cfg);
+    leg2SyncBusy = false;
   }
 }
 
