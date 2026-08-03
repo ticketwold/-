@@ -97,7 +97,7 @@ function readOddsFromSlipCard(card) {
   }
 
   const found = [];
-  for (const sp of card.querySelectorAll('span, b, strong')) {
+  for (const sp of card.querySelectorAll('span, b, strong, div')) {
     if (isStruckThrough(sp)) continue;
     const text = (sp.textContent || '').trim();
     if (!/^\d+(\.\d{1,4})?$/.test(text)) continue;
@@ -105,7 +105,7 @@ function readOddsFromSlipCard(card) {
     if (!n || looksLikeLineTotal(n, text, lineContext)) continue;
     found.push(n);
   }
-  if (found.length) return found[found.length - 1];
+  if (found.length) return found[0];
 
   return null;
 }
@@ -634,9 +634,15 @@ function isInsideBetHistory(el) {
   return false;
 }
 
+function slipCardVisible(el) {
+  if (!el || !el.isConnected) return false;
+  const r = el.getBoundingClientRect?.();
+  return !!(r && r.width >= 2 && r.height >= 2);
+}
+
 function isCardVisible(el) {
   if (!el || !el.isConnected) return false;
-  if (isElementVisible(el)) return true;
+  if (slipCardVisible(el)) return true;
   return isDomVisible(el);
 }
 
@@ -680,31 +686,37 @@ function normalizeTabLabel(el) {
 
 function isTabElementActive(tab) {
   if (!tab) return false;
+  if (tab.getAttribute?.('aria-selected') === 'true') return true;
+  if (tab.getAttribute?.('data-active') === 'true') return true;
   if (tab.classList?.contains('active') || tab.classList?.contains('selected') ||
-      tab.classList?.contains('isActive') || tab.getAttribute?.('aria-selected') === 'true' ||
-      tab.getAttribute?.('data-active') === 'true') return true;
-  const cn = String(tab.className || '');
-  return /active|selected|current/i.test(cn) && !/inactive/i.test(cn);
+      tab.classList?.contains('isActive') || tab.classList?.contains('is-selected')) return true;
+  return false;
 }
 
 function findBtiSideTabs() {
   const tabs = [];
   const seen = new Set();
-  const scope = document.querySelector('[class*="betslip_fe"], [class*="Betslip"], [class*="rightPanel"], [class*="RightPanel"]') || document;
-  const candidates = scope.querySelectorAll(
-    '[class*="tabs__tab"], [class*="Tabs"] [class*="Tab"], [class*="betslip"] [class*="tab"], button, [role="tab"]'
-  );
-  for (const el of candidates) {
-    if (seen.has(el)) continue;
-    const raw = String(el.textContent || '').replace(/\s+/g, ' ').trim();
-    const label = normalizeTabLabel(el);
-    if (!label && !raw) continue;
-    const isSlip = /베팅\s*슬립/i.test(raw) || label === '베팅슬립' || label === 'betslip';
-    const isHistory = /내\s*베팅/i.test(raw) || label === '내베팅' || label === 'mybets' ||
-      /베팅\s*내역|배팅\s*내역/i.test(raw);
-    if (!isSlip && !isHistory) continue;
-    seen.add(el);
-    tabs.push({ el, isSlip, isHistory, active: isTabElementActive(el) });
+  const scopes = [
+    document.querySelector('[class*="betslip_fe"], [class*="Betslip"], [class*="rightPanel"], [class*="RightPanel"]'),
+    document.body
+  ].filter(Boolean);
+  for (const scope of scopes) {
+    const candidates = scope.querySelectorAll(
+      '[class*="tabs__tab"], [class*="Tabs"] [class*="Tab"], [class*="betslip"] [class*="tab"], [role="tab"]'
+    );
+    for (const el of candidates) {
+      if (seen.has(el)) continue;
+      const raw = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      const label = normalizeTabLabel(el);
+      if (!label && !raw) continue;
+      const isSlip = /베팅\s*슬립/i.test(raw) || label === '베팅슬립' || label === 'betslip';
+      const isHistory = /내\s*베팅/i.test(raw) || label === '내베팅' || label === 'mybets' ||
+        /베팅\s*내역|배팅\s*내역/i.test(raw);
+      if (!isSlip && !isHistory) continue;
+      seen.add(el);
+      tabs.push({ el, isSlip, isHistory, active: isTabElementActive(el) });
+    }
+    if (tabs.length) break;
   }
   return tabs;
 }
@@ -769,6 +781,7 @@ function getActiveSlipPanelRoot() {
 }
 
 function getMyBetsPanels() {
+  if (!isMyBetsTabActive()) return [];
   const panels = [];
   const seen = new Set();
   for (const tab of findBtiSideTabs().filter((t) => t.isHistory)) {
@@ -778,8 +791,9 @@ function getMyBetsPanels() {
       panels.push(panel);
     }
   }
+  if (panels.length) return panels;
   for (const el of document.querySelectorAll('[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="OpenBets"], [class*="betHistory"], [class*="BetHistory"]')) {
-    if (!seen.has(el)) {
+    if (!seen.has(el) && isDomVisible(el)) {
       seen.add(el);
       panels.push(el);
     }
@@ -795,14 +809,40 @@ function isInMyBetsPanel(card) {
 function isHistoryBetCard(card) {
   if (!card) return true;
   if (isInMyBetsPanel(card) || isInsideBetHistory(card)) return true;
-
-  const input = findBtiBetInput();
-  const slipShell = input?.closest('[class*="tabContent"], [class*="TabContent"], [class*="betslip_fe"], [class*="Betslip"]');
-  if (input && slipShell && !slipShell.contains(card)) return true;
-
   const txt = (card.textContent || '').replace(/\s+/g, ' ').trim();
   if (/캐시\s*아웃|cash\s*out|베팅\s*번호|티켓\s*번호|정산\s*완료|미적중|적중금|낙첨|환불\s*완료/i.test(txt)) return true;
   return false;
+}
+
+function getCounterAnchoredSlipCard() {
+  const input = findBtiBetInput();
+  if (!input) return null;
+  const root = input.closest('[class*="betslip_fe"], [class*="Betslip"]') || document;
+  const cards = [];
+  for (const el of root.querySelectorAll(
+    '[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation__title"]'
+  )) {
+    const card = el.matches?.('[class*="betInformation__title"]')
+      ? (el.closest('[class*="bet"]') || el.closest('[class*="Bet"]') || el.parentElement?.parentElement || el)
+      : el;
+    if (!card || cards.includes(card)) continue;
+    if (isHistoryBetCard(card) || !slipCardVisible(card)) continue;
+    if (card.querySelector('input[id="counter"], input[class*="Counter"]')) continue;
+    cards.push(card);
+  }
+  if (!cards.length) return null;
+  for (const card of cards) {
+    if (card.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING) return card;
+  }
+  return cards[cards.length - 1];
+}
+
+function readCounterAnchoredSlipOdds() {
+  const card = getCounterAnchoredSlipCard();
+  if (!card) return null;
+  const slip = parseSlipFromCard(card);
+  if (!(slip?.odds > 1.01)) return null;
+  return enrichBtiSlip({ ...slip, source: slip.source || 'slip-display', fromSlip: true });
 }
 
 function readSlipOddsFromCardElement(card) {
@@ -827,7 +867,9 @@ function slipUiLikelyOpen() {
 }
 
 function readActiveSlipDisplayOdds() {
-  if (!slipUiLikelyOpen()) return null;
+  const anchored = readCounterAnchoredSlipOdds();
+  if (anchored?.odds > 1.01) return anchored;
+
   const cards = getRealSlipCards();
   if (!cards.length) return null;
   for (let i = cards.length - 1; i >= 0; i--) {
@@ -1902,35 +1944,17 @@ function readBtiOdds(hint) {
   }
   const wrap = (slip) => (slip?.odds > 1.01 ? finalizeBtiOdds(slip) : slip);
 
-  if (!slipUiLikelyOpen()) {
-    if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
-      && Date.now() - btiOddsLatch.at < 12000) {
-      return wrap(enrichBtiSlip({
-        odds: btiOddsLatch.odds,
-        selectionText: '',
-        eventText: '',
-        source: 'slip-latched',
-        fromSlip: true
-      }));
-    }
-    const board = readBtiBoardOdds(hintObj);
-    if (board?.odds > 1.01) return wrap(board);
-    return null;
-  }
-
-  const hasCards = getRealSlipCards().length > 0;
+  const anchored = readCounterAnchoredSlipOdds();
+  if (anchored?.odds > 1.01) return wrap(anchored);
 
   const slipDisplay = readActiveSlipDisplayOdds();
   if (slipDisplay?.odds > 1.01) return wrap(slipDisplay);
 
-  let slipFromCard = null;
-  if (hasCards) {
-    slipFromCard = readBtiSlip({ preferActiveSlip: true });
-    if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
-  }
+  let slipFromCard = readBtiSlip({ preferActiveSlip: true, ...hintObj });
+  if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
 
-  if (hasCards && btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
-    && Date.now() - btiOddsLatch.at < 8000) {
+  if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
+    && Date.now() - btiOddsLatch.at < 12000) {
     return wrap(enrichBtiSlip({
       odds: btiOddsLatch.odds,
       selectionText: (slipDisplay || slipFromCard)?.selectionText || '',
@@ -1945,27 +1969,19 @@ function readBtiOdds(hint) {
     if (arbSlip?.odds > 1.01) return wrap(arbSlip);
   }
 
-  if (!hasCards) {
-    const board = readBtiBoardOdds(hintObj);
-    if (board?.odds > 1.01) return wrap(board);
+  const board = readBtiBoardOdds(hintObj);
+  if (board?.odds > 1.01) return wrap(board);
 
-    if (hintObj.excludeTeam || hintObj.polyTeam) {
-      const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
-      if (plain?.odds > 1.01) return wrap(plain);
-    }
-
-    const any = readBtiBoardOdds({});
-    if (any?.odds > 1.01) return wrap(any);
-
-    const emergency = readEmergencyBoardOdds(hintObj);
-    if (emergency?.odds > 1.01) return wrap(emergency);
-  } else {
-    const slip = slipFromCard || readBtiSlip({ preferActiveSlip: true });
-    if (slip?.selectionText) {
-      const live = readLiveBoardOddsForSlip(slip);
-      if (live?.odds > 1.01) return wrap(live);
-    }
+  if (hintObj.excludeTeam || hintObj.polyTeam) {
+    const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
+    if (plain?.odds > 1.01) return wrap(plain);
   }
+
+  const any = readBtiBoardOdds({});
+  if (any?.odds > 1.01) return wrap(any);
+
+  const emergency = readEmergencyBoardOdds(hintObj);
+  if (emergency?.odds > 1.01) return wrap(emergency);
 
   return null;
 }

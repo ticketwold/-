@@ -99,56 +99,57 @@ async function injectReadBtiFrame(tabId, frameId) {
         }
 
         let hasInput = false;
-        for (const inp of document.querySelectorAll('input, textarea')) {
-          if (!vis(inp)) continue;
-          const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
-          if (/counter|Counter|베팅/i.test(blob)) { hasInput = true; break; }
-        }
-
         let slipPanel = null;
+        let slipInput = null;
         for (const inp of document.querySelectorAll('input, textarea')) {
           if (!vis(inp)) continue;
           const blob = `${inp.id || ''} ${inp.className || ''} ${inp.placeholder || ''}`;
           if (!/counter|Counter|베팅/i.test(blob)) continue;
-          let node = inp.parentElement;
-          while (node) {
-            const hasCard = [...node.querySelectorAll('[class*="betInformation__title"], [class*="BetSecondary_bet"]')].some(vis);
-            if (hasCard) {
-              slipPanel = node;
-              break;
-            }
-            node = node.parentElement;
-          }
+          hasInput = true;
+          slipInput = inp;
+          slipPanel = inp.closest('[class*="betslip_fe"], [class*="Betslip"]');
           break;
         }
 
         function isHistoryCard(card) {
-          const txt = (card.textContent || '').replace(/\s+/g, ' ');
-          if (/mybets|my-bets|openbets|bethistory|내베팅|베팅내역|배팅내역/i.test(txt)) return true;
           for (const p of document.querySelectorAll('[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="betHistory"]')) {
             if (p.contains(card)) return true;
           }
+          const txt = (card.textContent || '').replace(/\s+/g, ' ');
+          if (/mybets|my-bets|openbets|bethistory|내베팅|베팅내역|배팅내역/i.test(txt)) return true;
           if (/캐시\s*아웃|cash\s*out|베팅\s*번호|티켓\s*번호|정산\s*완료|미적중|적중금|낙첨/i.test(txt)) return true;
-          if (slipPanel && !slipPanel.contains(card)) return true;
           return false;
         }
 
         const cards = [];
         const searchRoots = slipPanel ? [slipPanel] : [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
         for (const root of searchRoots) {
-          for (const card of root.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation"]')) {
-            if (!vis(card)) continue;
-            if (isHistoryCard(card)) continue;
-            const txt = (card.textContent || '').trim();
+          for (const card of root.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation__title"]')) {
+            const el = card.matches?.('[class*="betInformation__title"]')
+              ? (card.closest('[class*="bet"]') || card.closest('[class*="Bet"]') || card.parentElement?.parentElement || card)
+              : card;
+            if (!vis(el) || isHistoryCard(el)) continue;
+            const txt = (el.textContent || '').trim();
             if (txt.length < 6 || txt.length > 900) continue;
-            if (card.querySelector('input[id="counter"], input[class*="Counter"]')) continue;
+            if (el.querySelector('input[id="counter"], input[class*="Counter"]')) continue;
             if (!/W[12]|betInformation|우승|winner|맵|map|vs|대|오버|언더|over|under|핸디|handicap|@\s*\d+\.\d/i.test(txt)) continue;
-            cards.push(card);
+            if (!cards.includes(el)) cards.push(el);
           }
         }
 
-        if (!cards.length) return null;
-        const card = cards[cards.length - 1];
+        let card = null;
+        if (slipInput && cards.length) {
+          for (const c of cards) {
+            if (c.compareDocumentPosition(slipInput) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              card = c;
+              break;
+            }
+          }
+        }
+
+        if (!card && cards.length) card = cards[cards.length - 1];
+
+        if (!card) return null;
         const txt = (card.textContent || '').trim();
         const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
         const selectionText = titleEls[0]?.textContent?.trim() || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : '');

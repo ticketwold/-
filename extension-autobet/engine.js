@@ -195,7 +195,7 @@ async function readBtiOddsFromFrame(tabId, frameId, readHint) {
       2800,
       'BTI read'
     );
-    if (res?.slip?.odds > 1.01 && isBtiSlipOddsSource(res.slip)) {
+    if (res?.slip?.odds > 1.01) {
       lastBtiFrame = { tabId, frameId };
       return res.slip;
     }
@@ -209,7 +209,7 @@ async function readBtiOddsFromFrame(tabId, frameId, readHint) {
   } catch (_) {}
   try {
     const scraped = await withTimeout(injectReadBtiFrame(tabId, frameId), 2800, 'BTI scrape');
-    if (scraped?.odds > 1.01 && isBtiSlipOddsSource(scraped)) {
+    if (scraped?.odds > 1.01) {
       lastBtiFrame = { tabId, frameId };
       return scraped;
     }
