@@ -144,6 +144,7 @@ function getBetslipRoot(card) {
 }
 
 function readSlipPanelDisplayOdds(card) {
+  if (!hasActiveBetslipSelection()) return null;
   const root = getBetslipRoot(card);
   if (!root || isInsideBetHistory(root)) return null;
   const candidates = [];
@@ -369,6 +370,7 @@ function boardButtonVisible(btn) {
 function finalizeBtiOdds(slip) {
   if (!(slip?.odds > 1.01)) return slip;
   const src = String(slip.source || slip.sourceKind || '');
+  if (/board|scan-any|brute|emergency/i.test(src) && !hasActiveBetslipSelection()) return null;
   const trusted = slip.fromSlip === true
     || src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'board-slip-match'
@@ -914,30 +916,43 @@ function getActiveSlipPanelRoot() {
   return null;
 }
 
-function getMyBetsPanels() {
-  if (!isMyBetsTabActive()) return [];
+function getHistoryPanels() {
   const panels = [];
   const seen = new Set();
-  for (const tab of findBtiSideTabs().filter((t) => t.isHistory)) {
-    const panel = resolveTabPanel(tab.el);
-    if (panel && !seen.has(panel)) {
-      seen.add(panel);
-      panels.push(panel);
-    }
-  }
-  if (panels.length) return panels;
-  for (const el of document.querySelectorAll('[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="OpenBets"], [class*="betHistory"], [class*="BetHistory"]')) {
-    if (!seen.has(el) && isDomVisible(el)) {
+  const add = (el) => {
+    if (el && !seen.has(el)) {
       seen.add(el);
       panels.push(el);
     }
+  };
+  for (const tab of findBtiSideTabs().filter((t) => t.isHistory)) {
+    add(resolveTabPanel(tab.el));
+  }
+  for (const el of document.querySelectorAll(
+    '[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="OpenBets"], ' +
+    '[class*="betHistory"], [class*="BetHistory"], [class*="historyBets"], [class*="HistoryBets"], ' +
+    '[class*="pastBets"], [class*="PastBets"]'
+  )) {
+    add(el);
   }
   return panels;
 }
 
+function hasActiveBetslipSelection() {
+  if (isMyBetsTabActive()) return false;
+  for (const card of getRealSlipCards()) {
+    if (isHistoryBetCard(card)) continue;
+    const title = card.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
+    if (title.length > 0) return true;
+    const txt = (card.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/\bW[12]\b/i.test(txt)) return true;
+  }
+  return false;
+}
+
 function isInMyBetsPanel(card) {
   if (!card) return false;
-  return getMyBetsPanels().some((p) => p.contains(card));
+  return getHistoryPanels().some((p) => p.contains(card));
 }
 
 function isHistoryBetCard(card) {
@@ -945,6 +960,7 @@ function isHistoryBetCard(card) {
   if (isInMyBetsPanel(card) || isInsideBetHistory(card)) return true;
   const txt = (card.textContent || '').replace(/\s+/g, ' ').trim();
   if (/캐시\s*아웃|cash\s*out|베팅\s*번호|티켓\s*번호|정산\s*완료|미적중|적중금|낙첨|환불\s*완료/i.test(txt)) return true;
+  if (/내\s*베팅|베팅\s*내역|배팅\s*내역|마이\s*베팅|my\s*bets|open\s*bets|bet\s*history/i.test(txt)) return true;
   return false;
 }
 
@@ -1027,7 +1043,9 @@ function getSlipSearchRoots() {
   const slipTab = tabs.find((t) => t.isSlip && t.active) || tabs.find((t) => t.isSlip);
   if (slipTab) add(resolveTabPanel(slipTab.el));
   add(document.querySelector('[class*="betslip_fe"], [class*="Betslip"]'));
-  return roots.length ? roots : [document];
+  const historyPanels = getHistoryPanels();
+  const filtered = roots.filter((r) => r && !historyPanels.some((h) => h === r || h.contains(r)));
+  return filtered.length ? filtered : [];
 }
 
 function getRealSlipCards() {
@@ -1044,6 +1062,7 @@ function getRealSlipCards() {
 
   const consider = (el) => {
     if (!el || seen.has(el)) return;
+    if (isHistoryBetCard(el)) return;
     const score = scoreSlipCard(el);
     if (score < 0) return;
     seen.add(el);
@@ -2293,6 +2312,11 @@ function readWidgetsXBetslipOdds() {
 
 function readBtiOdds(hint) {
   const hintObj = hint || {};
+  if (isMyBetsTabActive() || !hasActiveBetslipSelection()) {
+    btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+    return null;
+  }
+
   const wrap = (slip) => {
     if (!(slip?.odds > 1.01)) return slip;
     const fin = finalizeBtiOdds(slip);
@@ -2314,8 +2338,6 @@ function readBtiOdds(hint) {
       });
     },
     () => readCounterAnchoredSlipOdds(),
-    () => readBoardOddsForCurrentSlip(),
-    () => readOddsFromLastBoardClick(),
     () => readActiveSlipDisplayOdds(),
     () => readBtiSlip({ preferActiveSlip: true, ...hintObj }),
     () => {
@@ -2330,12 +2352,7 @@ function readBtiOdds(hint) {
       }
       return null;
     },
-    () => readBtiSlip({ ...hintObj, forArbPick: true }),
-    () => readBtiBoardOdds(hintObj),
-    () => readBtiBoardOdds({}),
-    () => readEmergencyBoardOdds(hintObj),
-    () => readAnyVisibleBoardOdds(hintObj),
-    () => readAnyVisibleBoardOdds({})
+    () => readBtiSlip({ ...hintObj, forArbPick: true })
   ];
 
   for (const fn of tryList) {

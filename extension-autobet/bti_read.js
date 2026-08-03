@@ -115,17 +115,24 @@ async function injectReadBtiFrame(tabId, frameId) {
         }
 
         function isHistoryCard(card) {
-          for (const p of document.querySelectorAll('[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="betHistory"]')) {
+          for (const p of document.querySelectorAll(
+            '[class*="myBets"], [class*="MyBets"], [class*="openBets"], [class*="OpenBets"], ' +
+            '[class*="betHistory"], [class*="BetHistory"], [class*="historyBets"], [class*="HistoryBets"]'
+          )) {
             if (p.contains(card)) return true;
           }
           const txt = (card.textContent || '').replace(/\s+/g, ' ');
-          if (/mybets|my-bets|openbets|bethistory|내베팅|베팅내역|배팅내역/i.test(txt)) return true;
+          if (/mybets|my-bets|openbets|bethistory|내베팅|내\s*베팅|베팅\s*내역|배팅\s*내역/i.test(txt)) return true;
           if (/캐시\s*아웃|cash\s*out|베팅\s*번호|티켓\s*번호|정산\s*완료|미적중|적중금|낙첨/i.test(txt)) return true;
           return false;
         }
 
         const cards = [];
-        const searchRoots = slipPanel ? [slipPanel] : [...document.querySelectorAll('[class*="betslip"], [class*="Betslip"]')];
+        const slipRoots = slipPanel ? [slipPanel] : [...document.querySelectorAll('[class*="betslip_fe"], [class*="Betslip"]')];
+        const searchRoots = slipRoots.filter((root) => {
+          const blob = `${root.className || ''} ${root.id || ''}`;
+          return !/mybets|my-bets|openbets|bethistory|historybets/i.test(blob);
+        });
         for (const root of searchRoots) {
           for (const card of root.querySelectorAll('[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation__title"]')) {
             const el = card.matches?.('[class*="betInformation__title"]')
@@ -166,22 +173,6 @@ async function injectReadBtiFrame(tabId, frameId) {
         }
 
         if (!card) {
-          for (const btn of document.querySelectorAll('button[class*="Selections_selection"], button[class*="selection"]')) {
-            if (!vis(btn)) continue;
-            const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
-            const o = parseOdds(oddsEl?.textContent || btn.textContent);
-            if (!o) continue;
-            const cls = String(btn.className || '');
-            const selected = /selected|active|pressed/i.test(cls) || btn.getAttribute('aria-pressed') === 'true';
-            if (!selected) continue;
-            return { odds: o, selectionText: '', eventText: '', source: 'board-live', fromSlip: false, hasInput };
-          }
-          for (const btn of document.querySelectorAll('button[class*="Selections_selection"], button[class*="selection"]')) {
-            if (!vis(btn)) continue;
-            const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
-            const o = parseOdds(oddsEl?.textContent || btn.textContent);
-            if (o) return { odds: o, selectionText: '', eventText: '', source: 'scan-any', fromSlip: false, hasInput };
-          }
           return null;
         }
         const txt = (card.textContent || '').trim();
@@ -191,13 +182,9 @@ async function injectReadBtiFrame(tabId, frameId) {
         const eventText = eventEl?.textContent?.trim() || '';
 
         let odds = readSlipCardOdds(card);
-        let source = 'slip-card';
-        if (!odds) {
-          odds = readBoardOddsForSelection(selectionText);
-          source = 'board-live';
-        }
+        const source = 'slip-card';
         if (!odds) return null;
-        return { odds, selectionText, eventText, source, fromSlip: source === 'slip-card', hasInput };
+        return { odds, selectionText, eventText, source, fromSlip: true, hasInput };
       }
     });
     const hit = results?.[0]?.result;
