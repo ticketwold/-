@@ -179,6 +179,10 @@ async function fetchBtiSlipViaApi(tabId) {
 
 async function buildBtiFastFrameIds(tabId) {
   const ids = [];
+  const tabUrl = await getTabUrl(tabId);
+  if (typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(tabUrl)) {
+    ids.push(0);
+  }
   try {
     const frames = await getAllFrames(tabId);
     for (const f of frames) {
@@ -236,6 +240,11 @@ async function rankBtiFramesByPing(tabId, frameIds, limit = 12) {
         + (ping.hasInput ? 220 : 0)
         + (ping.hasSlip ? 160 : 0);
       if (/widgets-x/i.test(ping.href || '')) score += 80;
+      const topUrl = frames.find((f) => f.frameId === frameId)?.url || ping.href || '';
+      if (frameId === 0 && typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(topUrl)
+        && (ping.hasInput || ping.hasSlip || ping.slipOdds > 1.01)) {
+        score += 900;
+      }
       return { frameId, score };
     } catch (_) {
       return { frameId, score: 0 };
@@ -331,7 +340,7 @@ async function orderBtiFrameIds(tabId) {
     let score = scoreBtiFrameUrl(url);
     if (score < -100) continue;
     if (f.frameId === 0 && typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(url)) {
-      score -= 300;
+      score -= 80;
     } else if (f.frameId === 0) {
       score += 5;
     } else if (!isInjectableBtiUrl(url)) {
