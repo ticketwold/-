@@ -2837,6 +2837,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse(probeBtiBetFrame());
     return false;
   }
+  if (msg.type === 'BTI_DIAG') {
+    sendResponse(buildBtiDiagPayload());
+    return false;
+  }
   if (msg.type === 'PING') {
     const probe = probeBtiBetFrame();
     sendResponse({
@@ -2988,41 +2992,7 @@ function buildBtiDiagPayload() {
   };
 }
 
-function installMainWorldBtiBridge() {
-  const BRIDGE_ID = 'autobet-bti-bridge-v1';
-  if (document.getElementById(BRIDGE_ID)) return;
-
-  const script = document.createElement('script');
-  script.id = BRIDGE_ID;
-  script.textContent = `(function(){
-  if (window.__btiDiag && window.__btiDiag.__autobetBridge) return;
-  function callBridge(action, payload) {
-    return new Promise(function(resolve, reject) {
-      var reqId = 'abt-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      var timer = setTimeout(function() {
-        document.removeEventListener('autobet-bti-bridge-res', onRes);
-        reject(new Error('autobet bridge timeout — 이 프레임에 확장 미주입. 콘솔 상단 iframe 선택 후 재시도'));
-      }, 8000);
-      function onRes(e) {
-        var d = e.detail || {};
-        if (d.reqId !== reqId) return;
-        clearTimeout(timer);
-        document.removeEventListener('autobet-bti-bridge-res', onRes);
-        if (d.error) reject(new Error(d.error));
-        else resolve(d.result);
-      }
-      document.addEventListener('autobet-bti-bridge-res', onRes);
-      document.dispatchEvent(new CustomEvent('autobet-bti-bridge-req', { detail: { reqId: reqId, action: action, payload: payload || {} } }));
-    });
-  }
-  window.__btiDiag = function() { return callBridge('diag'); };
-  window.__btiDiag.__autobetBridge = true;
-  window.__btiReadOdds = function(hint) { return callBridge('readOdds', hint || {}); };
-  window.__btiReadOdds.__autobetBridge = true;
-})();`;
-  (document.head || document.documentElement).appendChild(script);
-  script.remove();
-
+function installBtiDiagBridge() {
   if (window.__autobetBtiBridgeInstalled) return;
   window.__autobetBtiBridgeInstalled = true;
   document.addEventListener('autobet-bti-bridge-req', (e) => {
@@ -3039,15 +3009,15 @@ function installMainWorldBtiBridge() {
     document.dispatchEvent(new CustomEvent('autobet-bti-bridge-res', {
       detail: { reqId, result, error: error || undefined }
     }));
-  });
+  }, true);
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.6');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.7');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();
-  installMainWorldBtiBridge();
+  installBtiDiagBridge();
 } catch (_) {}
 
 })();

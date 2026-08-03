@@ -1488,7 +1488,7 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
     scriptOk,
     scriptWarning: scriptOk
       ? ''
-      : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.4.7 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
+      : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.5.7 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
     board: {
       buttonCount: board.buttonCount || 0,
       eventCount: board.eventCount || 0,

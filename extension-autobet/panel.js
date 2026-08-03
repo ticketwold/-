@@ -173,9 +173,15 @@ async function verifyBtiSite() {
       (res.board?.buttonCount || 0) > 0 ? 'ok' : 'info'
     );
     for (const p of res.probes || []) {
-      const tag = p.widgetsX ? 'wx' : '  ';
-      const line = `  f${p.frameId}${tag}: btn${p.buttons} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'}`;
-      logLine(`${line} · ${(p.url || '(main)').slice(-48)}`, p.slipOdds > 1 ? 'ok' : 'info');
+      const tag = p.sportscenterBetslip ? 'SC' : (p.widgetsX ? 'wx' : '  ');
+      const line = `  f${p.frameId}${tag}: slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'}`;
+      logLine(`${line} · ${(p.url || '(main)').slice(-56)}`, p.slipOdds > 1 ? 'ok' : 'info');
+    }
+    const best = (res.probes || []).find((p) => p.slipOdds > 1.01);
+    if (best) {
+      logLine(`카트 배당 ${best.slipOdds.toFixed(3)} (f${best.frameId})`, 'ok');
+    } else {
+      logLine('카트 배당 없음 — W1 선택 후 베팅카트 열고 다시 [연결확인]', 'err');
     }
     $('statusHint').textContent = '텐텐뱃 연결됨 — 오른쪽 사이트 [연결] 후 배당 클릭';
   } catch (e) {

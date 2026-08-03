@@ -197,4 +197,36 @@
     if (!/bet|slip|selection|sport|wager|odd/i.test(t)) return;
     try { capture(e.data.payload || e.data.data || e.data, 'postMessage:' + t); } catch (_) {}
   }, true);
+
+  // F12 콘솔용 — MAIN world에 __btiDiag 노출 (CSP가 inline script 주입 차단하므로 hook 파일에 직접 등록)
+  if (!window.__btiDiag || !window.__btiDiag.__autobetBridge) {
+    function autobetBridgeCall(action, payload) {
+      return new Promise((resolve, reject) => {
+        const reqId = 'abt-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        const timer = setTimeout(() => {
+          document.removeEventListener('autobet-bti-bridge-res', onRes);
+          reject(new Error('확장 미응답 — 베팅카트 iframe인지 확인 후 [연결확인] 클릭'));
+        }, 8000);
+        function onRes(e) {
+          const d = e.detail || {};
+          if (d.reqId !== reqId) return;
+          clearTimeout(timer);
+          document.removeEventListener('autobet-bti-bridge-res', onRes);
+          if (d.error) reject(new Error(d.error));
+          else resolve(d.result);
+        }
+        document.addEventListener('autobet-bti-bridge-res', onRes);
+        document.dispatchEvent(new CustomEvent('autobet-bti-bridge-req', {
+          detail: { reqId, action, payload: payload || {} }
+        }));
+      });
+    }
+    window.__btiDiag = function() { return autobetBridgeCall('diag'); };
+    window.__btiDiag.__autobetBridge = true;
+    window.__btiReadOdds = function(hint) { return autobetBridgeCall('readOdds', hint || {}); };
+    window.__btiReadOdds.__autobetBridge = true;
+    try {
+      document.documentElement.setAttribute('data-autobet-hook', '2.5.7');
+    } catch (_) {}
+  }
 })();
