@@ -7,6 +7,8 @@ import {
   parseMoney,
   readLabelAdjacentNumber,
   readOddsFromElement,
+  readSelectionFromGeneric,
+  readSelectionFromX10Card,
 } from '../selector-engine';
 
 export abstract class BaseScanner implements SiteAdapter {
@@ -66,16 +68,7 @@ export function pickBestSlipCard(cards: Element[]): Element | null {
 }
 
 export function readSelectionFromCard(card: Element): string {
-  const title =
-    card.querySelector('[data-testid*="selection"], [data-testid*="outcome"], [aria-label*="selection"]')
-      ?.textContent?.trim() || '';
-  if (title) return normText(title);
-
-  const lines = normText(card.textContent || '')
-    .split(/\s{2,}|@/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 1 && s.length < 80 && !/^\d+\.\d+$/.test(s));
-  return lines[0] || '';
+  return readSelectionFromX10Card(card) || readSelectionFromGeneric(card);
 }
 
 export function readAtOddsFromRoot(root: ParentNode): number | null {

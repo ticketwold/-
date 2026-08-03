@@ -20,6 +20,7 @@ type DocSession = {
   hub: MutationHub;
   portal: PortalWatcher;
   lastKey: string;
+  lastConfidence: number;
   teardown: () => void;
 };
 
@@ -53,7 +54,19 @@ export class ScannerEngine {
     });
     const stopIframes = this.iframeRegistry.start();
 
+    const onNav = () => {
+      this.bestPayload = null;
+      this.attachDocument(doc, location.href, 'top', 0);
+      for (const session of [...this.sessions.values()]) {
+        this.onDocMutate(session.ctx, session.adapter, true);
+      }
+    };
+    window.addEventListener('popstate', onNav);
+    window.addEventListener('hashchange', onNav);
+
     return () => {
+      window.removeEventListener('popstate', onNav);
+      window.removeEventListener('hashchange', onNav);
       stopIframes();
       this.topTeardown?.();
       this.topTeardown = null;
@@ -128,16 +141,16 @@ export class ScannerEngine {
 
     const ctx = this.makeContext(doc, href, via, depth);
     const adapter = getAdapter(ctx.siteId);
-    if (!adapter || !adapter.canScan(ctx)) {
-      return () => {};
-    }
+    if (!adapter) return () => {};
+
+    if (!doc.body && !doc.documentElement) return () => {};
 
     let slipCache: BetSlipNode | null = null;
 
     const hub = new MutationHub({
       doc,
       resolveAnchor: () => {
-        slipCache = adapter.findBetSlip(ctx);
+        slipCache = adapter.canScan(ctx) ? adapter.findBetSlip(ctx) : null;
         return adapter.observerAnchor(ctx, slipCache);
       },
       onMutate: (cartChange) => this.onDocMutate(ctx, adapter, cartChange),
@@ -162,6 +175,7 @@ export class ScannerEngine {
       hub,
       portal,
       lastKey: '',
+      lastConfidence: 0,
       teardown,
     });
 
@@ -180,14 +194,17 @@ export class ScannerEngine {
     if (!result?.odds) {
       if (session.lastKey !== '') {
         session.lastKey = '';
-        this.emitBest(null, cartChange);
+        session.lastConfidence = 0;
+        this.recomputeBestAndEmit(cartChange);
       }
       return;
     }
 
     const key = `${result.odds.odds.toFixed(3)}_${result.odds.selectionText || ''}`;
-    if (key === session.lastKey && !cartChange) return;
+    const confidence = result.slip?.confidence ?? 0;
+    if (key === session.lastKey && !cartChange && confidence <= session.lastConfidence) return;
     session.lastKey = key;
+    session.lastConfidence = confidence;
 
     const via = ctx.via === 'iframe' ? 'iframe-child' : 'native-frame';
     const payload: OddsPayload = {
@@ -199,14 +216,39 @@ export class ScannerEngine {
       frameLabel: ctx.frameLabel,
     };
 
-    this.considerBest(payload);
+    this.considerBest(payload, confidence);
     this.emitBest(this.bestPayload, cartChange);
   }
 
-  private considerBest(payload: OddsPayload): void {
+  private recomputeBestAndEmit(cartChange: boolean): void {
+    this.bestPayload = null;
+    let bestConf = 0;
+    for (const session of this.sessions.values()) {
+      const result = this.scanContext(session.ctx, session.adapter);
+      if (!result?.odds) continue;
+      const conf = result.slip?.confidence ?? 0;
+      if (conf >= bestConf) {
+        bestConf = conf;
+        const via = session.ctx.via === 'iframe' ? 'iframe-child' : 'native-frame';
+        this.bestPayload = {
+          ...result.odds,
+          stake: result.stake,
+          payout: result.payout,
+          sourceKind: result.odds.source,
+          via,
+          frameLabel: session.ctx.frameLabel,
+        };
+      }
+    }
+    this.emitBest(this.bestPayload, cartChange);
+  }
+
+  private considerBest(payload: OddsPayload, confidence: number): void {
     const prev = this.bestPayload;
-    if (!prev || payload.odds >= prev.odds) {
+    const prevConf = (prev as OddsPayload & { _conf?: number })?._conf ?? 0;
+    if (!prev || confidence >= prevConf) {
       this.bestPayload = payload;
+      (this.bestPayload as OddsPayload & { _conf?: number })._conf = confidence;
     }
   }
 

@@ -4,9 +4,14 @@ import {
   BaseScanner,
   pickBestSlipCard,
   readAtOddsFromRoot,
-  readSelectionFromCard,
 } from './base-adapter';
-import { findSlipCardCandidates, findStakeInputs, readOddsFromElement } from '../selector-engine';
+import {
+  findSlipCardCandidates,
+  findStakeInputs,
+  findX10SlipCards,
+  readOddsFromElement,
+  readSelectionFromX10Card,
+} from '../selector-engine';
 
 export class X10Scanner extends BaseScanner {
   readonly siteId = 'x10' as const;
@@ -18,21 +23,19 @@ export class X10Scanner extends BaseScanner {
     if (isInPlayShellHref(href)) return 'shell-top';
     if (isBetslipIframeSrc(href)) return 'betslip-iframe';
     const hasStake = findStakeInputs(doc).length > 0;
-    const hasCards = findSlipCardCandidates(doc).length > 0;
-    if (hasStake && hasCards) return 'sportscenter-betslip';
-    if (hasStake) return 'sportscenter-betslip';
+    const hasCards = findX10SlipCards(doc).length > 0;
+    if (hasStake || hasCards) return 'sportscenter-betslip';
     return 'unknown';
   }
 
   canScan(ctx: ScanContext): boolean {
     const label = ctx.frameLabel;
-    if (label === 'junk' || label === 'shell-top') return false;
+    if (label === 'junk') return false;
+    if (label === 'shell-top') return false;
     if (label === 'sportscenter-betslip' || label === 'widgets-x' || label === 'betslip-iframe') {
       return true;
     }
-    const stake = findStakeInputs(ctx.doc);
-    const cards = findSlipCardCandidates(ctx.doc);
-    return stake.length > 0 || cards.length > 0;
+    return findStakeInputs(ctx.doc).length > 0 || findX10SlipCards(ctx.doc).length > 0;
   }
 
   findBetSlip(ctx: ScanContext): BetSlipNode | null {
@@ -40,32 +43,35 @@ export class X10Scanner extends BaseScanner {
     if (!root) return null;
 
     const stakeInputs = findStakeInputs(ctx.doc);
-    const cards = findSlipCardCandidates(ctx.doc);
+    const cards = findX10SlipCards(ctx.doc).length ? findX10SlipCards(ctx.doc) : findSlipCardCandidates(ctx.doc);
 
     if (stakeInputs.length) {
       const input = stakeInputs[0]!;
-      const container = input.closest('aside, section, [data-testid*="betslip"], [data-testid*="bet-slip"]') || input.parentElement || input;
-      const confidence = cards.length ? 0.9 : 0.75;
-      return this.buildSlipNode(ctx.doc, container, cards, confidence);
+      const container =
+        input.closest('aside, section, [data-testid*="betslip"], [data-testid*="bet-slip"], [class*="betslip"], [class*="Betslip"]') ||
+        input.parentElement ||
+        input;
+      return this.buildSlipNode(ctx.doc, container, cards, cards.length ? 0.92 : 0.8);
     }
 
     const best = pickBestSlipCard(cards);
-    if (best) {
-      return this.buildSlipNode(ctx.doc, best, cards, 0.7);
-    }
+    if (best) return this.buildSlipNode(ctx.doc, best, cards, 0.75);
 
-    const atOdds = readAtOddsFromRoot(root);
+    const atOdds = readAtOddsFromRoot(slipRootFromDoc(ctx.doc));
     if (atOdds && atOdds > 1.01) {
-      return this.buildSlipNode(ctx.doc, root as Element, [], 0.5);
+      return this.buildSlipNode(ctx.doc, root as Element, [], 0.55);
     }
 
     return null;
   }
 
   findOdds(ctx: ScanContext, slip: BetSlipNode): OddsResult | null {
-    const frame = ctx.frameLabel;
     const sourcePrefix =
-      frame === 'sportscenter-betslip' ? 'sportscenter' : frame === 'widgets-x' ? 'widgets-x' : 'x10';
+      ctx.frameLabel === 'sportscenter-betslip'
+        ? 'sportscenter'
+        : ctx.frameLabel === 'widgets-x'
+          ? 'widgets-x'
+          : 'x10';
 
     for (let i = slip.cards.length - 1; i >= 0; i--) {
       const card = slip.cards[i];
@@ -74,7 +80,7 @@ export class X10Scanner extends BaseScanner {
       if (!raw || raw <= 1.01) continue;
       return {
         odds: raw,
-        selectionText: readSelectionFromCard(card),
+        selectionText: readSelectionFromX10Card(card),
         source: `${sourcePrefix}-slip-card`,
         fromSlip: true,
       };
@@ -92,4 +98,17 @@ export class X10Scanner extends BaseScanner {
 
     return null;
   }
+}
+
+function slipRootFromDoc(doc: Document): ParentNode {
+  const input = findStakeInputs(doc)[0];
+  if (input) {
+    return (
+      input.closest('[class*="betslip"], [class*="Betslip"], aside, section') ||
+      input.parentElement ||
+      doc.body ||
+      doc.documentElement
+    );
+  }
+  return doc.body || doc.documentElement;
 }

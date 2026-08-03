@@ -658,9 +658,14 @@
   function parseOddsFromButton(node) {
     const txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
     if (!txt || txt.length > 200) return null;
-    for (const el of [node, ...Array.from(node.querySelectorAll?.('[class*="odd"], [class*="Odds"], span, b') || [])]) {
+    if (/^정지된$|^정지$|suspended|closed|unavailable/i.test(txt)) return null;
+    for (const el of [node, ...Array.from(node.querySelectorAll?.('.bet__winner-coef, [class*="odd"], [class*="Odds"], span, b') || [])]) {
+      const cls = String(el.className || '');
+      if (/Suspended|coefSuspended/i.test(cls)) continue;
       const t = (el.textContent || '').trim();
+      if (/^정지된$|^정지$|suspended/i.test(t)) continue;
       if (/^\d+\.\d{1,3}$/.test(t)) {
+        console.log('[bc-slip] button odds raw:', JSON.stringify(t));
         const o = po(t);
         if (o) return o;
       }
@@ -841,6 +846,31 @@
     return [...new Set(out)];
   }
 
+  function readBetWinnerCoefSlip() {
+    let best = null;
+    walkNodes(document.documentElement, (node) => {
+      if (node.nodeType !== 1 || best) return;
+      const cls = String(node.className || '');
+      if (!/bet__winner-coef/i.test(cls)) return;
+      if (/Suspended|suspended|coefSuspended|is-suspended/i.test(cls)) return;
+      const raw = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!raw || /^정지된$|^정지$|^정지됨$|^마감$|^suspended$|^closed$/i.test(raw)) return;
+      console.log('[bc-slip] bet__winner-coef raw:', JSON.stringify(raw));
+      const odds = po(raw);
+      if (!(odds > 1.01)) return;
+      console.log('[bc-slip] bet__winner-coef parsed:', odds);
+      best = {
+        odds,
+        teamLabel: '',
+        method: 'bet-winner-coef',
+        sourceKind: 'bc-native-slip',
+        fromSlip: true,
+        fromPayout: false
+      };
+    }, 0);
+    return best;
+  }
+
   function readNativeSlip() {
     if (isBcSlipClosed()) {
       lastPickStableOdds = 0;
@@ -852,6 +882,7 @@
     }
     const fields = collectStakeFields();
     const slipStrategies = [
+      readBetWinnerCoefSlip,
       readFromApiCache,
       readBetbyShadowSlip,
       readNearStakeSlip,

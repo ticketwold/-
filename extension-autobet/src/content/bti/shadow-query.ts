@@ -99,9 +99,13 @@ export function readAtOddsFromText(text: string): number | null {
 }
 
 export function readOddsFromSlipCardElement(card: Element): number | null {
+  if (/정지된|정지됨|suspended|closed|unavailable/i.test(card.textContent || '')) return null;
+
   for (const el of deepQueryAll(card, SLIP_ODDS_SELECTORS)) {
     const t = (el.textContent || '').trim();
+    if (/^정지된$|^정지$|^Suspended$/i.test(t)) continue;
     if (/^\d+\.\d{2,4}$/.test(t)) {
+      console.log('[x10-slip] card odds raw:', JSON.stringify(t));
       const n = parseFloat(t);
       if (n > 1.01 && n < 100) return Math.round(n * 1000) / 1000;
     }
