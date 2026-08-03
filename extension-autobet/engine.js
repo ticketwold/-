@@ -385,10 +385,47 @@ async function ensureBtiScript(tabId, frameId) {
 async function getTabUrl(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    return tab?.url || '';
+    return tabEffectiveUrl(tab);
   } catch (_) {
     return '';
   }
+}
+
+async function queryTabsByUrlPatterns(patterns) {
+  const seen = new Map();
+  if (!patterns?.length) return [];
+  for (let i = 0; i < patterns.length; i += 18) {
+    const chunk = patterns.slice(i, i + 18);
+    try {
+      const found = await chrome.tabs.query({ url: chunk });
+      for (const t of found) {
+        if (t?.id) seen.set(t.id, t);
+      }
+    } catch (_) {}
+  }
+  return [...seen.values()];
+}
+
+async function mergeTabs(...groups) {
+  const seen = new Map();
+  for (const group of groups) {
+    for (const tab of group || []) {
+      if (tab?.id) seen.set(tab.id, tab);
+    }
+  }
+  return [...seen.values()];
+}
+
+async function enrichTabUrls(tabs) {
+  return Promise.all(tabs.map(async (tab) => {
+    if (tabEffectiveUrl(tab) || !tab?.id) return tab;
+    try {
+      const fresh = await chrome.tabs.get(tab.id);
+      return fresh?.id ? fresh : tab;
+    } catch (_) {
+      return tab;
+    }
+  }));
 }
 
 function leg2ScriptFile(url) {
@@ -454,27 +491,63 @@ async function scoreBtiTabByFrames(tabId, activeId) {
   }
 }
 
-async function findBtiTabByFrameProbe(tabs, activeId) {
-  const candidates = tabs
-    .map((tab) => ({ tab, url: tabEffectiveUrl(tab) }))
-    .filter(({ url }) => url && !/^chrome:|^edge:|^devtools:/i.test(url) && !isLeg2Url(url));
+async function scoreBtiTabByPing(tab, activeId) {
+  const tabId = tab.id;
+  let score = 0;
+  const url = tabEffectiveUrl(tab) || await getTabUrl(tabId);
+  if (isLeg1TabUrl(url)) score += 220;
+  if (url && isLeg2Url(url) && !isLeg1TabUrl(url)) return 0;
+  if (tabId === activeId) score += 35;
 
-  const scored = await Promise.all(candidates.slice(0, 18).map(async ({ tab, url }) => {
+  const frames = await getAllFrames(tabId);
+  const ordered = [...frames].sort((a, b) => scoreBtiFrameUrl(b.url || '') - scoreBtiFrameUrl(a.url || ''));
+  for (const f of ordered.slice(0, 8)) {
+    try {
+      await ensureBtiScript(tabId, f.frameId);
+      const ping = await withTimeout(sendBti(tabId, f.frameId, { type: 'PING' }), 1100, 'ping');
+      if (ping?.ok) {
+        score += 280 + Math.min(ping.buttonCount || 0, 80) + (ping.hasInput ? 120 : 0) + (ping.hasSlip ? 80 : 0);
+        if (score >= 250) return score;
+      }
+    } catch (_) {}
+  }
+  return score;
+}
+
+async function findBtiTabByFrameProbe(tabs, activeId) {
+  const candidates = tabs.filter((tab) => {
+    if (!tab?.id || isSkippableProbeTab(tab)) return false;
+    const url = tabEffectiveUrl(tab);
+    if (url && isLeg2Url(url) && !isLeg1TabUrl(url)) return false;
+    return true;
+  });
+
+  const scored = await Promise.all(candidates.slice(0, 24).map(async (tab) => {
+    const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
     const frameScore = await scoreBtiTabByFrames(tab.id, activeId);
     let score = frameScore;
-    if (isLeg1TabUrl(url)) score += 80;
-    if (tab.id === activeId) score += 10;
+    if (isLeg1TabUrl(url)) score += 100;
+    if (tab.id === activeId) score += 15;
+    if (score < 120) {
+      const pingScore = await scoreBtiTabByPing(tab, activeId);
+      score = Math.max(score, pingScore);
+    }
     return { tab, score };
   }));
 
   const best = scored
-    .filter((row) => row.score >= 180)
+    .filter((row) => row.score >= 120)
     .sort((a, b) => b.score - a.score)[0];
   return best?.tab || null;
 }
 
 async function findTabs(leg2Pref = 'bcgame') {
-  const tabs = await chrome.tabs.query({});
+  const [allTabs, leg1PatternTabs, leg2PatternTabs] = await Promise.all([
+    chrome.tabs.query({}),
+    queryTabsByUrlPatterns(leg1TabUrlPatterns()),
+    queryTabsByUrlPatterns(leg2TabUrlPatterns(leg2Pref))
+  ]);
+  const tabs = await enrichTabUrls(await mergeTabs(allTabs, leg1PatternTabs, leg2PatternTabs));
   let btiTab = null;
   let btiBestScore = -1;
   const leg2Tabs = [];
@@ -482,13 +555,24 @@ async function findTabs(leg2Pref = 'bcgame') {
   const activeId = activeTabs[0]?.id;
 
   for (const tab of tabs) {
-    const url = tabEffectiveUrl(tab);
-    if (!url) continue;
-    if (urlMatchesLeg2Pref(url, leg2Pref)) leg2Tabs.push({ tab, url });
-    const leg1Score = scoreLeg1Tab(url, activeId, tab.id);
+    let url = tabEffectiveUrl(tab);
+    if (!url && tab?.id) url = await getTabUrl(tab.id);
+    if (url && urlMatchesLeg2Pref(url, leg2Pref)) leg2Tabs.push({ tab, url });
+    const leg1Score = url ? scoreLeg1Tab(url, activeId, tab.id) : -1;
     if (leg1Score > btiBestScore) {
       btiBestScore = leg1Score;
       btiTab = tab;
+    }
+  }
+
+  if (!btiTab && leg1PatternTabs.length) {
+    for (const tab of leg1PatternTabs) {
+      const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
+      const leg1Score = scoreLeg1Tab(url, activeId, tab.id);
+      if (leg1Score > btiBestScore) {
+        btiBestScore = leg1Score;
+        btiTab = tab;
+      }
     }
   }
 
@@ -503,18 +587,17 @@ async function findTabs(leg2Pref = 'bcgame') {
     if (score > bestScore) { bestScore = score; polyTab = tab; }
   }
 
-  if (!polyTab && leg2Pref === 'stake') {
-    for (const tab of tabs) {
-      const url = tabEffectiveUrl(tab);
-      if (!url || !isStakeUrl(url)) continue;
+  if (!polyTab && leg2PatternTabs.length) {
+    for (const tab of leg2PatternTabs) {
+      const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
       const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref);
       if (score > bestScore) { bestScore = score; polyTab = tab; }
     }
   }
 
   return {
-    btiTab: btiTab ? { id: btiTab.id, url: tabEffectiveUrl(btiTab) || btiTab.url } : null,
-    polyTab: polyTab ? { id: polyTab.id, url: tabEffectiveUrl(polyTab) || polyTab.url } : null
+    btiTab: btiTab ? { id: btiTab.id, url: tabEffectiveUrl(btiTab) || btiTab.url || '' } : null,
+    polyTab: polyTab ? { id: polyTab.id, url: tabEffectiveUrl(polyTab) || polyTab.url || '' } : null
   };
 }
 
@@ -690,8 +773,9 @@ function btiHintFromPoly(poly) {
 async function readPolySlipAllBcTabs(leg2Pref = 'bcgame', opts = {}) {
   const tabs = await chrome.tabs.query({});
   const leg2Tabs = tabs
-    .filter((t) => t.url && urlMatchesLeg2Pref(t.url, leg2Pref))
-    .map((t) => ({ tab: t, score: scoreLeg2Tab(t.url, null, t.id, leg2Pref) }))
+    .map((t) => ({ tab: t, url: tabEffectiveUrl(t) }))
+    .filter(({ url }) => url && urlMatchesLeg2Pref(url, leg2Pref))
+    .map(({ tab, url }) => ({ tab, score: scoreLeg2Tab(url, null, tab.id, leg2Pref) }))
     .sort((a, b) => b.score - a.score);
 
   const fast = opts.fastScan !== false;
@@ -763,12 +847,8 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const found = await findTabs(leg2Pref);
   if (!found.btiTab) {
     const tabs = await chrome.tabs.query({});
-    const hosts = [...new Set(tabs.map((t) => {
-      const u = tabEffectiveUrl(t);
-      if (!u || /^chrome:|^edge:/i.test(u)) return '';
-      try { return new URL(u).hostname; } catch (_) { return ''; }
-    }).filter(Boolean))].slice(0, 8);
-    const hint = hosts.length ? ` (열린 탭: ${hosts.join(', ')})` : '';
+    const labels = [...new Set(tabs.map((t) => tabLabelForHint(t)).filter(Boolean))].slice(0, 6);
+    const hint = labels.length ? ` (탭 ${tabs.length}개 · ${labels.join(', ')})` : ` (탭 ${tabs.length}개)`;
     return { ok: false, reason: `텐텐뱃(x10x10s) 스포츠 탭을 열어주세요${hint}` };
   }
   const board = await searchBtiBoardFromFrames(found.btiTab);

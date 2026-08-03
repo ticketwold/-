@@ -71,6 +71,47 @@ function tabEffectiveUrl(tab) {
   return String(tab.pendingUrl || tab.url || '').trim();
 }
 
+function leg1TabUrlPatterns() {
+  const patterns = [];
+  for (const h of SITE_CONFIG.WRAPPER_HOSTS) {
+    patterns.push(`*://*.${h}/*`, `*://${h}/*`);
+  }
+  for (const h of SITE_CONFIG.BTI_INJECTABLE_HOSTS) {
+    patterns.push(`*://*.${h}/*`, `*://${h}/*`);
+  }
+  return [...new Set(patterns)];
+}
+
+function leg2TabUrlPatterns(pref) {
+  const meta = leg2SiteMeta(pref || 'bcgame');
+  const patterns = [];
+  for (const h of meta.hosts) {
+    patterns.push(`*://*.${h}/*`, `*://${h}/*`);
+  }
+  return patterns;
+}
+
+function isExtensionPageUrl(url) {
+  return /^chrome-extension:/i.test(String(url || ''));
+}
+
+function isSkippableProbeTab(tab) {
+  const url = tabEffectiveUrl(tab);
+  if (!url) return false;
+  if (isExtensionPageUrl(url)) return true;
+  return /^chrome:|^edge:|^devtools:|^about:/i.test(url);
+}
+
+function tabLabelForHint(tab) {
+  const u = tabEffectiveUrl(tab);
+  if (u && !isExtensionPageUrl(u)) {
+    try { return new URL(u).hostname; } catch (_) {}
+  }
+  const title = String(tab?.title || '').trim();
+  if (title && !/^chrome/i.test(title)) return title.slice(0, 36);
+  return '';
+}
+
 function isWrapperUrl(url) {
   return hostMatches(url, SITE_CONFIG.WRAPPER_HOSTS);
 }
