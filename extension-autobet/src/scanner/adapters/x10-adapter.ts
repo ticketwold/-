@@ -12,6 +12,8 @@ import {
   readOddsFromElement,
   readSelectionFromX10Card,
 } from '../selector-engine';
+import { X10_SLIP_CARD } from '../stable-selectors';
+import { setScannerHit } from '../scanner-trace';
 
 export class X10Scanner extends BaseScanner {
   readonly siteId = 'x10' as const;
@@ -78,6 +80,7 @@ export class X10Scanner extends BaseScanner {
       if (!card) continue;
       const raw = readOddsFromElement(card);
       if (!raw || raw <= 1.01) continue;
+      setScannerHit(`${X10_SLIP_CARD} / slip-card @odds`, card, `${sourcePrefix}-slip-card`, raw);
       return {
         odds: raw,
         selectionText: readSelectionFromX10Card(card),
@@ -88,6 +91,7 @@ export class X10Scanner extends BaseScanner {
 
     const at = readAtOddsFromRoot(slip.root);
     if (at && at > 1.01) {
+      setScannerHit('@ odds in slip root', slip.root as Element, `${sourcePrefix}-at`, at);
       return {
         odds: at,
         selectionText: '',

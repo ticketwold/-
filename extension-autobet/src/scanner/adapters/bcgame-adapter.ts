@@ -15,6 +15,7 @@ import {
 import { walkElements } from '../dom-tree';
 import { BC_SLIP_ROOT } from '../stable-selectors';
 import { isSuspendedOddsElement } from '../odds-parser';
+import { setScannerHit } from '../scanner-trace';
 
 export class BCGameScanner extends BaseScanner {
   readonly siteId = 'bcgame' as const;
@@ -135,6 +136,7 @@ export class BCGameScanner extends BaseScanner {
     const raw = (el.textContent || '').trim();
     const odds = parseDecimalOdds(raw, 'bet__winner-coef');
     if (!odds) return null;
+    setScannerHit('span.bet__winner-coef / .bet__winner-coef', el, 'bc-winner-coef', odds);
     return {
       odds,
       selectionText: readSelectionFromGeneric(el.closest('[class*="bet"], [class*="coupon"], aside') || el),

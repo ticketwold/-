@@ -1,7 +1,8 @@
 import './slip-read.legacy';
 import type { OddsPayload } from '@scanner/types';
 import { startScanner } from '@scanner/bootstrap';
-import { logDomProbe, runDomProbe } from '@scanner/dom-probe';
+import { startAutoDiagnostic } from '@scanner/auto-diagnostic';
+import { runDomProbe } from '@scanner/dom-probe';
 import { setOddsDebug } from '@scanner/odds-parser';
 
 declare global {
@@ -14,10 +15,6 @@ declare global {
   }
 }
 
-/**
- * bc_slip_read.js — Betby CDN iframe (betby.com, sptpub.com 등) 및 bc.game all_frames.
- * 실제 bet__winner-coef DOM은 대부분 이 entry에서만 접근 가능.
- */
 const isBetbyCdn = /betby\.com|sptpub\.com|sptsportscdn\.com|biahosted\.com|cocoesports\.com/i.test(
   location.href
 );
@@ -103,10 +100,8 @@ console.log(
   (location.href || '').slice(0, 100)
 );
 
-const bootProbe = () => logDomProbe('bc-slip-read', scanner.probe());
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootProbe, { once: true });
-} else {
-  bootProbe();
-}
-setTimeout(bootProbe, 2500);
+startAutoDiagnostic({
+  scriptEntry: 'bc_slip_read.js',
+  scanner,
+  label: isBetbyCdn ? 'BC / betby-cdn (bc_slip_read)' : 'BC / bc_slip_read',
+});

@@ -1,7 +1,8 @@
 import './content.legacy';
 import type { OddsPayload } from '@scanner/types';
 import { startScanner } from '@scanner/bootstrap';
-import { logDomProbe, runDomProbe } from '@scanner/dom-probe';
+import { startAutoDiagnostic } from '@scanner/auto-diagnostic';
+import { runDomProbe } from '@scanner/dom-probe';
 import { setOddsDebug } from '@scanner/odds-parser';
 
 declare global {
@@ -87,10 +88,8 @@ console.log(
   (location.href || '').slice(0, 100)
 );
 
-const bootProbe = () => logDomProbe('bc-content', scanner.probe());
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootProbe, { once: true });
-} else {
-  bootProbe();
-}
-setTimeout(bootProbe, 2500);
+startAutoDiagnostic({
+  scriptEntry: 'polymarket_content.js',
+  scanner,
+  label: 'BC.Game / polymarket_content',
+});

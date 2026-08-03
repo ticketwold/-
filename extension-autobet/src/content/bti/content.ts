@@ -1,10 +1,11 @@
 import './content.legacy';
 import type { OddsPayload } from '@scanner/types';
 import { startScanner } from '@scanner/bootstrap';
-import { logDomProbe, runDomProbe } from '@scanner/dom-probe';
+import { startAutoDiagnostic } from '@scanner/auto-diagnostic';
+import { runDomProbe } from '@scanner/dom-probe';
 import { setOddsDebug } from '@scanner/odds-parser';
 import { detectSiteId } from '@scanner/site-detector';
-import { detectSlipFrameKind, frameCanHostBetSlip } from './slip-frame-kind';
+import { detectSlipFrameKind } from './slip-frame-kind';
 
 declare global {
   interface Window {
@@ -70,15 +71,8 @@ console.log(
   (location.href || '').slice(0, 100)
 );
 
-const bootProbe = () => logDomProbe(`bti-${frameKind}`, scanner.probe());
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootProbe, { once: true });
-} else {
-  bootProbe();
-}
-setTimeout(bootProbe, 2500);
-
-if (frameCanHostBetSlip(frameKind)) {
-  const probe = scanner.probe();
-  console.log('[DOM Scanner / 텐텐뱃] slip-host probe:', probe);
-}
+startAutoDiagnostic({
+  scriptEntry: 'bti_content.js',
+  scanner,
+  label: `텐텐뱃 / ${frameKind}`,
+});

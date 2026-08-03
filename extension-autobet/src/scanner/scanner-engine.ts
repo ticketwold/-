@@ -5,6 +5,7 @@ import { IframeRegistry } from './iframe-registry';
 import { MutationHub } from './mutation-hub';
 import { PortalWatcher } from './portal-watcher';
 import { detectSiteIdFromContext, isJunkFrameHref } from './site-detector';
+import { clearScannerHit, getScannerTrace, setScannerNullReason } from './scanner-trace';
 import type {
   BetSlipNode,
   OddsChangeCallback,
@@ -126,7 +127,12 @@ export class ScannerEngine {
 
   readOdds(): OddsPayload | null {
     const best = this.scanAll();
-    if (!best?.odds) return null;
+    if (!best?.odds) {
+      if (!best) setScannerNullReason('scanAll: 모든 session에서 odds 없음');
+      else if (!best.slip) setScannerNullReason('scanAll: betSlip node 없음');
+      else setScannerNullReason('scanAll: findOdds null 또는 odds<=0');
+      return null;
+    }
 
     const via = best.ctx.via === 'iframe' ? 'iframe-child' : 'native-frame';
     return {
@@ -137,6 +143,34 @@ export class ScannerEngine {
       via,
       frameLabel: best.ctx.frameLabel,
     };
+  }
+
+  getDiagnostics(): {
+    trace: ReturnType<typeof getScannerTrace>;
+    sessions: Array<{
+      href: string;
+      frameLabel: string;
+      via: string;
+      mutationObserver: ReturnType<MutationHub['getObserverStatus']>;
+    }>;
+  } {
+    const sessions: Array<{
+      href: string;
+      frameLabel: string;
+      via: string;
+      mutationObserver: ReturnType<MutationHub['getObserverStatus']>;
+    }> = [];
+
+    for (const session of this.sessions.values()) {
+      sessions.push({
+        href: session.ctx.href,
+        frameLabel: session.ctx.frameLabel,
+        via: session.ctx.via,
+        mutationObserver: session.hub.getObserverStatus(),
+      });
+    }
+
+    return { trace: getScannerTrace(), sessions };
   }
 
   private resolveSiteId(href: string): SiteId {
@@ -287,11 +321,27 @@ export class ScannerEngine {
   }
 
   private scanContext(ctx: ScanContext, adapter: SiteAdapter) {
-    if (!adapter.canScan(ctx)) return null;
+    if (!adapter.canScan(ctx)) {
+      setScannerNullReason(`canScan=false (frameLabel=${ctx.frameLabel}, href=${ctx.href.slice(0, 80)})`);
+      return null;
+    }
     const slip = adapter.findBetSlip(ctx);
-    if (!slip) return null;
+    if (!slip) {
+      setScannerNullReason(`findBetSlip=null (frameLabel=${ctx.frameLabel})`);
+      clearScannerHit();
+      return null;
+    }
     const odds = adapter.findOdds(ctx, slip);
-    if (!odds) return { ctx, slip, odds: null, stake: null, payout: null };
+    if (!odds) {
+      setScannerNullReason(`findOdds=null (frameLabel=${ctx.frameLabel}, cards=${slip.cards.length})`);
+      clearScannerHit();
+      return { ctx, slip, odds: null, stake: null, payout: null };
+    }
+    if (odds.odds <= 0) {
+      setScannerNullReason(`findOdds: odds<=0 (source=${odds.source})`);
+      clearScannerHit();
+      return { ctx, slip, odds: null, stake: null, payout: null };
+    }
     const stake = adapter.findStake(ctx, slip);
     const payout = adapter.findPayout(ctx, slip);
     return { ctx, slip, odds, stake, payout };

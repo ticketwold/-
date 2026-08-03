@@ -125,4 +125,25 @@ export class MutationHub {
     if (node instanceof Element) return node.isConnected;
     return !!(node as DocumentFragment).childNodes?.length;
   }
+
+  /** 진단용 — MutationObserver 연결 상태 */
+  getObserverStatus(): {
+    bootstrapConnected: boolean;
+    slipConnected: boolean;
+    observedRootTag: string;
+    observedRootConnected: boolean;
+  } {
+    const root = this.observedRoot;
+    let observedRootTag = 'none';
+    if (root === this.opts.doc) observedRootTag = '#document';
+    else if (root === this.opts.doc.documentElement) observedRootTag = 'html';
+    else if (root instanceof Element) observedRootTag = root.tagName.toLowerCase();
+
+    return {
+      bootstrapConnected: !!this.bootstrapObserver,
+      slipConnected: !!this.slipObserver,
+      observedRootTag,
+      observedRootConnected: this.isConnected(root),
+    };
+  }
 }
