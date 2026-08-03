@@ -777,12 +777,12 @@ async function readBcSportsNativeSlip(polyTab, opts = {}) {
   const focusTab = opts.focusTab === true;
   const waitMs = opts.waitMs || (focusTab && !fastScan ? 2000 : 0);
   const teamHint = opts.teamHint || opts.excludeTeam || '';
-  const maxAttempts = fastScan ? 2 : (focusTab ? 6 : 2);
+  const maxAttempts = fastScan ? 2 : (focusTab ? 4 : 2);
 
   if (focusTab && waitMs > 0) await focusBcTabForRead(polyTab.id, waitMs);
   if (focusTab) {
-    await waitForBetbyRenderer(polyTab.id, fastScan ? 2500 : 8000);
-    await waitForBcSportsFrame(polyTab.id, fastScan ? 2000 : 6000);
+    await waitForBetbyRenderer(polyTab.id, fastScan ? 2000 : 5000);
+    await waitForBcSportsFrame(polyTab.id, fastScan ? 1500 : 4000);
   }
   await ensurePolyScript(polyTab.id);
   await ensureBcApiHook(polyTab.id);

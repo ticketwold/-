@@ -1,6 +1,7 @@
 'use strict';
 
 const SNAP_TIMEOUT_MS = 40000;
+const SCAN_TIMEOUT_MS = 90000;
 const ODDS_POLL_MS = 250;
 const ODDS_POLL_ARMED_MS = 60;
 const AMOUNT_SYNC_INTERVAL_MS = 120;
@@ -105,12 +106,19 @@ async function syncLeg2Site() {
     });
     updateSyncUi(cfg);
     logLine(`${leg2PrefLabel(cfg.leg2)} 연결됨 (탭 ${found.polyTab.id})`, 'ok');
-    const snap = await getSnap(cfg, null, { focusTab: true, waitMs: 1200, fastScan: false });
-    liveSnap = snap;
-    updateStatusFromSnap(snap, cfg);
-    amountSyncQueued = true;
-    if (snap.btiO > 1 && snap.polyO > 1) liveAmountSync(true);
-    else if (snap.reason) $('statusHint').textContent = snap.reason;
+    $('statusHint').textContent = '연결됨 — 배당 클릭 후 [스캔]';
+    getSnap(cfg, null, { connectLight: true }).then((snap) => {
+      if (snap?.found) tabCache = snap.found;
+    }).catch(() => {});
+    getSnap(cfg, null, { fastScan: true }).then((snap) => {
+      if (!snap?.ok) return;
+      liveSnap = snap;
+      updateStatusFromSnap(snap, cfg);
+      if (snap.btiO > 1 && snap.polyO > 1) {
+        amountSyncQueued = true;
+        liveAmountSync(true);
+      }
+    }).catch(() => {});
   } catch (e) {
     logLine(`연결 실패: ${e.message}`, 'err');
   } finally {
@@ -552,9 +560,10 @@ async function getSnap(cfg, progressLabel, opts = {}) {
   if (progressLabel) logLine(progressLabel, 'info');
   const snapOpts = {
     leg2Synced: true,
-    fastScan: opts.focusTab ? false : (opts.fastScan !== false),
+    fastScan: opts.connectLight ? true : (opts.focusTab ? false : (opts.fastScan !== false)),
     ...opts
   };
+  const timeoutMs = opts.focusTab ? SCAN_TIMEOUT_MS : SNAP_TIMEOUT_MS;
   let snap = await withTimeout(
     new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({
@@ -569,8 +578,8 @@ async function getSnap(cfg, progressLabel, opts = {}) {
         else resolve(response);
       });
     }),
-    SNAP_TIMEOUT_MS,
-    '배당 읽기'
+    timeoutMs,
+    opts.connectLight ? '연결' : '배당 읽기'
   );
   if (snap.found) tabCache = snap.found;
   if (cfg.useArbBotBridge && snap.found) {
