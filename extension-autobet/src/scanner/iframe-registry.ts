@@ -1,17 +1,23 @@
 import type { OddsChangeCallback } from './types';
 
-export type IframeDocHandler = (doc: Document, href: string, iframe: HTMLIFrameElement) => () => void;
+export type IframeDocHandler = (
+  doc: Document,
+  href: string,
+  iframe: HTMLIFrameElement,
+  depth: number
+) => () => void;
 
 type IframeBinding = {
   iframe: HTMLIFrameElement;
   teardown: () => void;
   loadHandler: () => void;
   srcObserver: MutationObserver | null;
+  childRegistry: IframeRegistry | null;
 };
 
 /**
  * iframe 생성/제거/load/src 변경 감시.
- * 각 접근 가능한 contentDocument에 handler 등록.
+ * 각 접근 가능한 contentDocument에 handler 등록 + 중첩 iframe 재귀 탐색.
  */
 export class IframeRegistry {
   private bindings = new WeakMap<HTMLIFrameElement, IframeBinding>();
@@ -19,10 +25,12 @@ export class IframeRegistry {
   private bodyObserver: MutationObserver | null = null;
   private handler: IframeDocHandler;
   private rootDoc: Document;
+  private depth: number;
 
-  constructor(rootDoc: Document, handler: IframeDocHandler) {
+  constructor(rootDoc: Document, handler: IframeDocHandler, depth = 0) {
     this.rootDoc = rootDoc;
     this.handler = handler;
+    this.depth = depth;
   }
 
   start(): () => void {
@@ -74,6 +82,7 @@ export class IframeRegistry {
     const binding = this.bindings.get(iframe);
     if (binding) {
       binding.teardown();
+      binding.childRegistry?.stop();
       binding.srcObserver?.disconnect();
       iframe.removeEventListener('load', binding.loadHandler);
       this.bindings.delete(iframe);
@@ -121,16 +130,22 @@ export class IframeRegistry {
       teardown: () => {},
       loadHandler,
       srcObserver,
+      childRegistry: null,
     });
   }
 
   private attachDoc(iframe: HTMLIFrameElement, doc: Document): void {
     const prev = this.bindings.get(iframe);
     prev?.teardown();
+    prev?.childRegistry?.stop();
     prev?.srcObserver?.disconnect();
 
     const href = this.hrefOf(iframe, doc);
-    const teardown = this.handler(doc, href, iframe);
+    const childDepth = this.depth + 1;
+    const teardown = this.handler(doc, href, iframe, childDepth);
+
+    const childRegistry = new IframeRegistry(doc, this.handler, childDepth);
+    const stopChild = childRegistry.start();
 
     const loadHandler = () => {
       const d = this.getDoc(iframe);
@@ -142,9 +157,13 @@ export class IframeRegistry {
 
     this.bindings.set(iframe, {
       iframe,
-      teardown,
+      teardown: () => {
+        teardown();
+        stopChild();
+      },
       loadHandler,
       srcObserver: null,
+      childRegistry,
     });
   }
 }

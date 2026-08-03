@@ -1,5 +1,6 @@
 import { getAdapter } from './adapters';
 import { countIframes, countShadowHosts } from './dom-tree';
+import { findBcWinnerCoefElements } from './selector-engine';
 import { IframeRegistry } from './iframe-registry';
 import { MutationHub } from './mutation-hub';
 import { PortalWatcher } from './portal-watcher';
@@ -52,8 +53,8 @@ export class ScannerEngine {
     const href = this.opts.rootHref ?? location.href;
     this.topTeardown = this.attachDocument(doc, href, 'top', 0);
 
-    this.iframeRegistry = new IframeRegistry(doc, (childDoc, href) => {
-      return this.attachDocument(childDoc, href, 'iframe', 1);
+    this.iframeRegistry = new IframeRegistry(doc, (childDoc, href, _iframe, depth) => {
+      return this.attachDocument(childDoc, href, 'iframe', depth);
     });
     const stopIframes = this.iframeRegistry.start();
 
@@ -84,6 +85,25 @@ export class ScannerEngine {
     const ctx = best?.ctx;
     const slip = best?.slip;
     const odds = best?.odds;
+    const zeroReasons: string[] = [];
+
+    if (!best) zeroReasons.push('SCAN_ALL_RETURNED_NULL');
+    if (!slip) zeroReasons.push('NO_BETSLIP_NODE');
+    if (!odds || odds.odds <= 0) zeroReasons.push('NO_ODDS_PARSED');
+
+    const activeCtx = ctx ?? this.makeContext(document, location.href, 'top', 0);
+    const adapter = getAdapter(activeCtx.siteId);
+    if (adapter && !adapter.canScan(activeCtx)) {
+      zeroReasons.push(`CAN_SCAN_FALSE:${activeCtx.frameLabel}`);
+    }
+
+    const coefCount = findBcWinnerCoefElements(
+      activeCtx.doc.documentElement || activeCtx.doc.body
+    ).length;
+
+    if (coefCount > 0 && (!odds || odds.odds <= 0)) {
+      zeroReasons.push(`COEF_IN_DOM_BUT_NOT_READ:${coefCount}`);
+    }
 
     return {
       siteId: ctx?.siteId ?? this.resolveSiteId(location.href),
@@ -98,6 +118,9 @@ export class ScannerEngine {
       shadowHostCount: ctx ? countShadowHosts(ctx.doc) : 0,
       iframeCount: ctx ? countIframes(ctx.doc) : 0,
       confidence: slip?.confidence ?? 0,
+      winnerCoefCount: coefCount,
+      sessionCount: this.sessions.size,
+      zeroReasons,
     };
   }
 

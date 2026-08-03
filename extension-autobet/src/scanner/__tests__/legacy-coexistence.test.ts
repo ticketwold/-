@@ -8,7 +8,13 @@ describe('Scanner + Legacy coexistence', () => {
     const legacyResult = { ok: true, odds: 1.5, method: 'legacy-slip-root' };
     const legacyFn = vi.fn(() => legacyResult);
 
-    const scannerRead = vi.fn(() => ({ odds: 2.0, selectionText: 'W1', source: 'bc-winner-coef', fromSlip: true }));
+    type ScanHit = { odds: number; selectionText: string; source: string; fromSlip: boolean } | null;
+    const scannerRead = vi.fn((): ScanHit => ({
+      odds: 2.0,
+      selectionText: 'W1',
+      source: 'bc-winner-coef',
+      fromSlip: true,
+    }));
 
     const wrapped = () => {
       const scanned = scannerRead();
@@ -32,7 +38,7 @@ describe('Scanner + Legacy coexistence', () => {
 
     const legacyPath = () => {
       const probed = (globalThis as { __btiReadSlipOdds?: () => typeof scannerOdds }).__btiReadSlipOdds?.();
-      if (probed?.odds > 1.01) return probed;
+      if (probed && probed.odds > 1.01) return probed;
       return { odds: 11.5, fromSlip: false }; // board fallback
     };
 

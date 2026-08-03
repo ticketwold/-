@@ -1,12 +1,14 @@
 import './content.legacy';
 import type { OddsPayload } from '@scanner/types';
 import { startScanner } from '@scanner/bootstrap';
+import { logDomProbe, runDomProbe } from '@scanner/dom-probe';
 import { setOddsDebug } from '@scanner/odds-parser';
 
 declare global {
   interface Window {
     __bcReadNativeSlip?: () => Record<string, unknown> | null;
     __bcScannerProbe?: () => ReturnType<ReturnType<typeof startScanner>['probe']>;
+    __bcDomProbe?: () => ReturnType<typeof runDomProbe>;
     __domScannerActive?: boolean;
     __domScannerWrapped?: boolean;
   }
@@ -43,6 +45,7 @@ const scanner = startScanner({
 
 window.__domScannerActive = true;
 window.__bcScannerProbe = () => scanner.probe();
+window.__bcDomProbe = () => runDomProbe('bc-content');
 
 /** bc_slip_read.js가 load한 뒤 scanner + legacy readNativeSlip 병합 */
 function installBcReadWrapper(): void {
@@ -83,3 +86,11 @@ console.log(
   window === window.top ? 'top' : 'iframe',
   (location.href || '').slice(0, 100)
 );
+
+const bootProbe = () => logDomProbe('bc-content', scanner.probe());
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootProbe, { once: true });
+} else {
+  bootProbe();
+}
+setTimeout(bootProbe, 2500);
