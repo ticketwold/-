@@ -156,7 +156,7 @@ async function verifyBtiSite() {
     btiSynced = true;
     chrome.runtime.sendMessage({ type: 'AUTOBET_SET_CONFIG', config: { btiSynced: true } });
     updateBtiSyncUi(true);
-    logLine(`텐텐뱃 연결됨 (탭 ${res.btiTab.id})`, 'ok');
+    logLine(`텐텐뱃 연결됨 (탭 ${res.btiTab.id}) · 확장 v${res.extensionVersion || '?'}`, 'ok');
     if (res.scriptWarning) {
       logLine(res.scriptWarning, 'err');
     } else if (res.inject) {
@@ -172,16 +172,20 @@ async function verifyBtiSite() {
       `배당판 — 버튼 ${res.board?.buttonCount || 0} · 경기 ${res.board?.eventCount || 0}`,
       (res.board?.buttonCount || 0) > 0 ? 'ok' : 'info'
     );
-    for (const p of res.probes || []) {
-      const tag = p.sportscenterBetslip ? 'SC' : (p.widgetsX ? 'wx' : '  ');
-      const line = `  f${p.frameId}${tag}: slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'}`;
-      logLine(`${line} · ${(p.url || '(main)').slice(-56)}`, p.slipOdds > 1 ? 'ok' : 'info');
+    logLine('── 프레임 자동탐색 (F12 불필요) ──', 'info');
+    for (const p of (res.probes || []).slice(0, 10)) {
+      const tag = p.sportscenterBetslip ? 'SC' : (p.widgetsX ? 'wx' : (p.frameId === 0 ? 'TOP' : 'if'));
+      const ver = p.marker || p.hook || '-';
+      const line = `f${p.frameId} ${tag} v${ver} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'}`;
+      const urlTail = (p.url || '(blank)').replace(/^https?:\/\/[^/]+/, '').slice(0, 64) || '(top)';
+      logLine(`  ${line} · ${urlTail}`, p.slipOdds > 1 ? 'ok' : 'info');
     }
     const best = (res.probes || []).find((p) => p.slipOdds > 1.01);
     if (best) {
-      logLine(`카트 배당 ${best.slipOdds.toFixed(3)} (f${best.frameId})`, 'ok');
+      logLine(`✓ 카트 배당 ${best.slipOdds.toFixed(3)} (프레임 f${best.frameId})`, 'ok');
     } else {
-      logLine('카트 배당 없음 — W1 선택 후 베팅카트 열고 다시 [연결확인]', 'err');
+      logLine('✗ 카트 배당 없음 — W1 클릭 → 금액 입력 → 다시 [연결확인]', 'err');
+      logLine('  (sportscenter URL 안 보여도 확장이 프레임 자동 탐색함)', 'info');
     }
     $('statusHint').textContent = '텐텐뱃 연결됨 — 오른쪽 사이트 [연결] 후 배당 클릭';
   } catch (e) {

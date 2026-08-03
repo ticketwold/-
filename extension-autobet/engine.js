@@ -1492,11 +1492,15 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const board = await searchBtiBoardFromFrames(found.btiTab);
   const probes = await probeBtiFramesDiagnostic(found.btiTab);
   const scriptOk = inject.framesWithScript > 0;
+  const bestProbe = probes.find((p) => p.slipOdds > 1.01) || null;
   return {
     ok: true,
     btiTab: found.btiTab,
+    extensionVersion: chrome.runtime.getManifest().version,
     inject,
     scriptOk,
+    bestSlipOdds: bestProbe?.slipOdds || 0,
+    bestFrameId: bestProbe?.frameId ?? null,
     scriptWarning: scriptOk
       ? ''
       : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.5.8 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
@@ -1513,13 +1517,31 @@ async function probeBtiFramesDiagnostic(btiTab) {
   if (!btiTab?.id) return [];
   await injectAllBtiFramesTab(btiTab.id);
   const frames = await getAllFrames(btiTab.id);
-  return Promise.all(frames.slice(0, 20).map(async (f) => {
+  return Promise.all(frames.slice(0, 24).map(async (f) => {
+    if (isJunkBtiFrameUrl(f.url)) return null;
     if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
     let ping = null;
     let slipOdds = 0;
     let buttons = 0;
+    let marker = '';
+    let hook = '';
+    let liveSlip = null;
     try {
       await ensureBtiScript(btiTab.id, f.frameId);
+      const markRes = await chrome.scripting.executeScript({
+        target: { tabId: btiTab.id, frameIds: [f.frameId] },
+        func: () => ({
+          marker: document.documentElement.getAttribute('data-autobet-bti') || '',
+          href: location.href
+        })
+      });
+      marker = markRes?.[0]?.result?.marker || '';
+      const hookRes = await chrome.scripting.executeScript({
+        target: { tabId: btiTab.id, frameIds: [f.frameId] },
+        world: 'MAIN',
+        func: () => document.documentElement.getAttribute('data-autobet-hook') || ''
+      });
+      hook = hookRes?.[0]?.result || '';
       ping = await withTimeout(sendBti(btiTab.id, f.frameId, { type: 'PING' }), 1500, 'ping');
       const res = await withTimeout(
         sendBti(btiTab.id, f.frameId, { type: 'READ_BTI_ODDS', hint: { preferActiveSlip: true, forScan: true } }),
@@ -1528,6 +1550,14 @@ async function probeBtiFramesDiagnostic(btiTab) {
       );
       slipOdds = res?.slip?.odds > 1.01 ? res.slip.odds : 0;
       buttons = ping?.buttonCount || 0;
+      if (slipOdds > 1.01) liveSlip = res.slip;
+      if (!slipOdds) {
+        const diag = await withTimeout(sendBti(btiTab.id, f.frameId, { type: 'BTI_DIAG' }), 1200, 'diag').catch(() => null);
+        if (diag?.liveSlip?.odds > 1.01) {
+          slipOdds = diag.liveSlip.odds;
+          liveSlip = diag.liveSlip;
+        }
+      }
     } catch (_) {}
     return {
       frameId: f.frameId,
@@ -1538,11 +1568,14 @@ async function probeBtiFramesDiagnostic(btiTab) {
       slipOdds,
       hasInput: !!ping?.hasInput,
       hasSlip: !!ping?.hasSlip,
-      pingOk: !!ping?.ok
+      pingOk: !!ping?.ok,
+      marker,
+      hook,
+      liveSlip
     };
   })).then((rows) => rows.filter(Boolean).sort((a, b) => {
-    const sa = (a.sportscenterBetslip ? 1500 : 0) + (a.hasInput ? 1000 : 0) + (a.hasSlip ? 500 : 0) + (a.pingOk ? 100 : 0);
-    const sb = (b.sportscenterBetslip ? 1500 : 0) + (b.hasInput ? 1000 : 0) + (b.hasSlip ? 500 : 0) + (b.pingOk ? 100 : 0);
+    const sa = (a.slipOdds > 1 ? 3000 : 0) + (a.sportscenterBetslip ? 1500 : 0) + (a.hasInput ? 1000 : 0) + (a.hasSlip ? 500 : 0) + (a.pingOk ? 100 : 0);
+    const sb = (b.slipOdds > 1 ? 3000 : 0) + (b.sportscenterBetslip ? 1500 : 0) + (b.hasInput ? 1000 : 0) + (b.hasSlip ? 500 : 0) + (b.pingOk ? 100 : 0);
     return sb - sa;
   }));
 }

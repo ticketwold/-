@@ -28,8 +28,12 @@ function shouldSkipBtiContentFrame(href) {
 
 if (shouldSkipBtiContentFrame(location.href)) return;
 window.__btiContentLoaded = true;
+try {
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.9');
+  document.documentElement.setAttribute('data-autobet-hook', '2.5.9');
+} catch (_) {}
 
-// BTI content script v2.5.8
+// BTI content script v2.5.9
 
 function parseOddsText(txt) {
   const t = String(txt || '').trim();
@@ -2987,7 +2991,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃 v2.5.8] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
+console.log('[텐텐뱃 v2.5.9] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 
 function buildBtiDiagPayload() {
   const href = location.href || '';
@@ -3024,7 +3028,7 @@ function installBtiDiagBridge() {
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.8');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.9');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();
