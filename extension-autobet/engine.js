@@ -202,7 +202,7 @@ function isBtiSlipOddsSource(slip) {
   if (!slip) return false;
   if (slip.fromSlip === true) return true;
   const src = slip.source || '';
-  return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched';
+  return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched' || src === 'board-live';
 }
 
 async function probeBtiFrameInner(tabId, frameId, hint = {}) {

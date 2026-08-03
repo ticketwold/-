@@ -1,4 +1,4 @@
-// BTI iframe — 배팅 카트 배당만 읽기 (보드/배당판 사용 안 함)
+// BTI iframe — 슬립 카트 우선, 카드에 배당 없을 때만 선택된 보드 버튼
 'use strict';
 
 async function injectReadBtiFrame(tabId, frameId) {
@@ -18,26 +18,84 @@ async function injectReadBtiFrame(tabId, frameId) {
         function isStruck(el) {
           if (!el || el.nodeType !== 1) return false;
           let node = el;
-          for (let depth = 0; depth < 6 && node; depth++) {
+          for (let depth = 0; depth < 4 && node; depth++) {
             try {
               const cs = window.getComputedStyle(node);
               if ((cs.textDecorationLine || '').includes('line-through')) return true;
-              if ((cs.textDecoration || '').includes('line-through')) return true;
             } catch (_) {}
             const cn = String(node.className || '');
-            if (/old|previous|strike|strikethrough|deprecated|crossed|before|was/i.test(cn)) return true;
+            if (/\b(old|previous|strike|strikethrough|deprecated|crossed)\b/i.test(cn)) return true;
             node = node.parentElement;
           }
           return false;
         }
         function collectLeafOdds(el, out) {
           if (!el || el.nodeType !== 1 || isStruck(el)) return;
-          if (el.children.length) {
-            for (const ch of el.children) collectLeafOdds(ch, out);
+          for (const node of el.childNodes) {
+            if (node.nodeType !== 3) continue;
+            const o = parseOdds(node.textContent);
+            if (o) out.push(o);
+          }
+          if (!el.children.length) {
+            const o = parseOdds(el.textContent);
+            if (o) out.push(o);
             return;
           }
-          const o = parseOdds(el.textContent);
-          if (o && o <= 15) out.push(o);
+          for (const ch of el.children) collectLeafOdds(ch, out);
+        }
+        function readSlipCardOdds(card) {
+          const notifOdds = [];
+          for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
+            collectLeafOdds(notif, notifOdds);
+          }
+          if (notifOdds.length) return notifOdds[notifOdds.length - 1];
+          const classOdds = [];
+          for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"]')) {
+            collectLeafOdds(sp, classOdds);
+          }
+          if (classOdds.length) return classOdds[classOdds.length - 1];
+          const txt = (card.textContent || '').trim();
+          const atM = txt.match(/@\s*(\d+(?:\.\d{1,4})?)/);
+          if (atM) return parseOdds(atM[1]);
+          const nums = [];
+          for (const sp of card.querySelectorAll('span, b, strong')) {
+            if (isStruck(sp)) continue;
+            const t = (sp.textContent || '').trim();
+            if (!/^\d+(\.\d{1,4})?$/.test(t)) continue;
+            const o = parseOdds(t);
+            if (o) nums.push(o);
+          }
+          return nums.length ? nums[nums.length - 1] : null;
+        }
+        function readBoardOddsForSelection(selectionText) {
+          const sel = String(selectionText || '').trim();
+          if (!sel) return null;
+          const btns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+          for (const btn of btns) {
+            if (!vis(btn)) continue;
+            const cls = String(btn.className || '');
+            const selected = /selected|active|pressed|highlight/i.test(cls)
+              || btn.getAttribute('aria-pressed') === 'true';
+            if (!selected) continue;
+            const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+            if (!oddsEl) continue;
+            const o = parseOdds(oddsEl.textContent);
+            if (!o) continue;
+            const btnText = (btn.textContent || '').replace(/\s+/g, '');
+            const selClean = sel.replace(/\s+/g, '');
+            if (btnText.includes(selClean) || selClean.includes(btnText.replace(/[\d.]+$/, ''))) return o;
+          }
+          for (const btn of btns) {
+            if (!vis(btn)) continue;
+            const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+            if (!oddsEl) continue;
+            const o = parseOdds(oddsEl.textContent);
+            if (!o) continue;
+            const btnText = (btn.textContent || '').replace(/\s+/g, '');
+            const selClean = sel.replace(/\s+/g, '');
+            if (btnText.includes(selClean)) return o;
+          }
+          return null;
         }
 
         let hasInput = false;
@@ -54,7 +112,7 @@ async function injectReadBtiFrame(tabId, frameId) {
             const txt = (card.textContent || '').trim();
             if (txt.length < 6 || txt.length > 900) continue;
             if (card.querySelector('input[id="counter"], input[class*="Counter"]')) continue;
-            if (!/W[12]|betInformation|우승|winner|맵|map|vs|대|@\s*\d+\.\d/i.test(txt)) continue;
+            if (!/W[12]|betInformation|우승|winner|맵|map|vs|대|오버|언더|over|under|핸디|handicap|@\s*\d+\.\d/i.test(txt)) continue;
             cards.push(card);
           }
         }
@@ -67,26 +125,14 @@ async function injectReadBtiFrame(tabId, frameId) {
         const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
         const eventText = eventEl?.textContent?.trim() || '';
 
-        const notifOdds = [];
-        for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
-          collectLeafOdds(notif, notifOdds);
+        let odds = readSlipCardOdds(card);
+        let source = 'slip-card';
+        if (!odds) {
+          odds = readBoardOddsForSelection(selectionText);
+          source = 'board-live';
         }
-        if (notifOdds.length) {
-          return { odds: notifOdds[notifOdds.length - 1], selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
-        }
-        const classOdds = [];
-        for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"]')) {
-          collectLeafOdds(sp, classOdds);
-        }
-        if (classOdds.length) {
-          return { odds: classOdds[classOdds.length - 1], selectionText, eventText, source: 'slip-display', fromSlip: true, hasInput };
-        }
-        const atM = txt.match(/@\s*(\d+(?:\.\d{1,4})?)/);
-        if (atM) {
-          const o = parseOdds(atM[1]);
-          if (o) return { odds: o, selectionText, eventText, source: 'slip-card', fromSlip: true, hasInput };
-        }
-        return null;
+        if (!odds) return null;
+        return { odds, selectionText, eventText, source, fromSlip: source === 'slip-card', hasInput };
       }
     });
     const hit = results?.[0]?.result;

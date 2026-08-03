@@ -26,57 +26,66 @@ function parseOddsText(txt) {
 function isStruckThrough(el) {
   if (!el || el.nodeType !== 1) return false;
   let node = el;
-  for (let depth = 0; depth < 6 && node; depth++) {
+  for (let depth = 0; depth < 4 && node; depth++) {
     try {
       const cs = window.getComputedStyle(node);
       if ((cs.textDecorationLine || '').includes('line-through')) return true;
       if ((cs.textDecoration || '').includes('line-through')) return true;
-      if (cs.opacity && parseFloat(cs.opacity) < 0.45) return true;
     } catch (_) {}
     const cn = String(node.className || '');
-    if (/old|previous|strike|strikethrough|deprecated|crossed|before|was|line-through/i.test(cn)) return true;
+    if (/\b(old|previous|strike|strikethrough|deprecated|crossed)\b/i.test(cn)) return true;
     node = node.parentElement;
   }
   return false;
 }
 
-function looksLikeLineTotal(n, txt) {
+function looksLikeLineTotal(n, txt, ctx = '') {
   const t = String(txt || '').trim();
-  if (n > 15) return true;
-  if (n >= 10 && /\.5$/.test(t)) return true;
+  const c = String(ctx || '');
+  if (c && /오버|언더|over|under/i.test(c)) {
+    const lineM = c.match(/(?:오버|언더|over|under)[\s(]*([\d]+\.?[\d]*)/i);
+    if (lineM && Math.abs(parseFloat(lineM[1]) - n) < 0.01) return true;
+  }
+  if (/^\d+$/.test(t) && n >= 8 && n <= 50) return true;
+  if (n >= 10 && n <= 50 && /\.5$/.test(t) && !/^\d+\.\d{2}$/.test(t)) return true;
   return false;
 }
 
 function collectLeafOdds(el, out, opts = {}) {
   if (!el || el.nodeType !== 1 || isStruckThrough(el)) return;
+
+  for (const node of el.childNodes) {
+    if (node.nodeType !== 3) continue;
+    const text = (node.textContent || '').trim();
+    const n = parseOddsText(text);
+    if (n && !(opts.rejectLines && looksLikeLineTotal(n, text, opts.lineContext))) out.push(n);
+  }
+
   const kids = el.children;
-  if (kids.length) {
-    for (const ch of kids) collectLeafOdds(ch, out, opts);
+  if (!kids.length) {
+    const text = (el.textContent || '').trim();
+    const n = parseOddsText(text);
+    if (n && !(opts.rejectLines && looksLikeLineTotal(n, text, opts.lineContext))) out.push(n);
     return;
   }
-  const text = (el.textContent || '').trim();
-  if (!text) return;
-  const maxOdds = opts.maxOdds ?? 100;
-  const n = parseOddsText(text);
-  if (!n || n >= maxOdds) return;
-  if (opts.rejectLines && looksLikeLineTotal(n, text)) return;
-  out.push(n);
+  for (const ch of kids) collectLeafOdds(ch, out, opts);
 }
 
 function readOddsFromSlipCard(card) {
   if (!card) return null;
+  const lineContext = card.querySelector('[class*="betInformation__title"]')?.textContent || '';
+  const leafOpts = { rejectLines: true, lineContext };
 
-  // 배당 변경 알림: 자식 노드별로 읽고 마지막(현재) 배당 사용
   const notifOdds = [];
   for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
-    collectLeafOdds(notif, notifOdds);
+    collectLeafOdds(notif, notifOdds, leafOpts);
   }
   if (notifOdds.length) return notifOdds[notifOdds.length - 1];
 
   for (const sel of ['[class*="odds"]', '[class*="Odds"]', '[class*="price"]', '[class*="Price"]']) {
     const classOdds = [];
     for (const el of card.querySelectorAll(sel)) {
-      collectLeafOdds(el, classOdds);
+      collectLeafOdds(el, classOdds, leafOpts);
     }
     if (classOdds.length) return classOdds[classOdds.length - 1];
   }
@@ -88,11 +97,12 @@ function readOddsFromSlipCard(card) {
   }
 
   const found = [];
-  for (const sp of card.querySelectorAll('span')) {
+  for (const sp of card.querySelectorAll('span, b, strong')) {
     if (isStruckThrough(sp)) continue;
     const text = (sp.textContent || '').trim();
+    if (!/^\d+(\.\d{1,4})?$/.test(text)) continue;
     const n = parseOddsText(text);
-    if (!n || looksLikeLineTotal(n, text)) continue;
+    if (!n || looksLikeLineTotal(n, text, lineContext)) continue;
     found.push(n);
   }
   if (found.length) return found[found.length - 1];
@@ -264,16 +274,23 @@ let btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
 
 function finalizeBtiOdds(slip) {
   if (!(slip?.odds > 1.01)) return slip;
-  const fromSlip = slip.fromSlip === true
+  const trusted = slip.fromSlip === true
     || slip.source === 'slip-display'
     || slip.source === 'slip-card'
-    || slip.source === 'slip-latched';
-  if (!fromSlip) return null;
+    || slip.source === 'slip-latched'
+    || slip.source === 'board-live';
+  if (!trusted) return null;
 
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
-  btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
-  return { ...slip, odds: o, fromSlip: true };
+  if (slip.source !== 'board-live') {
+    btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+  }
+  return {
+    ...slip,
+    odds: o,
+    fromSlip: slip.fromSlip !== false && slip.source !== 'board-live'
+  };
 }
 
 function parseSlipFromCard(card) {
@@ -288,15 +305,196 @@ function parseSlipFromCard(card) {
   const mktEl = card.querySelector('[class*="betInformation__marketName"]');
   const mktText = mktEl ? mktEl.textContent.trim() : marketTitleText;
   const allText = `${selectionText} ${mktText} ${marketTitleText}`;
+  const slipMktType = detectMarketType(allText);
   const slipCardOdds = readOddsFromSlipCard(card);
 
-  if (!(slipCardOdds > 1.01)) return null;
-  const odds = Math.round(slipCardOdds * 1000) / 1000;
+  if (/^W[12]$/i.test(selectionText.trim())) {
+    let odds = slipCardOdds;
+    if (!odds) {
+      odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
+      if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+      if (!odds) {
+        const teams = parseEventTeams(eventText);
+        const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+        const teamLabel = side === 'away' ? teams.away : teams.home;
+        if (teamLabel) odds = readOddsFromBoardForSelection(teamLabel, allText, slipMktType);
+      }
+    }
+    if (!odds) return null;
+    const period = 'ft';
+    const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
+    const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
+    const teams = parseEventTeams(resolvedEventText);
+    return {
+      odds: Math.round(odds * 1000) / 1000,
+      eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
+      marketKind: 'ml',
+      period,
+      side,
+      line: null,
+      marketKey: `${period}_ml_${side}`,
+      mktText,
+      selectionText,
+      eventText: resolvedEventText,
+      homeTeam: teams.home,
+      awayTeam: teams.away,
+      fromSlip: !!slipCardOdds,
+      source: slipCardOdds ? 'slip-card' : 'board-live'
+    };
+  }
+
+  let odds = slipCardOdds || 0;
+  let matchedLine = null;
+  let matchedSide = null;
+  const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
+
+  if (!odds && selectionText) {
+    const slipLineMatch = selectionText.match(/([+-]\d+\.?\d*)\s*$/);
+    const slipLine = slipLineMatch ? parseFloat(slipLineMatch[1]) : null;
+    const teamName = slipLine !== null
+      ? selectionText.replace(slipLineMatch[0], '').trim()
+      : selectionText;
+
+    if (slipLine !== null) {
+      for (const btn of allBtns) {
+        const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+        if (!oddsEl) continue;
+        const btnOdds = parseFloat(oddsEl.textContent.trim());
+        if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
+        const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+        if (!pointsEl) continue;
+        const pointsText = pointsEl.textContent.trim();
+        const pointsLineMatch = pointsText.match(/([+-]\d+\.?\d*)\s*$/);
+        if (!pointsLineMatch) continue;
+        const pointsLine = parseFloat(pointsLineMatch[1]);
+        if (Math.abs(pointsLine - slipLine) < 0.01) {
+          const pointsClean = pointsText.replace(/\s+/g, '').toLowerCase();
+          const teamClean = teamName.replace(/\s+/g, '').toLowerCase();
+          if (pointsClean.includes(teamClean) || teamClean.length < 2) {
+            odds = btnOdds;
+            matchedLine = pointsLine;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!odds) {
+      const candidates = [];
+      for (const btn of allBtns) {
+        const btnText = btn.textContent || '';
+        const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+        if (!oddsEl) continue;
+        const btnOdds = parseFloat(oddsEl.textContent.trim());
+        if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
+        const btnTextClean = btnText.replace(/\s+/g, '');
+        const selClean = selectionText.replace(/\s+/g, '');
+        if (btnTextClean.includes(selClean) || selClean.includes(btnTextClean.replace(/[\d.]+$/, ''))) {
+          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+          const pointsText = pointsEl ? pointsEl.textContent.trim() : '';
+          const hasHandicap = /[+-]\d/.test(pointsText);
+          const isOuBtn = /오버|언더|over|under/i.test(btnText);
+          candidates.push({ btn, btnOdds, hasHandicap, isOuBtn });
+        }
+      }
+      let chosen = null;
+      if (slipMktType === 'ml') {
+        chosen = candidates.find((c) => !c.hasHandicap && !c.isOuBtn)
+          || candidates.find((c) => !c.isOuBtn)
+          || candidates[0];
+      } else if (slipMktType === 'ah') {
+        chosen = candidates.find((c) => c.hasHandicap) || candidates[0];
+      } else {
+        chosen = candidates[0];
+      }
+      if (chosen) {
+        odds = chosen.btnOdds;
+        const pointsEl = chosen.btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+        if (pointsEl) {
+          const pm = pointsEl.textContent.trim().match(/([+-]?\d+\.?\d*)/);
+          if (pm) matchedLine = parseFloat(pm[1]);
+        }
+        if (matchedLine === null) {
+          const lineM = chosen.btn.textContent.match(/([+-]?\d+\.?\d*)(?=\s*\d+\.\d{2,4})/);
+          if (lineM) matchedLine = parseFloat(lineM[1]);
+        }
+        if (/언더|under/i.test(chosen.btn.textContent)) matchedSide = 'u';
+        else if (/오버|over/i.test(chosen.btn.textContent)) matchedSide = 'o';
+      }
+    }
+
+    if (!odds) {
+      const ouMatch = selectionText.match(/(오버|언더|over|under)[\s(]*([\d]+\.?[\d]*)/i);
+      if (ouMatch) {
+        const targetSide = /언더|under/i.test(ouMatch[1]) ? 'u' : 'o';
+        const targetLine = parseFloat(ouMatch[2]);
+        for (const btn of allBtns) {
+          const btnText = btn.textContent || '';
+          const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+          if (!oddsEl) continue;
+          const btnOdds = parseFloat(oddsEl.textContent.trim());
+          if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
+          const btnSide = /언더|under/i.test(btnText) ? 'u' : 'o';
+          if (btnSide !== targetSide) continue;
+          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+          let btnLine = null;
+          if (pointsEl) {
+            const pm = pointsEl.textContent.trim().match(/(\d+\.?\d*)/);
+            if (pm) btnLine = parseFloat(pm[1]);
+          }
+          if (btnLine === null) {
+            const lm = btnText.replace(/언더|오버|under|over/gi, '').match(/(\d+\.?\d*)/);
+            if (lm) btnLine = parseFloat(lm[1]);
+          }
+          if (btnLine !== null && Math.abs(btnLine - targetLine) < 0.01) {
+            odds = btnOdds;
+            matchedLine = btnLine;
+            matchedSide = targetSide;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!odds) {
+      const ahMatch = selectionText.match(/([+-]\d+\.?\d*)/);
+      if (ahMatch) {
+        const targetLine = parseFloat(ahMatch[1]);
+        for (const btn of allBtns) {
+          const btnText = btn.textContent || '';
+          const oddsEl = btn.querySelector('[class*="master_fe_Selections_odds"]');
+          if (!oddsEl) continue;
+          const btnOdds = parseFloat(oddsEl.textContent.trim());
+          if (!btnOdds || btnOdds <= 1.01 || btnOdds >= 100) continue;
+          const pointsEl = btn.querySelector('[class*="master_fe_Selections_points"], [class*="selectionNameLine"]');
+          let btnLine = null;
+          if (pointsEl) {
+            const pm = pointsEl.textContent.trim().match(/([+-]?\d+\.?\d*)/);
+            if (pm) btnLine = parseFloat(pm[1]);
+          }
+          if (btnLine === null) {
+            const lm = btnText.match(/([+-]\d+\.?\d*)/);
+            if (lm) btnLine = parseFloat(lm[1]);
+          }
+          if (btnLine !== null && Math.abs(btnLine - targetLine) < 0.01) {
+            odds = btnOdds;
+            matchedLine = btnLine;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  if (!odds && isSlipCardSuspended(card)) return null;
+  if (!odds || odds <= 1.01) return null;
+  odds = Math.round(odds * 1000) / 1000;
 
   const period = detectPeriod(allText);
   const type = mktText ? detectMarketType(mktText) : detectMarketType(allText);
-  const side = detectSideFromSlipText(selectionText || allText, type);
-  const line = detectLineFromSlipText(selectionText || allText);
+  const side = (type === 'ou' && matchedSide) ? matchedSide : detectSideFromSlipText(selectionText || allText, type);
+  const line = matchedLine !== null ? matchedLine : detectLineFromSlipText(selectionText || allText);
   const marketKey = type === 'ml'
     ? `${period}_ml_${side}`
     : type === 'ah'
@@ -304,6 +502,7 @@ function parseSlipFromCard(card) {
       : `${period}_ou_${side}_${line}`;
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
   const teams = parseEventTeams(eventText);
+  const fromSlipCard = !!slipCardOdds;
 
   return {
     odds,
@@ -318,8 +517,8 @@ function parseSlipFromCard(card) {
     eventText,
     homeTeam: teams.home,
     awayTeam: teams.away,
-    fromSlip: true,
-    source: 'slip-card'
+    fromSlip: fromSlipCard,
+    source: fromSlipCard ? 'slip-card' : 'board-live'
   };
 }
 
@@ -343,7 +542,7 @@ function detectSideFromSlipText(text, type) {
 }
 
 function detectLineFromSlipText(text) {
-  const m = text.match(/(?:오버|언더|over|under)[\s]*([\d]+\.?[\d]*)/i);
+  const m = text.match(/(?:오버|언더|over|under)[\s(]*([\d]+\.?[\d]*)/i);
   if (m) return parseFloat(m[1]);
   const m2 = text.match(/([+-]\d+\.?\d*)/);
   if (m2) return parseFloat(m2[1]);
@@ -436,25 +635,13 @@ function readSlipOddsFromCardElement(card) {
 
   const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
   const selectionText = titleEls[0]?.textContent?.trim() || '';
-  const marketTitleText = titleEls[1]?.textContent?.trim() || '';
-  const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
-  const eventText = eventEl?.textContent?.trim() || '';
-  const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
+  const allText = `${selectionText} ${txt}`;
   const mktType = detectMarketType(allText);
   if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') return null;
 
-  const slipCardOdds = readOddsFromSlipCard(card);
-  if (!(slipCardOdds > 1.01)) return null;
-
-  return enrichBtiSlip({
-    odds: slipCardOdds,
-    selectionText: selectionText || (/\bW1\b/i.test(txt) ? 'W1' : /\bW2\b/i.test(txt) ? 'W2' : ''),
-    eventText,
-    mktText: marketTitleText,
-    source: 'slip-card',
-    fromSlip: true,
-    marketKind: mktType
-  });
+  const slip = parseSlipFromCard(card);
+  if (!(slip?.odds > 1.01)) return null;
+  return enrichBtiSlip(slip);
 }
 
 function readActiveSlipDisplayOdds() {

@@ -239,7 +239,7 @@ function applyInstantOdds(msg) {
   const now = Date.now();
   if (msg.source === 'bti') {
     const slipSource = msg.slip?.source || '';
-    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched';
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched' || slipSource === 'board-live';
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.btiO = o;
@@ -281,7 +281,7 @@ function stabilizeSnap(snap, cfg) {
   if (snap.btiO > 1) {
     const next = normalizeSportsOdds(snap.btiO);
     const slipSource = snap.bti?.source || '';
-    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched';
+    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched' || slipSource === 'board-live';
     if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
