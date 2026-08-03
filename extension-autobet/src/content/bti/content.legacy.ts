@@ -2115,6 +2115,30 @@ function readSelectedBoardOddsForSlip(hint = {}) {
 }
 
 function readLiveSlipCartOdds(hint = {}) {
+  if (typeof window.__btiReadSlipOdds === 'function') {
+    try {
+      const probed = window.__btiReadSlipOdds();
+      if (probed?.odds > 1.01) {
+        const accepted = acceptBtiOddsForScan(
+          enrichBtiSlip({
+            odds: probed.odds,
+            selectionText: probed.selectionText || getActiveSlipSelectionText(),
+            source: probed.source || 'sportscenter-slip',
+            fromSlip: true
+          })
+        );
+        if (accepted?.odds > 1.01) return accepted;
+      }
+    } catch (_) {}
+  }
+
+  if (hint?.forScan && /x10x10s\.com/i.test(location.href || '')
+    && /\/in-play\/|\/match\//i.test(location.href || '')
+    && !/\/api\/sportscenter\/betslip|widgets-x/i.test(location.href || '')
+    && !findBtiBetInput()) {
+    return null;
+  }
+
   if (!hasActiveBetslipSelection()) return null;
 
   const readers = [

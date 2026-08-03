@@ -648,22 +648,31 @@ async function findBtiSlipFrameIdsByDom(tabId) {
       const res = await chrome.scripting.executeScript({
         target: { tabId, frameIds: [f.frameId] },
         func: () => {
+          const frameKind = document.documentElement.getAttribute('data-autobet-slip-frame') || '';
           const input = document.querySelector('#counter, input[class*="Counter"], input[placeholder*="베팅"], input[placeholder*="베팅금"]');
-          if (!input) return null;
-          const r = input.getBoundingClientRect?.();
-          if (!r || r.width < 2 || r.height < 2) return null;
-          const root = input.closest('[class*="betslip"], [class*="Betslip"]') || input.parentElement;
+          if (!input && !/sportscenter-betslip|widgets-x/.test(frameKind)) return null;
+          if (input) {
+            const r = input.getBoundingClientRect?.();
+            if (!r || r.width < 2 || r.height < 2) return null;
+          }
+          const root = input
+            ? (input.closest('[class*="betslip"], [class*="Betslip"]') || input.parentElement)
+            : (document.querySelector('[class*="betslip_fe"], [class*="Betslip"]') || document.body);
           const txt = (root?.textContent || document.body?.textContent || '').replace(/\s+/g, ' ');
           const at = txt.match(/@\s*(\d+\.\d{2,4})/);
           const slipOdds = at ? parseFloat(at[1]) : 0;
           const sel = document.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
-          return { slipOdds, sel };
+          const probed = typeof window.__btiReadSlipOdds === 'function' ? window.__btiReadSlipOdds() : null;
+          const probedOdds = probed?.odds > 1.01 ? probed.odds : 0;
+          return { slipOdds: probedOdds || slipOdds, sel, frameKind };
         }
       });
       const hit = res?.[0]?.result;
       if (!hit) continue;
       let score = 2000;
       if (hit.slipOdds > 1.01) score += Math.min(hit.slipOdds, 50);
+      if (hit.frameKind === 'sportscenter-betslip') score += 800;
+      if (hit.frameKind === 'widgets-x') score += 500;
       if (typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(f.url || '')) score += 500;
       hits.push({ frameId: f.frameId, score, url: f.url || '' });
     } catch (_) {}
