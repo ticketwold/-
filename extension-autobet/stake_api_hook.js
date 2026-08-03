@@ -1,4 +1,4 @@
-// stake_api_hook.js — Stake.com fetch/XHR 슬립 캡처 (MAIN world)
+// stake_api_hook.js — Stake.com GraphQL/fetch 슬립 배당 캡처 (MAIN world)
 (function () {
   'use strict';
 
@@ -9,46 +9,88 @@
 
   function shouldWatch(url) {
     if (!url) return false;
-    const u = String(url);
-    return /stake\.com|sport|bet|slip|wager|odd|coupon|graphql/i.test(u);
+    return /stake\.com|graphql|sport|bet|slip|wager|coupon/i.test(String(url));
   }
 
-  function extractSlip(obj, depth = 0) {
-    if (!obj || depth > 12) return null;
-    if (typeof obj !== 'object') return null;
+  function isSlipContext(keyPath) {
+    const p = keyPath.join('.').toLowerCase();
+    return /slip|betslip|sportbet|outcome|coupon|selection|wager/i.test(p);
+  }
 
-    const odds = pm(obj.odds ?? obj.price ?? obj.coefficient ?? obj.decimalOdds ?? obj.odd);
-    const stake = pm(obj.stake ?? obj.amount ?? obj.betAmount ?? obj.wager);
-    const payout = pm(obj.payout ?? obj.potentialWin ?? obj.toWin ?? obj.returnAmount);
-    const team = obj.selectionName || obj.outcomeName || obj.team || obj.name || '';
+  function extractFromOutcome(obj, keyPath = []) {
+    if (!obj || typeof obj !== 'object') return null;
+    const path = keyPath.join('.').toLowerCase();
 
-    if (odds > 1.01 && odds < 500) {
-      const o = Math.round(odds * 1000) / 1000;
+    const odds = pm(obj.odds ?? obj.price ?? obj.coefficient ?? obj.multiplier ?? obj.decimalOdds);
+    const name = obj.name || obj.outcomeName || obj.selectionName || obj.team || '';
+    const id = obj.id || obj.outcomeId || '';
+    const active = obj.active;
+
+    if (odds > 1.01 && odds < 50 && isSlipContext(keyPath)) {
+      if (active === false) return null;
       return {
-        odds: o,
-        stake: stake || null,
-        payout: payout || null,
-        teamLabel: String(team || '').slice(0, 80),
-        fromPayout: stake > 0 && payout > stake,
+        odds: Math.round(odds * 1000) / 1000,
+        teamLabel: String(name).slice(0, 80),
+        outcomeId: String(id || ''),
+        outcomeName: String(name || ''),
         source: 'stake',
-        sourceKind: 'stake-api',
+        sourceKind: 'stake-api-slip',
+        fromSlip: true,
         capturedAt: Date.now()
       };
     }
 
     if (Array.isArray(obj)) {
-      for (const item of obj) {
-        const hit = extractSlip(item, depth + 1);
-        if (hit) return hit;
+      let best = null;
+      for (let i = 0; i < obj.length; i++) {
+        const hit = extractFromOutcome(obj[i], [...keyPath, String(i)]);
+        if (hit && (!best || hit.outcomeId)) best = hit;
       }
-      return null;
+      return best;
     }
 
+    let best = null;
     for (const key of Object.keys(obj)) {
-      const hit = extractSlip(obj[key], depth + 1);
-      if (hit) return hit;
+      if (obj[key] == null || typeof obj[key] !== 'object') continue;
+      const hit = extractFromOutcome(obj[key], [...keyPath, key]);
+      if (!hit) continue;
+      const score = (hit.outcomeId ? 10 : 0) + (hit.teamLabel ? 5 : 0);
+      const bestScore = (best?.outcomeId ? 10 : 0) + (best?.teamLabel ? 5 : 0);
+      if (!best || score > bestScore) best = hit;
     }
-    return null;
+    return best;
+  }
+
+  function extractSportBetSlip(data) {
+    if (!data || typeof data !== 'object') return null;
+
+    const paths = [
+      data?.data?.sportBetSlip,
+      data?.data?.betSlip,
+      data?.data?.activeBetSlip,
+      data?.data?.sport?.betSlip
+    ];
+    for (const root of paths) {
+      if (!root) continue;
+      const outcomes = root.outcomes || root.selections || root.bets;
+      if (Array.isArray(outcomes) && outcomes.length) {
+        const o = outcomes[0];
+        const odds = pm(o?.odds ?? o?.outcome?.odds ?? o?.price);
+        const name = o?.outcome?.name || o?.name || o?.selectionName || '';
+        if (odds > 1.01 && odds < 50) {
+          return {
+            odds: Math.round(odds * 1000) / 1000,
+            teamLabel: String(name).slice(0, 80),
+            outcomeId: String(o?.outcome?.id || o?.id || ''),
+            source: 'stake',
+            sourceKind: 'stake-api-slip',
+            fromSlip: true,
+            capturedAt: Date.now()
+          };
+        }
+      }
+    }
+    return extractFromOutcome(data, []);
   }
 
   function publish(slip) {
@@ -63,7 +105,7 @@
     if (!body) return;
     try {
       const data = typeof body === 'string' ? JSON.parse(body) : body;
-      const slip = extractSlip(data);
+      const slip = extractSportBetSlip(data);
       if (slip) publish(slip);
     } catch (_) {}
   }
@@ -77,6 +119,8 @@
         if (shouldWatch(url)) {
           res.clone().text().then(parseBody).catch(() => {});
         }
+        const reqBody = args[1]?.body;
+        if (reqBody && shouldWatch(url)) parseBody(reqBody);
       } catch (_) {}
       return res;
     };
@@ -98,4 +142,6 @@
       return send.apply(this, arguments);
     };
   }
+
+  window.addEventListener('__stakeSlipApiUpdate', () => {});
 })();

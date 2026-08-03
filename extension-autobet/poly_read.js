@@ -511,10 +511,11 @@ function isTrustedBcSlip(slip) {
   if (!(slip?.odds > 1.01)) return false;
   const src = slip.source || '';
   const kind = slip.sourceKind || '';
-  if (src === 'stake' || kind === 'stake-native-slip' || kind === 'stake-api' || kind === 'stake-board-selected') {
-    if (slip.odds > 12 && !(slip.fromPayout && slip.stake > 0)) return false;
+  if (src === 'stake' || kind === 'stake-native-slip' || kind === 'stake-api' || kind === 'stake-api-slip') {
+    if (slip.odds > 12 && !(slip.fromPayout && slip.stake > 0) && !slip.fromSlip) return false;
     return true;
   }
+  if (kind === 'stake-board-selected') return false;
   if (kind === 'sports-text') return false;
   const confirmed = slip.fromPayout && slip.stake > 0;
   const hasSelection = !!(slip.teamLabel || slip.outcome || slip.selectionText || slip.eventText);
