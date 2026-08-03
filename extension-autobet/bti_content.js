@@ -2780,11 +2780,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃 v5] content script loaded');
+console.log('[텐텐뱃 v5] content script loaded', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.0');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.1');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
+  window.__btiDiag = () => ({
+    href: location.href,
+    isTop: window === window.top,
+    marker: document.documentElement.getAttribute('data-autobet-bti'),
+    slip: readBtiOdds({ preferActiveSlip: true, forScan: true }),
+    probe: probeBtiBetFrame()
+  });
 } catch (_) {}
 
 })();

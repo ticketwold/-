@@ -1,7 +1,11 @@
 // 텐텐뱃 (x10x10s) + 멀티 leg2 (BC.Game, Stake.com)
 const SITE_CONFIG = {
   // 텐텐뱃 상위 탭 도메인 (미러·pbc00 포털 포함)
-  WRAPPER_HOSTS: ['x10x10s.com', 'live8588.com', 'fxf774.com', 'pbc00.com'],
+  WRAPPER_HOSTS: [
+    'x10x10s.com', 'live8588.com', 'fxf774.com', 'pbc00.com',
+    'v210x10b.com', 'y10x103.com', 'v210x10g.com', 'z10x104.com',
+    'streambridge.feedconstruct.com'
+  ],
   BCGAME_HOSTS: ['bc.game'],
   STAKE_HOSTS: ['stake.com'],
   BTI_GAMECODES: ['19', '20', '21', '22', '23'],
@@ -11,6 +15,7 @@ const SITE_CONFIG = {
   ],
   BTI_INJECTABLE_HOSTS: [
     'bti-sports.com', 'bti-sports.io', 'x10x10s.com', 'live8588.com', 'fxf774.com', 'pbc00.com',
+    'v210x10b.com', 'y10x103.com', 'v210x10g.com', 'z10x104.com', 'streambridge.feedconstruct.com',
     'sptpub.com', 'sptsportscdn.com', 'biahosted.com', 'cocoesports.com'
   ],
   LEG1_LABEL: '텐텐뱃',
@@ -117,7 +122,7 @@ function scoreTabTitleForLeg1(tab) {
   const title = String(tab?.title || '');
   if (!title) return 0;
   let score = 0;
-  if (/x10x10|10x10|텐텐|tenten|live8588|fxf774|pbc00|10벳/i.test(title)) score += 65;
+  if (/x10x10|10x10|텐텐|tenten|live8588|fxf774|pbc00|v210x10|y10x103|z10x104|10벳/i.test(title)) score += 65;
   if (/스포츠|sports|sport/i.test(title)) score += 12;
   return score;
 }

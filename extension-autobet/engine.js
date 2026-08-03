@@ -717,6 +717,7 @@ function installLeg1ScriptWatcher() {
 
   if (chrome.webNavigation?.onCompleted) {
     chrome.webNavigation.onCompleted.addListener((details) => {
+      if (details.frameId !== 0 && !/widgets-x|bti-sports|betslip|sportscenter|feedconstruct/i.test(details.url || '')) return;
       scheduleInject(details.tabId, details.url);
     });
   }
