@@ -421,6 +421,14 @@ function isBcSlipOddsSource(slip) {
     || /shadow-slip|bet-btn|stake-input|near-stake|betby-outcome|coupon|api-cache|slip-root/i.test(method);
 }
 
+function acceptBcSlipForScan(slip) {
+  slip = normalizePolySlip(slip);
+  if (!(slip?.odds > 1.01) || !isTrustedBcSlip(slip)) return null;
+  const fin = finalizeBcPolySlip(slip);
+  if (fin) return fin;
+  return { ...slip, odds: Math.round(slip.odds * 1000) / 1000 };
+}
+
 function finalizeBcPolySlip(slip) {
   slip = normalizePolySlip(slip);
   if (!(slip?.odds > 1.01)) {
@@ -430,17 +438,8 @@ function finalizeBcPolySlip(slip) {
   if (!isBcSlipOddsSource(slip)) return null;
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.teamLabel || slip.selectionText || ''}_${slip.eventText || ''}`;
-  if (isBcSlipOddsSource(slip)) {
-    bcOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
-    return { ...slip, odds: o, fromSlip: true };
-  }
-  if (bcOddsLatch.source === 'slip' && bcOddsLatch.key === key
-    && Date.now() - bcOddsLatch.at < 8000
-    && Math.abs(o - bcOddsLatch.odds) >= 0.015) {
-    return { ...slip, odds: bcOddsLatch.odds, source: 'slip-latched', fromSlip: true };
-  }
-  bcOddsLatch = { odds: o, source: slip.sourceKind || 'board', at: Date.now(), key };
-  return { ...slip, odds: o };
+  bcOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
+  return { ...slip, odds: o, fromSlip: true };
 }
 
 function cachePolyOdds(tabId, slip) {
@@ -927,11 +926,21 @@ async function readPolyOddsOnce(polyTab, opts = {}) {
   if (isSports) {
     const native = await readBcSportsNativeSlip(polyTab, opts);
     if (isStrikeBcSlip(native)) return mergePolySlipWithCache(polyTab.id, native);
-    if (isTrustedBcSlip(native)) return finalizeBcPolySlip(native);
+    const scanHit = acceptBcSlipForScan(native);
+    if (scanHit) return scanHit;
 
     const leg2 = await readBcLeg2FromBtiFrames(polyTab);
     if (isStrikeBcSlip(leg2)) return mergePolySlipWithCache(polyTab.id, leg2);
-    if (isTrustedBcSlip(leg2)) return finalizeBcPolySlip(leg2);
+    const leg2Scan = acceptBcSlipForScan(leg2);
+    if (leg2Scan) return leg2Scan;
+
+    const apiHit = await readBcApiSlipAllFrames(polyTab.id);
+    const apiScan = acceptBcSlipForScan(apiHit);
+    if (apiScan) return apiScan;
+
+    const injected = await injectBcSlipAllFrames(polyTab.id);
+    const injScan = acceptBcSlipForScan(injected);
+    if (injScan) return injScan;
 
     polyOddsCache.delete(polyTab.id);
     return null;

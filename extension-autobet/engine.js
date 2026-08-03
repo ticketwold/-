@@ -10,10 +10,166 @@ let btiScriptReady = new Set();
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-const BTI_PROBE_MS = 5000;
+const BTI_PROBE_MS = 3000;
 const BTI_MAX_FRAMES = 16;
 const POLY_FRAME_MS = 3000;
 const POLY_MAX_FRAMES = 6;
+
+const BTI_API_SLIP_PATHS = [
+  '/api/sportscenter/betslip',
+  '/api/sportscenter/betslip/get',
+  '/api/sportscenter/slip',
+  '/api/betslip',
+  '/api/betslip/get',
+  '/api/sportscenter/betslip/current',
+  '/api/sportscenter/coupon',
+  '/api/sportscenter/wager/slip'
+];
+const BTI_API_MAX_AGE_MS = 120000;
+
+function parseBtiApiSlipData(data) {
+  if (!data) return null;
+  function po(n) {
+    const x = parseFloat(n);
+    return Number.isFinite(x) && x > 1.01 && x < 500 ? x : null;
+  }
+  function pickOdds(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    for (const k of ['Price', 'DisplayPrice', 'Odds', 'Decimal', 'totalOdds', 'combinedOdds', 'odds', 'price', 'coefficient', 'decimal']) {
+      const v = po(obj[k]);
+      if (v) return v;
+    }
+    return null;
+  }
+  function walk(obj, depth) {
+    if (obj == null || depth > 16) return null;
+    if (typeof obj === 'string') {
+      try { return walk(JSON.parse(obj), depth + 1); } catch (_) { return null; }
+    }
+    if (Array.isArray(obj)) {
+      let best = null;
+      for (const item of obj) {
+        const h = walk(item, depth + 1);
+        if (h?.odds > 1.01) best = h;
+      }
+      return best;
+    }
+    if (typeof obj !== 'object') return null;
+    const total = pickOdds(obj);
+    const sels = obj.Selections || obj.selections || obj.Bets || obj.bets || obj.items;
+    if (total && (Array.isArray(sels) || obj.Name || obj.TeamName)) {
+      const first = Array.isArray(sels) ? sels[sels.length - 1] : obj;
+      return {
+        odds: Math.round(total * 1000) / 1000,
+        selectionText: first?.Name || first?.TeamName || first?.SelectionName || '',
+        eventText: obj.EventName || obj.eventName || first?.EventName || '',
+        source: 'bti-api', fromSlip: true, sourceKind: 'bti-api-fetch'
+      };
+    }
+    if (Array.isArray(sels)) {
+      for (let i = sels.length - 1; i >= 0; i--) {
+        const o = pickOdds(sels[i]);
+        if (o) {
+          return {
+            odds: Math.round(o * 1000) / 1000,
+            selectionText: sels[i].Name || sels[i].TeamName || sels[i].SelectionName || '',
+            eventText: obj.EventName || obj.eventName || sels[i].EventName || '',
+            source: 'bti-api', fromSlip: true, sourceKind: 'bti-api-fetch'
+          };
+        }
+      }
+    }
+    const direct = pickOdds(obj);
+    if (direct && (obj.Name || obj.TeamName || obj.SelectionName || obj.SelectionId)) {
+      return {
+        odds: Math.round(direct * 1000) / 1000,
+        selectionText: obj.Name || obj.TeamName || obj.SelectionName || '',
+        eventText: obj.EventName || obj.eventName || '',
+        source: 'bti-api', fromSlip: true, sourceKind: 'bti-api-fetch'
+      };
+    }
+    for (const key of ['betSlip', 'betslip', 'slip', 'coupon', 'data', 'result', 'payload', 'markets', 'Markets']) {
+      if (obj[key]) {
+        const h = walk(obj[key], depth + 1);
+        if (h) return h;
+      }
+    }
+    return null;
+  }
+  return walk(data, 0);
+}
+
+async function fetchBtiJsonInFrame(tabId, frameId, path) {
+  try {
+    const via = await sendBti(tabId, frameId, {
+      type: 'FETCH_BTI_JSON',
+      path: path.startsWith('http') ? null : path,
+      url: path.startsWith('http') ? path : null
+    });
+    if (via?.ok && via.data !== undefined) return via.data;
+  } catch (_) {}
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    world: 'MAIN',
+    func: async (p) => {
+      const fetchUrl = p.startsWith('http') ? p : (location.origin.replace(/\/$/, '') + p);
+      const res = await fetch(fetchUrl, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return { error: String(res.status) };
+      return await res.json();
+    },
+    args: [path]
+  });
+  const result = results?.[0]?.result;
+  if (!result || result.error) throw new Error(result?.error || 'fetch 실패');
+  return result;
+}
+
+async function readBtiApiSlipHook(tabId, frameId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: (maxAge) => {
+        const s = window.__btiApiSlip;
+        if (!(s?.odds > 1.01)) return null;
+        if (Date.now() - (s.capturedAt || 0) > maxAge) return null;
+        return s;
+      },
+      args: [BTI_API_MAX_AGE_MS]
+    });
+    const hit = results?.[0]?.result;
+    if (!(hit?.odds > 1.01)) return null;
+    return {
+      ...hit,
+      odds: Math.round(hit.odds * 1000) / 1000,
+      source: 'bti-api',
+      fromSlip: true,
+      sourceKind: hit.sourceKind || 'bti-api-hook'
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchBtiSlipViaApi(tabId) {
+  const order = await orderBtiFrameIds(tabId);
+  const frames = order.slice(0, BTI_MAX_FRAMES);
+  for (const frameId of frames) {
+    const hooked = await readBtiApiSlipHook(tabId, frameId);
+    if (hooked?.odds > 1.01) return { slip: hooked, frameId };
+  }
+  for (const frameId of frames) {
+    await ensureBtiScript(tabId, frameId);
+    for (const path of BTI_API_SLIP_PATHS) {
+      try {
+        const data = await fetchBtiJsonInFrame(tabId, frameId, path);
+        const slip = parseBtiApiSlipData(data);
+        if (slip?.odds > 1.01) return { slip, frameId };
+      } catch (_) {}
+    }
+  }
+  return { slip: null, frameId: 0 };
+}
 
 async function orderBtiFrameIds(tabId) {
   const frames = await getAllFrames(tabId);
@@ -418,16 +574,15 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
 
 async function readBtiOddsOnce(btiTab, poly) {
   if (!btiTab?.id) return null;
-
   const hint = poly ? btiHintFromPoly(poly) : {};
-  let merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true, ...hint }, true);
-  if (merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip)) return merged.slip;
-
   try {
-    const api = await fetchBtiSlipViaApi(btiTab.id, btiTab.url);
+    const merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true, ...hint }, true);
+    if (merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip)) return merged.slip;
+  } catch (_) {}
+  try {
+    const api = await fetchBtiSlipViaApi(btiTab.id);
     if (api.slip?.odds > 1.01) return api.slip;
   } catch (_) {}
-
   return null;
 }
 
@@ -1033,25 +1188,45 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
     return { ok: false, reason: 'BC.Game: 스포츠/예측 탭 없음', found };
   }
 
-  const arbBtiPre = await readBtiOddsOnce(found.btiTab, null);
-  const teamHint = opts.teamHint || arbBtiPre?.teamLabel || arbBtiPre?.outcome || '';
-  const readOpts = { ...opts, teamHint, autoClick: opts.autoClick !== false };
+  const readOpts = { ...opts, autoClick: opts.autoClick !== false };
 
-  const multi = await readPolySlipAllBcTabs(leg2Pref, readOpts);
-  const poly = multi?.slip?.odds > 1.01 ? multi.slip : await readPolyOddsOnce(found.polyTab, readOpts);
+  let arbBtiPre = null;
+  let multi = null;
+  try {
+    [arbBtiPre, multi] = await Promise.all([
+      readBtiOddsOnce(found.btiTab, null),
+      readPolySlipAllBcTabs(leg2Pref, readOpts)
+    ]);
+  } catch (_) {}
+
+  const teamHint = opts.teamHint || arbBtiPre?.teamLabel || arbBtiPre?.outcome || '';
+  readOpts.teamHint = teamHint;
+
+  let poly = multi?.slip?.odds > 1.01 ? multi.slip : null;
+  if (!poly) {
+    try {
+      poly = await readPolyOddsOnce(found.polyTab, readOpts);
+    } catch (_) {}
+  }
   if (multi?.tab) found.polyTab = multi.tab;
-  const arbBti = await readBtiOddsOnce(found.btiTab, poly);
+
+  let arbBti = arbBtiPre;
+  if (!(arbBti?.odds > 1.01)) {
+    try {
+      arbBti = await readBtiOddsOnce(found.btiTab, poly);
+    } catch (_) {}
+  }
   const bti = arbBti;
 
-  const polyO = poly?.odds > 1 && isScanBcSlip(poly) ? normalizeSportsOdds(poly.odds) : null;
-  const btiO = arbBti?.odds > 1 ? normalizeSportsOdds(arbBti.odds) : null;
+  const polyO = poly?.odds > 1.01 && isTrustedBcSlip(poly) ? normalizeSportsOdds(poly.odds) : null;
+  const btiO = arbBti?.odds > 1.01 ? normalizeSportsOdds(arbBti.odds) : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
 
   let reason = '';
   if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
-  else if (btiO && poly?.odds > 1 && !isScanBcSlip(poly)) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
+  else if (btiO && !polyO) reason = 'BC.Game 배당 없음 — 카트에 배당 선택 후 스캔';
+  else if (btiO && poly?.odds > 1.01 && !isTrustedBcSlip(poly)) reason = 'BC.Game 슬립 없음 — 카트에 배당 선택 후 스캔';
 
   return {
     ok: true,

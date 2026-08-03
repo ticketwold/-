@@ -1,5 +1,5 @@
 // background.js — 무장 상태만 관리 (배팅은 panel.js에서 실행)
-importScripts('sites_config.js', 'odds.js', 'bti_read.js', 'bti_api.js', 'engine.js', 'poly_read.js');
+importScripts('sites_config.js', 'odds.js', 'bti_read.js', 'engine.js', 'poly_read.js');
 
 const STORAGE_KEY = 'autoBetConfig';
 const LOG_KEY = 'autoBetLog';
