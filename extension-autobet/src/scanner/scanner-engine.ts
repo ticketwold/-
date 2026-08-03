@@ -29,6 +29,8 @@ export type ScannerEngineOptions = {
   bootstrapSource?: 'bti' | 'bcgame' | 'stake';
   onOddsChange: OddsChangeCallback;
   rootDoc?: Document;
+  /** 테스트/iframe용 — location.href 대신 사용 */
+  rootHref?: string;
 };
 
 /**
@@ -47,7 +49,8 @@ export class ScannerEngine {
 
   start(): () => void {
     const doc = this.opts.rootDoc ?? document;
-    this.topTeardown = this.attachDocument(doc, location.href, 'top', 0);
+    const href = this.opts.rootHref ?? location.href;
+    this.topTeardown = this.attachDocument(doc, href, 'top', 0);
 
     this.iframeRegistry = new IframeRegistry(doc, (childDoc, href) => {
       return this.attachDocument(childDoc, href, 'iframe', 1);
@@ -56,7 +59,7 @@ export class ScannerEngine {
 
     const onNav = () => {
       this.bestPayload = null;
-      this.attachDocument(doc, location.href, 'top', 0);
+      this.attachDocument(doc, href, 'top', 0);
       for (const session of [...this.sessions.values()]) {
         this.onDocMutate(session.ctx, session.adapter, true);
       }

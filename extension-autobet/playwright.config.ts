@@ -1,0 +1,11 @@
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests/e2e',
+  timeout: 60000,
+  use: {
+    headless: true,
+    channel: 'chrome',
+  },
+  reporter: [['list'], ['json', { outputFile: 'tests/e2e/results.json' }]],
+});
