@@ -331,11 +331,13 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
   }
 
   if (!(merged.slip?.odds > 1.01)) {
-    const api = await fetchBtiSlipViaApi(tabId);
-    if (api.slip?.odds > 1.01) {
-      lastBtiFrame = { tabId, frameId: api.frameId };
-      return { slip: api.slip, frameId: api.frameId };
-    }
+    try {
+      const api = await fetchBtiSlipViaApi(tabId);
+      if (api.slip?.odds > 1.01) {
+        lastBtiFrame = { tabId, frameId: api.frameId };
+        return { slip: api.slip, frameId: api.frameId };
+      }
+    } catch (_) {}
   }
 
   if (merged.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: merged.frameId };
@@ -421,8 +423,10 @@ async function readBtiOddsOnce(btiTab, poly) {
   let merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true, ...hint }, true);
   if (merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip)) return merged.slip;
 
-  const api = await fetchBtiSlipViaApi(btiTab.id, btiTab.url);
-  if (api.slip?.odds > 1.01) return api.slip;
+  try {
+    const api = await fetchBtiSlipViaApi(btiTab.id, btiTab.url);
+    if (api.slip?.odds > 1.01) return api.slip;
+  } catch (_) {}
 
   return null;
 }
