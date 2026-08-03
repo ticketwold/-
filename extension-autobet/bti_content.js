@@ -138,14 +138,15 @@ function isBoardSelectionButton(btn) {
 function getBetslipRoot(card) {
   const input = findBtiBetInput();
   if (input) {
-    const root = input.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]');
+    let root = input.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"], [class*="slip_fe"], [class*="Slip"]');
+    if (!root) root = getInnermostCardContainer(input) || getActiveSlipPanelRoot();
     if (root) return root;
   }
   if (card) {
     const root = card.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]');
     if (root) return root;
   }
-  return document.querySelector('[class*="betslip_fe"], [class*="Betslip"]');
+  return document.querySelector('[class*="betslip_fe"], [class*="Betslip"]') || getActiveSlipPanelRoot();
 }
 
 function readSlipPanelDisplayOdds(card) {
@@ -388,6 +389,7 @@ function finalizeBtiOdds(slip) {
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
   const fromSlipCard = src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
+    || src === 'in-play-at' || src === 'widgets-x-slip' || src === 'widgets-x-at'
     || src === 'bti-api' || src.includes('bti-api') || slip.fromSlip === true;
   if (fromSlipCard) {
     btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
@@ -1928,13 +1930,67 @@ function collectVisibleMlButtons() {
 
 function getActiveSlipSelectionText() {
   const card = getCounterAnchoredSlipCard();
-  if (!card) {
-    const cards = getRealSlipCards();
-    if (!cards.length) return '';
-    const title = cards[cards.length - 1].querySelector('[class*="betInformation__title"]');
-    return title?.textContent?.trim() || '';
+  if (card) {
+    return card.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
   }
-  return card.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
+  const cards = getRealSlipCards();
+  if (cards.length) {
+    return cards[cards.length - 1].querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
+  }
+  for (const btn of queryBoardButtons()) {
+    if (!isBoardButtonSelected(btn)) continue;
+    const p = parseSelectionButton(btn);
+    if (p?.label) return p.label;
+    if (p?.rawText) return p.rawText.replace(/\d+\.\d{2,3}\s*$/, '').trim();
+  }
+  const root = getActiveSlipPanelRoot();
+  if (root) {
+    const t = root.querySelector('[class*="betInformation__title"], [class*="selectionName"], [class*="SelectionName"]');
+    if (t?.textContent?.trim()) return t.textContent.trim();
+  }
+  return '';
+}
+
+function readInPlayCounterOdds(hint = {}) {
+  const input = findBtiBetInput();
+  if (!input) return null;
+  const root = getBetslipRoot(null) || getActiveSlipPanelRoot() || input.parentElement;
+  if (!root) return null;
+
+  const text = (root.textContent || '').replace(/\s+/g, ' ');
+  const patterns = [
+    /@\s*(\d+\.\d{2,4})/,
+    /(?:총|합계|total)\s*(?:배당|odds)?[^\d]{0,10}(\d+\.\d{2,4})/i,
+    /(?:배당|odds)[^\d]{0,10}(\d+\.\d{2,4})/i
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    const o = parseFloat(m[1]);
+    if (o > 1.01 && o < 100) {
+      return enrichBtiSlip({
+        odds: Math.round(o * 1000) / 1000,
+        selectionText: getActiveSlipSelectionText(),
+        source: 'in-play-at',
+        fromSlip: true
+      });
+    }
+  }
+
+  const panelOdds = readSlipPanelDisplayOdds(null);
+  if (panelOdds > 1.01) {
+    return enrichBtiSlip({
+      odds: panelOdds,
+      selectionText: getActiveSlipSelectionText(),
+      source: 'slip-display',
+      fromSlip: true
+    });
+  }
+
+  if (hint?.forScan || hint?.preferActiveSlip) {
+    return readAnyVisibleBoardOdds(hint) || readEmergencyBoardOdds(hint);
+  }
+  return null;
 }
 
 function latchMatchesCurrentSlip() {
@@ -2356,7 +2412,18 @@ function readBtiOdds(hint) {
   }
 
   const tryList = [
+    () => readInPlayCounterOdds(hintObj),
     () => readWidgetsXBetslipOdds(),
+    () => {
+      const o = readSlipPanelDisplayOdds(null);
+      if (!(o > 1.01)) return null;
+      return enrichBtiSlip({
+        odds: o,
+        selectionText: getActiveSlipSelectionText(),
+        source: 'slip-display',
+        fromSlip: true
+      });
+    },
     () => {
       const card = getCounterAnchoredSlipCard() || getRealSlipCards().slice(-1)[0];
       const o = readSlipPanelDisplayOdds(card);
@@ -2370,6 +2437,7 @@ function readBtiOdds(hint) {
     },
     () => readCounterAnchoredSlipOdds(),
     () => readActiveSlipDisplayOdds(),
+    () => readBoardOddsForCurrentSlip(),
     () => readBtiSlip({ preferActiveSlip: true, ...hintObj }),
     () => {
       if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
@@ -2383,7 +2451,10 @@ function readBtiOdds(hint) {
       }
       return null;
     },
-    () => readBtiSlip({ ...hintObj, forArbPick: true })
+    () => readBtiSlip({ ...hintObj, forArbPick: true }),
+    () => readAnyVisibleBoardOdds(hintObj),
+    () => readEmergencyBoardOdds(hintObj),
+    () => readBtiBoardOdds(hintObj)
   ];
 
   for (const fn of tryList) {
@@ -2711,7 +2782,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 console.log('[텐텐뱃 v5] content script loaded');
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.4.9');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.0');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
 } catch (_) {}

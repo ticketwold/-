@@ -1139,6 +1139,7 @@ function isBtiSlipOddsSource(slip) {
   return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
     || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'scan-any'
     || src === 'board-slip-match' || src === 'brute-dom' || src === 'brute-inject'
+    || src === 'in-play-at' || src === 'inline-bootstrap'
     || src === 'widgets-x-slip' || src === 'widgets-x-at'
     || src === 'bti-api' || String(src).includes('bti-api');
 }

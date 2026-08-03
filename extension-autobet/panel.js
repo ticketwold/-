@@ -665,6 +665,7 @@ function applyInstantOdds(msg) {
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
       || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
+      || slipSource === 'in-play-at' || slipSource === 'inline-bootstrap'
       || slipSource === 'brute-dom' || slipSource === 'brute-inject'
       || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
@@ -721,6 +722,7 @@ function stabilizeSnap(snap, cfg) {
     const slipSource = snap.bti?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
       || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
+      || slipSource === 'in-play-at' || slipSource === 'inline-bootstrap'
       || slipSource === 'brute-dom' || slipSource === 'brute-inject'
       || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
