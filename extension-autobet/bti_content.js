@@ -129,6 +129,80 @@ function readOddsFromSlipCard(card) {
   return null;
 }
 
+function getSlipCardSelectionScope(card) {
+  if (!card) return null;
+  const titleEl = card.querySelector('[class*="betInformation__title"]');
+  if (titleEl) {
+    const infoRow = titleEl.closest('[class*="betInformation"], [class*="BetInformation"], [class*="selectionRow"], [class*="SelectionRow"]');
+    if (infoRow && card.contains(infoRow)) return infoRow;
+    let el = titleEl.parentElement;
+    for (let depth = 0; depth < 5 && el && card.contains(el); depth++) {
+      if (el.querySelector('[class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]')) return el;
+      el = el.parentElement;
+    }
+  }
+  return card;
+}
+
+function readSlipCardSelectionOdds(card) {
+  if (!card || isInMyBetsPanel(card) || isInsideBetHistory(card)) return null;
+  const scope = getSlipCardSelectionScope(card);
+  const lineContext = card.querySelector('[class*="betInformation__title"]')?.textContent || '';
+  const leafOpts = { rejectLines: true, lineContext };
+
+  const fromEl = (el) => {
+    if (!el || isBoardSelectionButton(el.closest('button'))) return null;
+    if (isStruckThrough(el)) return null;
+    const direct = parseOddsText((el.textContent || '').trim());
+    if (direct) return direct;
+    const leafOdds = [];
+    collectLeafOdds(el, leafOdds, leafOpts);
+    return leafOdds.length ? leafOdds[leafOdds.length - 1] : null;
+  };
+
+  for (const sel of [
+    '[class*="UpdateNotification"]',
+    '[class*="odds"]', '[class*="Odds"]',
+    '[class*="coefficient"]', '[class*="Coefficient"]',
+    '[class*="price"]', '[class*="Price"]'
+  ]) {
+    for (const el of scope.querySelectorAll(sel)) {
+      const o = fromEl(el);
+      if (o) return o;
+    }
+  }
+
+  for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+    if (isBoardSelectionButton(btn)) continue;
+    const txt = (btn.textContent || '').trim();
+    if (/^\d+\.\d{2,3}$/.test(txt)) {
+      const o = parseOddsText(txt);
+      if (o) return o;
+    }
+    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"]');
+    if (oddsEl) {
+      const o = fromEl(oddsEl);
+      if (o) return o;
+    }
+  }
+
+  const scopeText = (scope.textContent || '').replace(/\s+/g, ' ');
+  if (scopeText.length <= 500) {
+    const atM = scopeText.match(/@\s*(\d+\.\d{2,4})/);
+    if (atM) {
+      const o = parseOddsText(atM[1]);
+      if (o) return o;
+    }
+    const wM = scopeText.match(/\bW[12]\b[^0-9]{0,24}(\d+\.\d{2,4})/i);
+    if (wM) {
+      const o = parseOddsText(wM[1]);
+      if (o) return o;
+    }
+  }
+
+  return readOddsFromSlipCard(card);
+}
+
 function isBoardSelectionButton(btn) {
   if (!btn) return false;
   const cn = String(btn.className || '');
@@ -151,43 +225,9 @@ function getBetslipRoot(card) {
 
 function readSlipPanelDisplayOdds(card) {
   if (!hasActiveBetslipSelection()) return null;
-  const root = getBetslipRoot(card);
-  if (!root || isInsideBetHistory(root)) return null;
-  const candidates = [];
-
-  const add = (o, score) => {
-    if (o > 1.01 && o < 100) candidates.push({ o, score });
-  };
-
-  for (const btn of root.querySelectorAll('button, [role="button"]')) {
-    if (isBoardSelectionButton(btn)) continue;
-    if (isInsideBetHistory(btn)) continue;
-    const r = btn.getBoundingClientRect?.();
-    if (!r || r.width < 2 || r.height < 2) continue;
-    const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-    if (/베팅하기|place\s*bet|로그인|삭제|clear|전체/i.test(txt) && txt.length > 10) continue;
-    if (/^\d+\.\d{2,3}$/.test(txt)) {
-      add(parseOddsText(txt), 600);
-      continue;
-    }
-    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]');
-    if (oddsEl) {
-      const o = parseOddsText(oddsEl.textContent);
-      if (o) add(o, 500);
-    }
-    const tail = txt.match(/(\d+\.\d{2,3})\s*$/);
-    if (tail) add(parseOddsText(tail[1]), 350);
-  }
-
-  for (const el of root.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]')) {
-    if (isBoardSelectionButton(el.closest('button'))) continue;
-    const o = parseOddsText((el.textContent || '').trim());
-    if (o) add(o, 280);
-  }
-
-  if (!candidates.length) return null;
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].o;
+  const slipCard = card || getCounterAnchoredSlipCard() || getRealSlipCards().slice(-1)[0];
+  if (!slipCard || isInsideBetHistory(slipCard)) return null;
+  return readSlipCardSelectionOdds(slipCard);
 }
 
 function readOddsFromSelectedBoardButton(selectionText, slipMktType) {
@@ -416,14 +456,15 @@ function parseSlipFromCard(card) {
   const mktText = mktEl ? mktEl.textContent.trim() : marketTitleText;
   const allText = `${selectionText} ${mktText} ${marketTitleText}`;
   const slipMktType = detectMarketType(allText);
-  const slipCardOdds = readOddsFromSlipCard(card);
+  const slipCardOdds = readSlipCardSelectionOdds(card) || readOddsFromSlipCard(card);
   const panelOdds = readSlipPanelDisplayOdds(card);
   const slipUiOdds = slipCardOdds || panelOdds;
 
   if (/^W[12]$/i.test(selectionText.trim())) {
     let odds = slipUiOdds;
     if (!odds && !isInMyBetsPanel(card)) {
-      odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+      odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
+      if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
       if (!odds) {
         const teams = parseEventTeams(eventText);
         const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
@@ -1261,7 +1302,7 @@ function isActiveBetslipOpen() {
 }
 
 function probeBtiBetFrame() {
-  const odds = readBtiOdds();
+  const odds = readBtiOdds({ preferActiveSlip: true, forScan: true });
   const cards = getRealSlipCards();
   const input = findBtiBetInput();
   const betBtn = findBtiBetButton();
@@ -1961,14 +2002,18 @@ function isSlipCartOddsSource(slip) {
 
 function acceptBtiOddsForScan(slip) {
   if (!(slip?.odds > 1.01)) return null;
-  if (isSlipCartOddsSource(slip)) return slip;
-  const src = String(slip.source || '');
-  if (src === 'board-slip-match') return slip;
-  if (src === 'board-live' && findBtiBetInput()) {
-    const sel = (slip.selectionText || '').trim();
-    if (sel) return slip;
+  if (!isSlipCartOddsSource(slip)) return null;
+  const card = getCounterAnchoredSlipCard() || getRealSlipCards().slice(-1)[0];
+  const cardOdds = card ? readSlipCardSelectionOdds(card) : null;
+  if (cardOdds > 1.01 && Math.abs(cardOdds - slip.odds) > 0.08) {
+    return enrichBtiSlip({
+      ...slip,
+      odds: Math.round(cardOdds * 1000) / 1000,
+      source: 'slip-card',
+      fromSlip: true
+    });
   }
-  return null;
+  return slip;
 }
 
 function readSlipRootOddsExcludingBoard(root) {
@@ -2036,6 +2081,16 @@ function readLiveSlipCartOdds(hint = {}) {
       });
     },
     () => {
+      const card = getCounterAnchoredSlipCard() || getRealSlipCards().slice(-1)[0];
+      const cardOdds = card ? readSlipCardSelectionOdds(card) : null;
+      if (cardOdds > 1.01) {
+        return enrichBtiSlip({
+          odds: cardOdds,
+          selectionText: getActiveSlipSelectionText(),
+          source: 'slip-card',
+          fromSlip: true
+        });
+      }
       const root = getBetslipRoot(null) || getActiveSlipPanelRoot();
       const o = readSlipRootOddsExcludingBoard(root);
       if (!(o > 1.01)) return null;
@@ -2058,9 +2113,7 @@ function readLiveSlipCartOdds(hint = {}) {
         });
       }
       return null;
-    },
-    () => readBoardOddsForCurrentSlip(),
-    () => readSelectedBoardOddsForSlip(hint)
+    }
   ];
 
   for (const fn of readers) {
@@ -2901,7 +2954,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 console.log('[텐텐뱃 v5] content script loaded', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.2');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.3');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => ({

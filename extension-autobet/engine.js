@@ -216,11 +216,33 @@ async function readBtiOddsFromFrame(tabId, frameId, readHint, timeoutMs = BTI_RE
   ]);
   for (const slip of hits) {
     if (slip?.odds > 1.01) {
+      if (readHint.forScan && !isBtiSlipOddsSource(slip)) continue;
       lastBtiFrame = { tabId, frameId };
-      return slip;
+      return { ...slip, _frameId: frameId };
     }
   }
   return null;
+}
+
+function scoreBtiReadHit(slip, frameId, tabId) {
+  if (!(slip?.odds > 1.01)) return -1;
+  let score = 0;
+  if (slip.fromSlip) score += 2000;
+  const src = slip.source || slip.sourceKind || '';
+  if (/slip-card|slip-display/.test(src)) score += 1200;
+  if (/slip-latched|in-play-at|widgets-x-slip|widgets-x-at/.test(src)) score += 900;
+  if (src.includes('bti-api')) score += 800;
+  if (src === 'board-slip-match') score += 150;
+  if (lastBtiSlipFrame?.tabId === tabId && lastBtiSlipFrame.frameId === frameId) score += 600;
+  if (lastBtiFrame?.tabId === tabId && lastBtiFrame.frameId === frameId) score += 300;
+  return score;
+}
+
+function pickBestBtiReadHit(hits, tabId) {
+  const ranked = hits
+    .filter((h) => h?.slip?.odds > 1.01)
+    .sort((a, b) => scoreBtiReadHit(b.slip, b.frameId, tabId) - scoreBtiReadHit(a.slip, a.frameId, tabId));
+  return ranked[0]?.slip || null;
 }
 
 async function rankBtiFramesByPing(tabId, frameIds, limit = 12) {
@@ -292,16 +314,22 @@ async function readBtiOddsFast(tabId, hint = {}) {
   const batch = frameIds.slice(0, batchSize);
 
   if (batch.length) {
-    const hits = await Promise.all(batch.map((fid) => readBtiOddsFromFrame(tabId, fid, readHint, timeoutMs)));
-    const found = hits.find((h) => h?.odds > 1.01);
+    const hits = await Promise.all(batch.map(async (fid) => {
+      const slip = await readBtiOddsFromFrame(tabId, fid, readHint, timeoutMs);
+      return slip ? { slip, frameId: fid } : null;
+    }));
+    const found = pickBestBtiReadHit(hits, tabId);
     if (found) return found;
   }
 
   if (!fast) {
     const rest = frameIds.slice(batchSize, BTI_MAX_FRAMES);
     if (rest.length) {
-      const hits = await Promise.all(rest.map((fid) => readBtiOddsFromFrame(tabId, fid, readHint, timeoutMs)));
-      const found = hits.find((h) => h?.odds > 1.01);
+      const hits = await Promise.all(rest.map(async (fid) => {
+        const slip = await readBtiOddsFromFrame(tabId, fid, readHint, timeoutMs);
+        return slip ? { slip, frameId: fid } : null;
+      }));
+      const found = pickBestBtiReadHit(hits, tabId);
       if (found) return found;
     }
   }
@@ -1464,7 +1492,11 @@ async function probeBtiFramesDiagnostic(btiTab) {
       hasSlip: !!ping?.hasSlip,
       pingOk: !!ping?.ok
     };
-  })).then((rows) => rows.filter(Boolean).sort((a, b) => (b.slipOdds || 0) - (a.slipOdds || 0)));
+  })).then((rows) => rows.filter(Boolean).sort((a, b) => {
+    const sa = (a.hasInput ? 1000 : 0) + (a.hasSlip ? 500 : 0) + (a.pingOk ? 100 : 0);
+    const sb = (b.hasInput ? 1000 : 0) + (b.hasSlip ? 500 : 0) + (b.pingOk ? 100 : 0);
+    return sb - sa;
+  }));
 }
 
 async function bruteReadBtiOdds(tabId) {
@@ -1539,8 +1571,8 @@ async function bruteReadBtiOdds(tabId) {
     return null;
   }));
   const found = hits.filter(Boolean).sort((a, b) => {
-    const sa = (a.selected ? 1000 : 0) + a.odds;
-    const sb = (b.selected ? 1000 : 0) + b.odds;
+    const sa = (a.fromSlip ? 3000 : 0) + (a.selected ? 1200 : 0) + (isBtiSlipOddsSource(a) ? 800 : 0);
+    const sb = (b.fromSlip ? 3000 : 0) + (b.selected ? 1200 : 0) + (isBtiSlipOddsSource(b) ? 800 : 0);
     return sb - sa;
   });
   if (found.length) {
