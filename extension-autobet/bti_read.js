@@ -98,6 +98,9 @@ async function injectReadBtiFrame(tabId, frameId) {
           return null;
         }
 
+        const isWidgetsX = /widgets-x/i.test(location.href)
+          || !!document.querySelector('[class*="betslip-root"], [id*="betslip-root"]');
+
         let hasInput = false;
         let slipPanel = null;
         let slipInput = null;
@@ -148,6 +151,19 @@ async function injectReadBtiFrame(tabId, frameId) {
         }
 
         if (!card && cards.length) card = cards[cards.length - 1];
+
+        if (!card && isWidgetsX) {
+          for (const root of document.querySelectorAll('[class*="betslip"], [class*="Betslip"], main, [role="main"]')) {
+            const txt = (root.textContent || '').replace(/\s+/g, ' ');
+            if (txt.length < 16 || /내베팅|mybets|cash\s*out/i.test(txt)) continue;
+            const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+            if (!at) continue;
+            const o = parseOdds(at[1]);
+            if (!o) continue;
+            const sel = root.querySelector('[class*="title"], [class*="selection"]')?.textContent?.trim() || '';
+            return { odds: o, selectionText: sel, eventText: '', source: 'widgets-x-at', fromSlip: true, hasInput };
+          }
+        }
 
         if (!card) {
           for (const btn of document.querySelectorAll('button[class*="Selections_selection"], button[class*="selection"]')) {

@@ -936,7 +936,8 @@ $('scanBtn')?.addEventListener('click', async () => {
         try {
           const probes = await probeBtiFramesDiagnostic(snap.found.btiTab);
           for (const p of probes.slice(0, 8)) {
-            const line = `  f${p.frameId}: btn${p.buttons} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'} ping${p.pingOk ? 'Y' : 'N'}`;
+            const tag = p.widgetsX ? 'wx' : '  ';
+            const line = `  f${p.frameId}${tag}: btn${p.buttons} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'} ping${p.pingOk ? 'Y' : 'N'}`;
             logLine(`${line} · ${(p.url || '(main)').slice(-48)}`, p.slipOdds > 1 ? 'ok' : 'info');
           }
         } catch (_) {}

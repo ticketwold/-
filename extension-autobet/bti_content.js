@@ -76,6 +76,20 @@ function readOddsFromSlipCard(card) {
   const lineContext = card.querySelector('[class*="betInformation__title"]')?.textContent || '';
   const leafOpts = { rejectLines: true, lineContext };
 
+  for (const btn of card.querySelectorAll('button, [role="button"]')) {
+    if (isBoardSelectionButton(btn)) continue;
+    const txt = (btn.textContent || '').trim();
+    if (/^\d+\.\d{2,3}$/.test(txt)) {
+      const n = parseOddsText(txt);
+      if (n) return n;
+    }
+    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"], [class*="coefficient"]');
+    if (oddsEl) {
+      const n = parseOddsText(oddsEl.textContent);
+      if (n) return n;
+    }
+  }
+
   const notifOdds = [];
   for (const notif of card.querySelectorAll('[class*="UpdateNotification"]')) {
     collectLeafOdds(notif, notifOdds, leafOpts);
@@ -108,6 +122,65 @@ function readOddsFromSlipCard(card) {
   if (found.length) return found[0];
 
   return null;
+}
+
+function isBoardSelectionButton(btn) {
+  if (!btn) return false;
+  const cn = String(btn.className || '');
+  return /master_fe_Selections_selection|Selections_selection/i.test(cn);
+}
+
+function getBetslipRoot(card) {
+  const input = findBtiBetInput();
+  if (input) {
+    const root = input.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]');
+    if (root) return root;
+  }
+  if (card) {
+    const root = card.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]');
+    if (root) return root;
+  }
+  return document.querySelector('[class*="betslip_fe"], [class*="Betslip"]');
+}
+
+function readSlipPanelDisplayOdds(card) {
+  const root = getBetslipRoot(card);
+  if (!root || isInsideBetHistory(root)) return null;
+  const candidates = [];
+
+  const add = (o, score) => {
+    if (o > 1.01 && o < 100) candidates.push({ o, score });
+  };
+
+  for (const btn of root.querySelectorAll('button, [role="button"]')) {
+    if (isBoardSelectionButton(btn)) continue;
+    if (isInsideBetHistory(btn)) continue;
+    const r = btn.getBoundingClientRect?.();
+    if (!r || r.width < 2 || r.height < 2) continue;
+    const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/베팅하기|place\s*bet|로그인|삭제|clear|전체/i.test(txt) && txt.length > 10) continue;
+    if (/^\d+\.\d{2,3}$/.test(txt)) {
+      add(parseOddsText(txt), 600);
+      continue;
+    }
+    const oddsEl = btn.querySelector('[class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]');
+    if (oddsEl) {
+      const o = parseOddsText(oddsEl.textContent);
+      if (o) add(o, 500);
+    }
+    const tail = txt.match(/(\d+\.\d{2,3})\s*$/);
+    if (tail) add(parseOddsText(tail[1]), 350);
+  }
+
+  for (const el of root.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]')) {
+    if (isBoardSelectionButton(el.closest('button'))) continue;
+    const o = parseOddsText((el.textContent || '').trim());
+    if (o) add(o, 280);
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].o;
 }
 
 function readOddsFromSelectedBoardButton(selectionText, slipMktType) {
@@ -154,7 +227,7 @@ function readOddsFromBoardForSelection(selectionText, allText, slipMktType) {
   const wMatch = String(selectionText).trim().match(/^W([12])$/i);
   if (wMatch && slipMktType === 'ml') {
     const pickFirst = wMatch[1] === '1';
-    const wMarket = readWMlOddsFromVisibleBoard(pickFirst ? 1 : 2);
+    const wMarket = readWMlOddsForMarketContext(pickFirst ? 1 : 2, allText);
     if (wMarket) return wMarket;
     const mlLines = Array.from(document.querySelectorAll('[class*="MoneyLineSelection_line"]'));
     if (mlLines.length >= 2) {
@@ -335,12 +408,13 @@ function parseSlipFromCard(card) {
   const allText = `${selectionText} ${mktText} ${marketTitleText}`;
   const slipMktType = detectMarketType(allText);
   const slipCardOdds = readOddsFromSlipCard(card);
+  const panelOdds = readSlipPanelDisplayOdds(card);
+  const slipUiOdds = slipCardOdds || panelOdds;
 
   if (/^W[12]$/i.test(selectionText.trim())) {
-    let odds = slipCardOdds;
+    let odds = slipUiOdds;
     if (!odds && !isInMyBetsPanel(card)) {
-      odds = readOddsFromSelectedBoardButton(selectionText, slipMktType);
-      if (!odds) odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+      odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
       if (!odds) {
         const teams = parseEventTeams(eventText);
         const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
@@ -349,10 +423,11 @@ function parseSlipFromCard(card) {
       }
     }
     if (!odds) return null;
-    const period = 'ft';
+    const period = detectPeriod(allText);
     const side = /^W2$/i.test(selectionText.trim()) ? 'away' : 'home';
     const resolvedEventText = eventText || findEventNameNearButton(document.querySelector('button[class*="master_fe_Selections_selection"]'));
     const teams = parseEventTeams(resolvedEventText);
+    const fromSlip = !!(slipCardOdds || panelOdds);
     return {
       odds: Math.round(odds * 1000) / 1000,
       eventId: (location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/) || [])[1] || null,
@@ -366,12 +441,12 @@ function parseSlipFromCard(card) {
       eventText: resolvedEventText,
       homeTeam: teams.home,
       awayTeam: teams.away,
-      fromSlip: !!slipCardOdds,
-      source: slipCardOdds ? 'slip-card' : 'board-live'
+      fromSlip,
+      source: panelOdds ? 'slip-display' : (slipCardOdds ? 'slip-card' : 'board-live')
     };
   }
 
-  let odds = slipCardOdds || 0;
+  let odds = slipUiOdds || 0;
   let matchedLine = null;
   let matchedSide = null;
   const allBtns = document.querySelectorAll('button[class*="master_fe_Selections_selection"]');
@@ -530,7 +605,7 @@ function parseSlipFromCard(card) {
       : `${period}_ou_${side}_${line}`;
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
   const teams = parseEventTeams(eventText);
-  const fromSlipCard = !!slipCardOdds;
+  const fromSlipCard = !!(slipCardOdds || panelOdds);
 
   return {
     odds,
@@ -551,7 +626,9 @@ function parseSlipFromCard(card) {
 }
 
 function detectPeriod(text) {
-  const t = text.toLowerCase();
+  const t = (text || '').toLowerCase();
+  const mapM = (text || '').match(/([1-5])\s*맵|map\s*([1-5])/i);
+  if (mapM) return `map${mapM[1] || mapM[2]}`;
   if (t.includes('전반전') || t.includes('1st half') || t.includes('halftime')) return '1h';
   if (t.includes('후반전') || t.includes('2nd half')) return '2h';
   if (/[23]세트|[23]rd set|[23]nd set/i.test(t)) return 'set';
@@ -602,6 +679,37 @@ function slipOddsFromText(txt) {
   if (!n || n <= 1.01 || n >= 100) return 0;
   if (!/^\d+(\.\d{1,4})?$/.test(t)) return 0;
   return n;
+}
+
+function readWMlOddsForMarketContext(wNum, marketContext) {
+  const pickSecond = wNum === 2;
+  const ctx = String(marketContext || '');
+  const mapM = ctx.match(/([1-5])\s*맵|map\s*([1-5])/i);
+  const wantMap = mapM ? (mapM[1] || mapM[2]) : null;
+
+  const marketRoots = document.querySelectorAll(
+    '[class*="market"], [class*="Market"], [class*="selections"], [class*="Selections"]'
+  );
+  for (const mkt of marketRoots) {
+    const label = (mkt.querySelector('[class*="marketName"], [class*="MarketName"]')?.textContent || mkt.textContent || '').slice(0, 160);
+    const labelRaw = label.replace(/\s+/g, ' ');
+    if (!/승리|winner|winning|money|승패|win\s*team|맵.*우승|map.*winner|우승자/i.test(labelRaw)) continue;
+    if (wantMap) {
+      const hasMap = labelRaw.includes(`${wantMap}맵`) || labelRaw.includes(`맵 ${wantMap}`)
+        || labelRaw.includes(`맵${wantMap}`) || new RegExp(`map\\s*${wantMap}`, 'i').test(labelRaw);
+      if (!hasMap) continue;
+    }
+    const btns = Array.from(mkt.querySelectorAll('button[class*="master_fe_Selections_selection"]'))
+      .map((b) => parseSelectionButton(b))
+      .filter((p) => p?.odds && p.element && isElementVisible(p.element));
+    if (btns.length >= 2) {
+      const pick = pickSecond ? btns[btns.length - 1] : btns[0];
+      return pick.odds;
+    }
+    if (btns.length === 1 && !pickSecond) return btns[0].odds;
+  }
+  if (wantMap) return null;
+  return readWMlOddsFromVisibleBoard(wNum);
 }
 
 function readWMlOddsFromVisibleBoard(wNum) {
@@ -2122,6 +2230,18 @@ function readWidgetsXBetslipOdds() {
     return enrichBtiSlip({ ...anchored, source: 'widgets-x-slip', fromSlip: true });
   }
 
+  const panelOdds = readSlipPanelDisplayOdds(getCounterAnchoredSlipCard());
+  if (panelOdds > 1.01) {
+    const card = getCounterAnchoredSlipCard();
+    const sel = getActiveSlipSelectionText();
+    return enrichBtiSlip({
+      odds: panelOdds,
+      selectionText: sel,
+      source: 'slip-display',
+      fromSlip: true
+    });
+  }
+
   for (const card of getRealSlipCards()) {
     const titleEls = card.querySelectorAll('[class*="betInformation__title"], [class*="title"]');
     const selectionText = titleEls[0]?.textContent?.trim() || '';
@@ -2182,6 +2302,17 @@ function readBtiOdds(hint) {
 
   const tryList = [
     () => readWidgetsXBetslipOdds(),
+    () => {
+      const card = getCounterAnchoredSlipCard() || getRealSlipCards().slice(-1)[0];
+      const o = readSlipPanelDisplayOdds(card);
+      if (!(o > 1.01)) return null;
+      return enrichBtiSlip({
+        odds: o,
+        selectionText: getActiveSlipSelectionText(),
+        source: 'slip-display',
+        fromSlip: true
+      });
+    },
     () => readCounterAnchoredSlipOdds(),
     () => readBoardOddsForCurrentSlip(),
     () => readOddsFromLastBoardClick(),

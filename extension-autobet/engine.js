@@ -733,6 +733,7 @@ async function probeBtiFramesDiagnostic(btiTab) {
     return {
       frameId: f.frameId,
       url: f.url || '',
+      widgetsX: /widgets-x/i.test(f.url || ''),
       buttons,
       slipOdds,
       hasInput: !!ping?.hasInput,
