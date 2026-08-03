@@ -317,6 +317,19 @@ function patchSnapFromKnown(snap, cfg) {
   return { ...snap, ...partial };
 }
 
+function selectionLabelChanged(a, b) {
+  const na = String(a || '').replace(/\s+/g, '').toLowerCase();
+  const nb = String(b || '').replace(/\s+/g, '').toLowerCase();
+  if (!na || !nb) return false;
+  if (na === nb) return false;
+  if (na.length >= 2 && nb.length >= 2) {
+    const minLen = Math.min(na.length, nb.length, 5);
+    if (na.slice(0, minLen) === nb.slice(0, minLen)) return false;
+    if (na.includes(nb) || nb.includes(na)) return false;
+  }
+  return true;
+}
+
 function applyInstantOdds(msg) {
   if (!isLeg2Connected()) return false;
   if (msg.suspended || !msg?.slip?.odds || msg.slip.odds <= 1) {
@@ -335,9 +348,15 @@ function applyInstantOdds(msg) {
   if (!o) return false;
   const now = Date.now();
   if (msg.source === 'bti') {
+    const newSel = msg.slip?.selectionText || msg.slip?.teamLabel || '';
+    const oldSel = liveSnap?.bti?.selectionText || liveSnap?.bti?.teamLabel || '';
+    if (selectionLabelChanged(newSel, oldSel)) {
+      clearKnownOdds('bti');
+      lastSynced.at = 0;
+    }
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
-      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'scan-any'
+      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
@@ -381,7 +400,7 @@ function stabilizeSnap(snap, cfg) {
     const next = normalizeSportsOdds(snap.btiO);
     const slipSource = snap.bti?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
-      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'scan-any'
+      || slipSource === 'board-live' || slipSource === 'board' || slipSource === 'board-emergency' || slipSource === 'board-slip-match' || slipSource === 'scan-any'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
     if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);
