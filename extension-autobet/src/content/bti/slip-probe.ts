@@ -1,5 +1,9 @@
 import {
-  detectSlipFrameKind,
+  detectSlipFrameKindInDoc,
+  slipDocContext,
+  type SlipDocContext,
+} from './slip-doc-context';
+import {
   frameCanHostBetSlip,
   frameShouldSkipSlipRead,
   type SlipFrameKind,
@@ -27,15 +31,15 @@ export type SlipProbeResult = {
   shadowHosts: number;
 };
 
-export function probeSlipDom(): SlipProbeResult {
-  const kind = detectSlipFrameKind();
-  const input = findSlipBetInput();
-  const cards = findSlipCards();
+export function probeSlipDom(ctx: SlipDocContext = slipDocContext()): SlipProbeResult {
+  const kind = detectSlipFrameKindInDoc(ctx);
+  const input = findSlipBetInput(ctx.doc);
+  const cards = findSlipCards(ctx.doc);
   let atOdds = 0;
   let cardOdds = 0;
   let selectionText = '';
 
-  const root = findSlipObserverRoot();
+  const root = findSlipObserverRoot(ctx.doc);
   const rootText = (root.textContent || '').replace(/\s+/g, ' ');
   atOdds = readAtOddsFromText(rootText) || 0;
 
@@ -49,14 +53,14 @@ export function probeSlipDom(): SlipProbeResult {
   }
 
   let shadowHosts = 0;
-  document.querySelectorAll('*').forEach((el) => {
+  ctx.doc.querySelectorAll('*').forEach((el) => {
     if (el.shadowRoot) shadowHosts++;
   });
 
   return {
     frameKind: kind,
-    href: location.href,
-    isTop: window === window.top,
+    href: ctx.href,
+    isTop: ctx.doc === document && window === window.top,
     hasCounter: !!input,
     slipCardCount: cards.length,
     atOdds,
@@ -67,33 +71,34 @@ export function probeSlipDom(): SlipProbeResult {
   };
 }
 
-export function readSlipOddsFromProbedDom(): {
+export function readSlipOddsFromProbedDom(
+  ctx: SlipDocContext = slipDocContext()
+): {
   odds: number;
   selectionText: string;
   source: string;
   fromSlip: boolean;
 } | null {
-  const kind = detectSlipFrameKind();
+  const kind = detectSlipFrameKindInDoc(ctx);
   if (frameShouldSkipSlipRead(kind)) return null;
-  if (!frameCanHostBetSlip(kind) && !findSlipBetInput()) return null;
+  if (!frameCanHostBetSlip(kind) && !findSlipBetInput(ctx.doc)) return null;
 
-  const cards = findSlipCards();
+  const cards = findSlipCards(ctx.doc);
   for (let i = cards.length - 1; i >= 0; i--) {
     const card = cards[i];
     if (!card) continue;
     const rawOdds = readOddsFromSlipCardElement(card);
     if (rawOdds == null || rawOdds <= 1.01) continue;
-    const odds = rawOdds;
     const selectionText = card.querySelector(SLIP_TITLE_SELECTOR)?.textContent?.trim() || '';
     return {
-      odds,
+      odds: rawOdds,
       selectionText,
       source: kind === 'sportscenter-betslip' ? 'sportscenter-slip' : 'widgets-x-slip',
       fromSlip: true,
     };
   }
 
-  const root = findSlipObserverRoot();
+  const root = findSlipObserverRoot(ctx.doc);
   const atRaw = readAtOddsFromText((root.textContent || '').replace(/\s+/g, ' '));
   if (atRaw != null && atRaw > 1.01) {
     return {
@@ -107,16 +112,18 @@ export function readSlipOddsFromProbedDom(): {
   return null;
 }
 
-/** 프레임 역할을 documentElement에 기록 — engine probe에서 식별 */
-export function markSlipFrameOnDom(): void {
-  const kind = detectSlipFrameKind();
+export function markSlipFrameOnDom(ctx: SlipDocContext = slipDocContext()): void {
+  const kind = detectSlipFrameKindInDoc(ctx);
   try {
-    document.documentElement.setAttribute('data-autobet-slip-frame', kind);
-    const probe = probeSlipDom();
+    ctx.doc.documentElement.setAttribute('data-autobet-slip-frame', kind);
+    const probe = probeSlipDom(ctx);
     if (probe.atOdds > 1.01 || probe.cardOdds > 1.01) {
-      document.documentElement.setAttribute('data-autobet-slip-odds', String(probe.atOdds || probe.cardOdds));
+      ctx.doc.documentElement.setAttribute(
+        'data-autobet-slip-odds',
+        String(probe.atOdds || probe.cardOdds)
+      );
     }
   } catch {
-    /* ignore */
+    /* cross-origin guard */
   }
 }

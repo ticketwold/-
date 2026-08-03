@@ -1,6 +1,6 @@
 /**
- * Shadow DOM 포함 deep query.
- * BTI Bet Slip: #counter는 shadow walk 있으나 카드/배당 쿼리는 light DOM만 쓰던 부분 보완.
+ * iframe.contentDocument 또는 현재 document 기준 query.
+ * selector 문자열은 기존과 동일 — 컨텍스트(root)만 분리.
  */
 export function deepQueryAll(root: ParentNode, selector: string): Element[] {
   const seen = new Set<Element>();
@@ -26,7 +26,6 @@ export function deepQueryOne(root: ParentNode, selector: string): Element | null
   return deepQueryAll(root, selector)[0] ?? null;
 }
 
-/** Bet Slip 금액 입력 — 진단·코드 기준 selector */
 export const SLIP_INPUT_SELECTORS = [
   '#counter',
   'input[class*="CounterSecondary_input"]',
@@ -36,7 +35,6 @@ export const SLIP_INPUT_SELECTORS = [
   'input[placeholder*="베팅"]',
 ].join(', ');
 
-/** 슬립 선택 카드 — betslip_fe_BetSecondary_bet (wrapper/counter 제외) */
 export const SLIP_CARD_SELECTORS = [
   '[class*="betslip_fe_BetSecondary_bet"]',
   '[class*="BetSecondary_bet"]',
@@ -44,14 +42,11 @@ export const SLIP_CARD_SELECTORS = [
   '[data-testid*="betslip"]',
 ].join(', ');
 
-/** 슬립 카드 내 선택명 */
 export const SLIP_TITLE_SELECTOR = '[class*="betInformation__title"]';
 
-/** 슬립 카드 내 이벤트명 */
 export const SLIP_EVENT_SELECTOR =
   '[class*="betInformation__eventName"], [class*="eventName"]';
 
-/** 슬립 배당 — @ 1.16 형식 또는 odds span */
 export const SLIP_ODDS_SELECTORS = [
   '[class*="UpdateNotification"]',
   '[class*="Selections_odds"]',
@@ -61,7 +56,6 @@ export const SLIP_ODDS_SELECTORS = [
   '[class*="Coefficient"]',
 ].join(', ');
 
-/** 배당판 버튼 (슬립이 아님 — 11.x 잘못 읽기 원인) */
 export const BOARD_BUTTON_SELECTOR =
   'button[class*="master_fe_Selections_selection"], button[class*="Selections_selection"]';
 
@@ -78,22 +72,22 @@ export function findSlipCards(root: ParentNode = document): Element[] {
   });
 }
 
-export function findSlipObserverRoot(): ParentNode {
-  const input = findSlipBetInput();
+export function findSlipObserverRoot(doc: Document = document): ParentNode {
+  const input = findSlipBetInput(doc);
   if (input) {
     const anchored =
       input.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip-root"]') ||
       input.closest('[class*="betslip"], [class*="Betslip"]');
     if (anchored) return anchored;
   }
-  const cards = findSlipCards();
+  const cards = findSlipCards(doc);
   if (cards.length) {
     const root =
       cards[0]?.closest('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip-root"]') ||
       cards[0]?.parentElement;
     if (root) return root;
   }
-  return document.body || document.documentElement;
+  return doc.body || doc.documentElement;
 }
 
 export function readAtOddsFromText(text: string): number | null {

@@ -1,7 +1,9 @@
 import './content.legacy';
-import { detectSlipFrameKind, frameShouldSkipSlipRead } from './slip-frame-kind';
+import { startBetslipIframeLifecycle } from './iframe-lifecycle';
+import { detectSlipFrameKind, frameCanHostBetSlip } from './slip-frame-kind';
+import { slipDocContext } from './slip-doc-context';
 import { markSlipFrameOnDom, probeSlipDom, readSlipOddsFromProbedDom } from './slip-probe';
-import { startSlipDomObserver } from './slip-observer';
+import { startSlipDomObserverInDocument } from './slip-observer';
 
 declare global {
   interface Window {
@@ -11,30 +13,41 @@ declare global {
 }
 
 const kind = detectSlipFrameKind();
-markSlipFrameOnDom();
+const ctx = slipDocContext();
+markSlipFrameOnDom(ctx);
 
-window.__btiSlipProbe = () => probeSlipDom();
-window.__btiReadSlipOdds = () => readSlipOddsFromProbedDom();
+window.__btiSlipProbe = () => probeSlipDom(ctx);
+window.__btiReadSlipOdds = () => readSlipOddsFromProbedDom(ctx);
 
-if (!frameShouldSkipSlipRead(kind)) {
-  startSlipDomObserver((slip, cartChange) => {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'ODDS_CHANGED',
-        source: 'bti',
-        slip: slip || null,
-        suspended: !slip,
-        cartChange: !!cartChange,
-        frameKind: kind,
-      });
-    } catch {
-      /* extension context invalidated */
-    }
-  });
+function notifyOdds(slip: Record<string, unknown> | null, cartChange?: boolean) {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'ODDS_CHANGED',
+      source: 'bti',
+      slip: slip || null,
+      suspended: !slip,
+      cartChange: !!cartChange,
+      frameKind: kind,
+    });
+  } catch {
+    /* extension context invalidated */
+  }
+}
+
+/**
+ * Top shell: body MO → betslip iframe 감지 → load → contentDocument → 내부 MO
+ * Betslip iframe (CS 직접 주입): 해당 document 내부 MO
+ */
+if (window === window.top || kind === 'shell-top') {
+  startBetslipIframeLifecycle(notifyOdds);
+}
+
+if (frameCanHostBetSlip(kind)) {
+  startSlipDomObserverInDocument(document, notifyOdds, location.href, 'native-frame');
 }
 
 console.log(
-  '[텐텐뱃 slip-frame]',
+  '[텐텐뱃 slip-lifecycle]',
   kind,
   window === window.top ? 'top' : 'iframe',
   (location.href || '').slice(0, 80)

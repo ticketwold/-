@@ -1,23 +1,31 @@
-import { detectSlipFrameKind, frameShouldSkipSlipRead } from './slip-frame-kind';
+import { detectSlipFrameKindInDoc, slipDocContext } from './slip-doc-context';
+import { frameShouldSkipSlipRead } from './slip-frame-kind';
 import { findSlipObserverRoot } from './shadow-query';
 import { markSlipFrameOnDom, readSlipOddsFromProbedDom } from './slip-probe';
 
-type OddsNotify = (slip: Record<string, unknown> | null, cartChange?: boolean) => void;
+export type OddsNotify = (slip: Record<string, unknown> | null, cartChange?: boolean) => void;
 
 /**
- * Bet Slip 전용 MutationObserver.
- * - top shell(document.body) 감시는 iframe 내부 변경을 못 봄 → slip root만 감시
- * - Lazy mount: root가 없으면 body 감시 후 slip root 발견 시 재부착
+ * 단일 document(또는 iframe.contentDocument) 내부 Bet Slip MutationObserver.
+ * - setInterval 없음
+ * - slip root 미존재 시 doc.body 감시 → root 출현 시 observer 재부착 (MutationObserver만)
  */
-export function startSlipDomObserver(notify: OddsNotify): () => void {
-  const kind = detectSlipFrameKind();
+export function startSlipDomObserverInDocument(
+  doc: Document,
+  notify: OddsNotify,
+  hrefHint?: string,
+  via: 'native-frame' | 'iframe-child' = 'native-frame'
+): () => void {
+  const ctx = slipDocContext(doc, hrefHint);
+  const kind = detectSlipFrameKindInDoc(ctx);
   if (frameShouldSkipSlipRead(kind)) {
     return () => {};
   }
 
   let lastKey = '';
   let pending = false;
-  let observer: MutationObserver | null = null;
+  let slipObserver: MutationObserver | null = null;
+  let bootstrapObserver: MutationObserver | null = null;
   let observedRoot: ParentNode | null = null;
 
   const oddsKey = (slip: { odds?: number; selectionText?: string } | null) => {
@@ -26,8 +34,8 @@ export function startSlipDomObserver(notify: OddsNotify): () => void {
   };
 
   const check = (cartChange = false) => {
-    markSlipFrameOnDom();
-    const slip = readSlipOddsFromProbedDom();
+    markSlipFrameOnDom(ctx);
+    const slip = readSlipOddsFromProbedDom(ctx);
     if (!slip) {
       if (lastKey !== '') {
         lastKey = '';
@@ -38,7 +46,7 @@ export function startSlipDomObserver(notify: OddsNotify): () => void {
     const key = oddsKey(slip);
     if (key === lastKey && !cartChange) return;
     lastKey = key;
-    notify({ ...slip, sourceKind: slip.source }, cartChange);
+    notify({ ...slip, sourceKind: slip.source, via }, cartChange);
   };
 
   const schedule = (cartChange = false) => {
@@ -50,31 +58,62 @@ export function startSlipDomObserver(notify: OddsNotify): () => void {
     });
   };
 
-  const attach = () => {
-    const root = findSlipObserverRoot();
-    if (!root || root === observedRoot) return;
-    observer?.disconnect();
+  const attachSlipRootObserver = (): boolean => {
+    const root = findSlipObserverRoot(ctx.doc);
+    if (!root || root === observedRoot) return !!observedRoot;
+
+    slipObserver?.disconnect();
     observedRoot = root;
-    observer = new MutationObserver(() => schedule(false));
-    observer.observe(root, {
+    slipObserver = new MutationObserver(() => schedule(false));
+    slipObserver.observe(root, {
       subtree: true,
       childList: true,
       characterData: true,
       attributes: true,
       attributeFilter: ['class', 'data-testid', 'aria-label', 'value', 'data-state'],
     });
+    schedule(false);
+    return true;
   };
 
-  attach();
-  const rootPoll = window.setInterval(attach, 400);
+  const attachBootstrapObserver = () => {
+    const body = ctx.doc.body;
+    if (!body) return;
 
-  document.addEventListener('input', () => schedule(false), true);
-  document.addEventListener('click', () => schedule(true), true);
+    bootstrapObserver?.disconnect();
+    bootstrapObserver = new MutationObserver(() => {
+      if (attachSlipRootObserver()) {
+        /* slip root observer active — bootstrap keeps watching for root replacement */
+      }
+    });
+    bootstrapObserver.observe(body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-testid', 'aria-label', 'value', 'data-state', 'src'],
+    });
 
+    attachSlipRootObserver();
+  };
+
+  const onInput = () => schedule(false);
+  const onClick = () => schedule(true);
+
+  attachBootstrapObserver();
+  doc.addEventListener('input', onInput, true);
+  doc.addEventListener('click', onClick, true);
   schedule(false);
 
   return () => {
-    observer?.disconnect();
-    window.clearInterval(rootPoll);
+    slipObserver?.disconnect();
+    bootstrapObserver?.disconnect();
+    doc.removeEventListener('input', onInput, true);
+    doc.removeEventListener('click', onClick, true);
   };
+}
+
+/** @deprecated use startSlipDomObserverInDocument */
+export function startSlipDomObserver(notify: OddsNotify): () => void {
+  return startSlipDomObserverInDocument(document, notify, location.href, 'native-frame');
 }
