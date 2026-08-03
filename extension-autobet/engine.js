@@ -446,25 +446,89 @@ function sendPoly(tabId, msg, frameId = 0) {
   });
 }
 
-async function injectAllBtiFramesTab(tabId) {
+async function probeBtiInjectStatus(tabId) {
+  const frames = await getAllFrames(tabId);
+  const hits = [];
+  for (const f of frames.slice(0, 24)) {
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) continue;
+    try {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [f.frameId] },
+        func: () => ({
+          has: typeof window.__btiReadOdds === 'function',
+          marker: document.documentElement.getAttribute('data-autobet-bti') || '',
+          href: location.href.slice(0, 110)
+        })
+      });
+      const hit = res?.[0]?.result;
+      hits.push({
+        frameId: f.frameId,
+        url: (f.url || '').slice(0, 110),
+        has: !!hit?.has,
+        marker: hit?.marker || ''
+      });
+    } catch (e) {
+      hits.push({
+        frameId: f.frameId,
+        url: (f.url || '').slice(0, 110),
+        has: false,
+        error: String(e?.message || e || 'probe-fail').slice(0, 80)
+      });
+    }
+  }
+  const withScript = hits.filter((h) => h.has);
+  return {
+    topHasScript: !!withScript.find((h) => h.frameId === 0),
+    framesWithScript: withScript.length,
+    hits: hits.slice(0, 14)
+  };
+}
+
+async function injectAllBtiFramesTab(tabId, force = false) {
   const frames = await getAllFrames(tabId);
   const count = frames.length;
   const prev = btiAllInjectedFrames.get(tabId) || 0;
-  if (prev >= count && prev > 0) return;
+  const errors = [];
+
+  if (!force && prev >= count && prev > 0) {
+    const cached = await probeBtiInjectStatus(tabId);
+    if (cached.framesWithScript > 0) return { ok: true, skipped: true, errors, ...cached };
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      files: ['bti_content.js']
+    });
+  } catch (e) {
+    errors.push(`f0:${String(e?.message || e).slice(0, 100)}`);
+  }
+
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['bti_content.js']
     });
+  } catch (e) {
+    errors.push(`all:${String(e?.message || e).slice(0, 100)}`);
+  }
+
+  try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['bti_api_hook.js'],
       world: 'MAIN'
     });
-    btiAllInjectedFrames.set(tabId, count);
-    btiScriptReady.add(`all:${tabId}`);
-    for (const f of frames) btiScriptReady.add(`${tabId}:${f.frameId}`);
-  } catch (_) {}
+  } catch (e) {
+    errors.push(`api:${String(e?.message || e).slice(0, 100)}`);
+  }
+
+  btiAllInjectedFrames.set(tabId, count);
+  btiScriptReady.add(`all:${tabId}`);
+  for (const f of frames) btiScriptReady.add(`${tabId}:${f.frameId}`);
+
+  const probe = await probeBtiInjectStatus(tabId);
+  return { ok: probe.framesWithScript > 0, errors, ...probe };
 }
 
 async function ensureBtiScript(tabId, frameId) {
@@ -1227,7 +1291,6 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
 
 async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const found = await findTabs(leg2Pref);
-  if (found.btiTab?.id) await injectAllBtiFramesTab(found.btiTab.id);
   if (!found.btiTab) {
     const tabs = await enumerateAllTabs();
     return {
@@ -1235,11 +1298,18 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
       reason: formatTabDiscoveryHint(tabs)
     };
   }
+  const inject = await injectAllBtiFramesTab(found.btiTab.id, true);
   const board = await searchBtiBoardFromFrames(found.btiTab);
   const probes = await probeBtiFramesDiagnostic(found.btiTab);
+  const scriptOk = inject.framesWithScript > 0;
   return {
     ok: true,
     btiTab: found.btiTab,
+    inject,
+    scriptOk,
+    scriptWarning: scriptOk
+      ? ''
+      : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.4.7 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
     board: {
       buttonCount: board.buttonCount || 0,
       eventCount: board.eventCount || 0,

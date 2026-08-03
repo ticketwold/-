@@ -135,6 +135,17 @@ async function verifyBtiSite() {
     chrome.runtime.sendMessage({ type: 'AUTOBET_SET_CONFIG', config: { btiSynced: true } });
     updateBtiSyncUi(true);
     logLine(`텐텐뱃 연결됨 (탭 ${res.btiTab.id})`, 'ok');
+    if (res.scriptWarning) {
+      logLine(res.scriptWarning, 'err');
+    } else if (res.inject) {
+      logLine(
+        `스크립트 — 상위 ${res.inject.topHasScript ? 'OK' : 'X'} · iframe ${res.inject.framesWithScript || 0}개`,
+        res.inject.framesWithScript > 0 ? 'ok' : 'err'
+      );
+      if (res.inject.errors?.length) {
+        logLine(`  주입오류: ${res.inject.errors.join(' · ')}`, 'err');
+      }
+    }
     logLine(
       `배당판 — 버튼 ${res.board?.buttonCount || 0} · 경기 ${res.board?.eventCount || 0}`,
       (res.board?.buttonCount || 0) > 0 ? 'ok' : 'info'
