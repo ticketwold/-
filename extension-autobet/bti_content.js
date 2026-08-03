@@ -23,17 +23,18 @@ function shouldSkipBtiContentFrame(href) {
   if (/recaptcha|google\.com\/recaptcha|hcaptcha|doubleclick|googlesyndication|player\.twitch|facebook\.com\/tr/i.test(u)) return true;
   if (/streambridge\.feedconstruct\.com\/player/i.test(u)) return true;
   if (/accounts-iframe|amazon-ivs|tracker\.html/i.test(u)) return true;
+  if (/livechatinc\.com|livechat\.com|liveplugins\.com|gls\.liveplugins/i.test(u)) return true;
   return false;
 }
 
 if (shouldSkipBtiContentFrame(location.href)) return;
 window.__btiContentLoaded = true;
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.6.0');
-  document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
+  document.documentElement.setAttribute('data-autobet-bti', '2.6.1');
+  document.documentElement.setAttribute('data-autobet-hook', '2.6.1');
 } catch (_) {}
 
-// BTI content script v2.6.0
+// BTI content script v2.6.1
 
 function parseOddsText(txt) {
   const t = String(txt || '').trim();
@@ -3022,7 +3023,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 })();
 
-console.log('[텐텐뱃 v2.6.0] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
+console.log('[텐텐뱃 v2.6.1] content script', window === window.top ? 'top' : 'iframe', (location.href || '').slice(0, 72));
 
 function buildBtiDiagPayload() {
   const href = location.href || '';
@@ -3059,8 +3060,8 @@ function installBtiDiagBridge() {
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.6.0');
-  document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
+  document.documentElement.setAttribute('data-autobet-bti', '2.6.1');
+  document.documentElement.setAttribute('data-autobet-hook', '2.6.1');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();

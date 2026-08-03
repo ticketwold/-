@@ -223,6 +223,12 @@ async function buildBtiFastFrameIds(tabId) {
   const tabUrl = await getTabUrl(tabId);
   const inPlay = typeof isX10InPlayShellUrl === 'function' && isX10InPlayShellUrl(tabUrl);
   try {
+    const domFrames = await findBtiSlipFrameIdsByDom(tabId);
+    for (const fid of domFrames) {
+      if (!ids.includes(fid)) ids.push(fid);
+    }
+  } catch (_) {}
+  try {
     const frames = await getAllFrames(tabId);
     for (const f of frames) {
       if (isJunkBtiFrameUrl(f.url)) continue;
@@ -628,7 +634,41 @@ function isJunkBtiFrameUrl(url) {
   if (/recaptcha|google\.com\/recaptcha|hcaptcha|doubleclick|googlesyndication|player\.twitch|facebook\.com\/tr/i.test(u)) return true;
   if (/streambridge\.feedconstruct\.com\/player/i.test(u)) return true;
   if (/accounts-iframe|amazon-ivs|tracker\.html/i.test(u)) return true;
+  if (/livechatinc\.com|livechat\.com|liveplugins\.com|gls\.liveplugins/i.test(u)) return true;
   return false;
+}
+
+async function findBtiSlipFrameIdsByDom(tabId) {
+  const frames = await getAllFrames(tabId);
+  const hits = [];
+  for (const f of frames) {
+    if (isJunkBtiFrameUrl(f.url)) continue;
+    try {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [f.frameId] },
+        func: () => {
+          const input = document.querySelector('#counter, input[class*="Counter"], input[placeholder*="베팅"], input[placeholder*="베팅금"]');
+          if (!input) return null;
+          const r = input.getBoundingClientRect?.();
+          if (!r || r.width < 2 || r.height < 2) return null;
+          const root = input.closest('[class*="betslip"], [class*="Betslip"]') || input.parentElement;
+          const txt = (root?.textContent || document.body?.textContent || '').replace(/\s+/g, ' ');
+          const at = txt.match(/@\s*(\d+\.\d{2,4})/);
+          const slipOdds = at ? parseFloat(at[1]) : 0;
+          const sel = document.querySelector('[class*="betInformation__title"]')?.textContent?.trim() || '';
+          return { slipOdds, sel };
+        }
+      });
+      const hit = res?.[0]?.result;
+      if (!hit) continue;
+      let score = 2000;
+      if (hit.slipOdds > 1.01) score += Math.min(hit.slipOdds, 50);
+      if (typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(f.url || '')) score += 500;
+      hits.push({ frameId: f.frameId, score, url: f.url || '' });
+    } catch (_) {}
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.map((h) => h.frameId);
 }
 
 async function injectAllBtiFramesTab(tabId, force = false) {

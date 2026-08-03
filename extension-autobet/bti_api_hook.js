@@ -6,8 +6,9 @@
   if (/recaptcha|google\.com\/recaptcha|hcaptcha|doubleclick|googlesyndication|player\.twitch|facebook\.com\/tr/i.test(href)) return;
   if (/streambridge\.feedconstruct\.com\/player/i.test(href)) return;
   if (/accounts-iframe|amazon-ivs|tracker\.html/i.test(href)) return;
+  if (/livechatinc\.com|livechat\.com|liveplugins\.com|gls\.liveplugins/i.test(href)) return;
   try {
-    document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
+    document.documentElement.setAttribute('data-autobet-hook', '2.6.1');
   } catch (_) {}
   window.__btiApiHooked = true;
   window.__btiApiSlip = null;
@@ -228,7 +229,7 @@
     window.__btiReadOdds = function(hint) { return autobetBridgeCall('readOdds', hint || {}); };
     window.__btiReadOdds.__autobetBridge = true;
     try {
-      document.documentElement.setAttribute('data-autobet-hook', '2.6.0');
+      document.documentElement.setAttribute('data-autobet-hook', '2.6.1');
     } catch (_) {}
   }
 })();
