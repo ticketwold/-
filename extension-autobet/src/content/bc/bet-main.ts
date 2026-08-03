@@ -1,0 +1,1 @@
+import './bet-main.legacy';
