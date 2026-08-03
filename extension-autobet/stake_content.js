@@ -13,7 +13,10 @@ function isStakeSportsPage() {
   }
 }
 
-function readLeg2Slip() {
+async function readLeg2Slip() {
+  if (typeof window.__stakeReadNativeSlipAsync === 'function') {
+    return await window.__stakeReadNativeSlipAsync();
+  }
   if (typeof window.__stakeReadNativeSlip === 'function') {
     return window.__stakeReadNativeSlip();
   }
@@ -96,8 +99,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg.type === 'READ_SLIP') {
-    sendResponse({ slip: readLeg2Slip() });
-    return false;
+    readLeg2Slip().then((slip) => sendResponse({ slip }));
+    return true;
   }
   if (msg.type === 'PROBE_POLY') {
     sendResponse({ ok: true, probe: probeLeg2BetUi() });
@@ -108,7 +111,10 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return true;
   }
   if (msg.type === 'ENSURE_POLY_PANEL') {
-    ensureLeg2Panel(msg.team || '').then(sendResponse);
+    (async () => {
+      if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
+      sendResponse(await ensureLeg2Panel(msg.team || ''));
+    })();
     return true;
   }
   if (msg.type === 'PLACE_BET') {

@@ -971,7 +971,15 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), 3500, 'Stake read');
+      if (attempt === 0 && typeof window.__stakeEnsureSlipOpen === 'function') {
+        await chrome.scripting.executeScript({
+          target: { tabId: polyTab.id, frameIds: [0] },
+          func: async () => {
+            if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
+          }
+        });
+      }
+      const res = await withTimeout(sendPoly(polyTab.id, { type: 'READ_SLIP' }, 0), 4500, 'Stake read');
       if (isTrustedBcSlip(res?.slip)) {
         lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
         return res.slip;
@@ -1000,8 +1008,11 @@ async function probeStakeSlipFrames(polyTab) {
     });
     const results = await chrome.scripting.executeScript({
       target: { tabId: polyTab.id, frameIds: [0] },
-      func: () => {
-        const slip = typeof window.__stakeReadNativeSlip === 'function' ? window.__stakeReadNativeSlip() : null;
+      func: async () => {
+        if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
+        const slip = typeof window.__stakeReadNativeSlipAsync === 'function'
+          ? await window.__stakeReadNativeSlipAsync()
+          : (typeof window.__stakeReadNativeSlip === 'function' ? window.__stakeReadNativeSlip() : null);
         const diag = typeof window.__stakeDiagReport === 'function' ? window.__stakeDiagReport() : null;
         return { slip, diag };
       }
@@ -1025,10 +1036,13 @@ async function probeStakeSlipFrames(polyTab) {
       frameId: 0,
       url,
       odds: null,
-      kind: diag?.hasBetBtn ? 'stake-no-odds' : 'stake-miss',
+      kind: diag?.hasPanel ? (diag?.oddsNodes?.length ? 'stake-panel-no-slip' : 'stake-no-odds') : (diag?.placeBtnCount ? 'stake-btn-only' : 'stake-miss'),
       inputs: diag?.inputCount || 0,
       len: diag?.textLen || 0,
-      rootCount: diag?.rootCount || 0
+      placeBtns: diag?.placeBtnCount || 0,
+      placeBtnText: diag?.placeBtnText || '',
+      oddsPreview: (diag?.oddsNodes || []).map((n) => n.odds).join(','),
+      panelSample: diag?.panelScore || ''
     }];
   } catch (e) {
     return [{ frameId: 0, url: '', odds: null, kind: e.message || 'stake-probe-fail' }];
