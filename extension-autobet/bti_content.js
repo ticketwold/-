@@ -274,22 +274,22 @@ let btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
 
 function finalizeBtiOdds(slip) {
   if (!(slip?.odds > 1.01)) return slip;
+  const src = slip.source || '';
   const trusted = slip.fromSlip === true
-    || slip.source === 'slip-display'
-    || slip.source === 'slip-card'
-    || slip.source === 'slip-latched'
-    || slip.source === 'board-live';
+    || src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
+    || src === 'board-live' || src === 'board' || src === 'board-emergency';
   if (!trusted) return null;
 
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
-  if (slip.source !== 'board-live') {
+  const fromSlipCard = src === 'slip-display' || src === 'slip-card' || src === 'slip-latched' || slip.fromSlip === true;
+  if (fromSlipCard) {
     btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
   }
   return {
     ...slip,
     odds: o,
-    fromSlip: slip.fromSlip !== false && slip.source !== 'board-live'
+    fromSlip: fromSlipCard
   };
 }
 
@@ -644,8 +644,12 @@ function readSlipOddsFromCardElement(card) {
   return enrichBtiSlip(slip);
 }
 
+function slipUiLikelyOpen() {
+  return isActiveBetslipOpen() || hasVisibleBetslipCards();
+}
+
 function readActiveSlipDisplayOdds() {
-  if (!isActiveBetslipOpen()) return null;
+  if (!slipUiLikelyOpen()) return null;
   const cards = getRealSlipCards();
   if (!cards.length) return null;
   for (let i = cards.length - 1; i >= 0; i--) {
@@ -656,7 +660,7 @@ function readActiveSlipDisplayOdds() {
 }
 
 function getRealSlipCards() {
-  if (!isActiveBetslipOpen()) return [];
+  if (!slipUiLikelyOpen()) return [];
   const selectors = [
     '[class*="betslip_fe_BetSecondary_bet"]',
     '[class*="BetSecondary_bet"]',
@@ -850,7 +854,7 @@ function probeBtiBetFrame() {
   const hasSlip = cards.length > 0 || (odds?.odds > 1);
   const r = input?.getBoundingClientRect?.();
   const hasInput = !!input && r && r.width > 0 && r.height > 0;
-  const slipOpen = isActiveBetslipOpen();
+  const slipOpen = slipUiLikelyOpen();
   return {
     hasSlip,
     hasInput,
@@ -1695,21 +1699,26 @@ function readEmergencyBoardOdds(hint = {}) {
 }
 
 function readBtiOdds(hint) {
-  if (!isActiveBetslipOpen()) {
+  const hintObj = hint || {};
+  if (!slipUiLikelyOpen()) {
     btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
     return null;
   }
 
   const wrap = (slip) => (slip?.odds > 1.01 ? finalizeBtiOdds(slip) : slip);
+  const hasCards = getRealSlipCards().length > 0;
 
   const slipDisplay = readActiveSlipDisplayOdds();
   if (slipDisplay?.odds > 1.01) return wrap(slipDisplay);
 
-  const slipFromCard = readBtiSlip({ preferActiveSlip: true });
-  if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
+  let slipFromCard = null;
+  if (hasCards) {
+    slipFromCard = readBtiSlip({ preferActiveSlip: true });
+    if (slipFromCard?.odds > 1.01) return wrap(slipFromCard);
+  }
 
-  if (btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
-    && Date.now() - btiOddsLatch.at < 30000) {
+  if (hasCards && btiOddsLatch.source === 'slip' && btiOddsLatch.odds > 1.01
+    && Date.now() - btiOddsLatch.at < 8000) {
     return wrap(enrichBtiSlip({
       odds: btiOddsLatch.odds,
       selectionText: (slipDisplay || slipFromCard)?.selectionText || '',
@@ -1718,6 +1727,33 @@ function readBtiOdds(hint) {
       fromSlip: true
     }));
   }
+
+  if (hintObj.excludeTeam || hintObj.polyTeam) {
+    const arbSlip = readBtiSlip({ ...hintObj, forArbPick: true });
+    if (arbSlip?.odds > 1.01) return wrap(arbSlip);
+  }
+
+  const board = readBtiBoardOdds(hintObj);
+  if (board?.odds > 1.01) return wrap(board);
+
+  if (hintObj.excludeTeam || hintObj.polyTeam) {
+    const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
+    if (plain?.odds > 1.01) return wrap(plain);
+  }
+
+  if (hasCards) {
+    const slip = readBtiSlip({ preferActiveSlip: true });
+    if (slip?.selectionText) {
+      const live = readLiveBoardOddsForSlip(slip);
+      if (live?.odds > 1.01) return wrap(live);
+    }
+  }
+
+  const any = readBtiBoardOdds({});
+  if (any?.odds > 1.01) return wrap(any);
+
+  const emergency = readEmergencyBoardOdds(hintObj);
+  if (emergency?.odds > 1.01) return wrap(emergency);
 
   return null;
 }
