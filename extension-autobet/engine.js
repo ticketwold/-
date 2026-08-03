@@ -1135,14 +1135,11 @@ function scoreBtiProbe(ping, slip) {
 function isBtiSlipOddsSource(slip) {
   if (!slip) return false;
   if (slip.fromSlip === true) return true;
-  if (slip.odds > 1.01 && slip.odds < 80) return true;
   const src = slip.source || slip.sourceKind || '';
-  return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
-    || src === 'board-live' || src === 'board' || src === 'board-emergency' || src === 'scan-any'
-    || src === 'board-slip-match' || src === 'brute-dom' || src === 'brute-inject'
-    || src === 'in-play-at' || src === 'inline-bootstrap'
-    || src === 'widgets-x-slip' || src === 'widgets-x-at'
-    || src === 'bti-api' || String(src).includes('bti-api');
+  if (/^(slip-display|slip-card|slip-latched|in-play-at|widgets-x-slip|widgets-x-at|board-slip-match)$/i.test(src)) return true;
+  if (src.includes('bti-api')) return true;
+  if (src === 'board-live' && slip.selectionText) return true;
+  return false;
 }
 
 async function ensureBtiApiHook(tabId, frameId) {
@@ -1600,7 +1597,7 @@ async function readBtiOddsOnce(btiTab, poly, opts = {}) {
 
   if (opts.forScan || opts.instant || opts.focusTab) {
     const brute = await bruteReadBtiOdds(btiTab.id);
-    if (brute?.odds > 1.01) return attachBtiFrameMeta(brute, brute._frameId);
+    if (brute?.odds > 1.01 && isBtiSlipOddsSource(brute)) return attachBtiFrameMeta(brute, brute._frameId);
   }
 
   return null;
@@ -2349,6 +2346,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   if (!(arbBti?.odds > 1.01)) {
     try {
       arbBti = await bruteReadBtiOdds(found.btiTab.id);
+      if (arbBti && !isBtiSlipOddsSource(arbBti)) arbBti = null;
     } catch (_) {}
   }
   const bti = arbBti;
@@ -2360,7 +2358,7 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   const polyUsd = (btiO > 1.01 && polyO > 1.01) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
 
   let reason = '';
-  if (btiO <= 1.01 && polyO > 1.01) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
+  if (btiO <= 1.01 && polyO > 1.01) reason = '텐텐뱃 라이브 슬립 배당 없음 — 배당 클릭 후 베팅카트 확인';
   else if (btiO > 1.01 && polyO <= 1.01) reason = poly?.odds > 1.01
     ? `${leg2Name} 배당 검증 실패 — 슬립/선택 배당 확인`
     : `${leg2Name} 배당 없음 — 카트에 배당 선택 후 스캔`;
