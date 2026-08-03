@@ -277,12 +277,14 @@ function finalizeBtiOdds(slip) {
   const src = slip.source || '';
   const trusted = slip.fromSlip === true
     || src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
-    || src === 'board-live' || src === 'board' || src === 'board-emergency';
+    || src === 'board-live' || src === 'board' || src === 'board-emergency'
+    || src === 'bti-api' || String(src).includes('bti-api');
   if (!trusted) return null;
 
   const o = Math.round(slip.odds * 1000) / 1000;
   const key = `${slip.selectionText || slip.teamLabel || ''}_${slip.marketKey || ''}_${slip.eventText || ''}`;
-  const fromSlipCard = src === 'slip-display' || src === 'slip-card' || src === 'slip-latched' || slip.fromSlip === true;
+  const fromSlipCard = src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
+    || src === 'bti-api' || String(src).includes('bti-api') || slip.fromSlip === true;
   if (fromSlipCard) {
     btiOddsLatch = { odds: o, source: 'slip', at: Date.now(), key };
   }

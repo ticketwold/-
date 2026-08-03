@@ -69,6 +69,9 @@ async function scrapeBtiFromAllFrames(tabId) {
   const toProbe = order.slice(0, BTI_MAX_FRAMES);
   const results = await Promise.all(toProbe.map(async (frameId) => {
     try {
+      await ensureBtiApiHook(tabId, frameId);
+      const apiHook = await readBtiApiSlipHook(tabId, frameId);
+      if (apiHook?.odds > 1.01) return slipToProbeResult(frameId, apiHook, null);
       const scraped = await withTimeout(injectReadBtiFrame(tabId, frameId), BTI_PROBE_MS, '텐텐뱃 스크랩');
       if (scraped?.odds > 1.01) return slipToProbeResult(frameId, scraped, null);
     } catch (_) {}
@@ -201,12 +204,24 @@ function scoreBtiProbe(ping, slip) {
 function isBtiSlipOddsSource(slip) {
   if (!slip) return false;
   if (slip.fromSlip === true) return true;
-  const src = slip.source || '';
+  const src = slip.source || slip.sourceKind || '';
   return src === 'slip-display' || src === 'slip-card' || src === 'slip-latched'
-    || src === 'board-live' || src === 'board' || src === 'board-emergency';
+    || src === 'board-live' || src === 'board' || src === 'board-emergency'
+    || src === 'bti-api' || String(src).includes('bti-api');
+}
+
+async function ensureBtiApiHook(tabId, frameId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      files: ['bti_api_hook.js'],
+      world: 'MAIN'
+    });
+  } catch (_) {}
 }
 
 async function probeBtiFrameInner(tabId, frameId, hint = {}) {
+  await ensureBtiApiHook(tabId, frameId);
   let ping = await sendBti(tabId, frameId, { type: 'PING' });
   if (!ping?.ok) {
     await ensureBtiScript(tabId, frameId);
@@ -233,6 +248,10 @@ async function probeBtiFrameInner(tabId, frameId, hint = {}) {
     if (!slip) {
       const scraped2 = await injectReadBtiFrame(tabId, frameId);
       if (scraped2?.odds > 1.01 && isBtiSlipOddsSource(scraped2)) slip = scraped2;
+    }
+    if (!slip) {
+      const apiHook = await readBtiApiSlipHook(tabId, frameId);
+      if (apiHook?.odds > 1.01) slip = apiHook;
     }
   }
 
@@ -309,6 +328,14 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
   if (!(merged.slip?.odds > 1.01)) {
     const scraped = await scrapeBtiFromAllFrames(tabId);
     if (scraped.slip?.odds > 1.01 && isBtiSlipOddsSource(scraped.slip)) return scraped;
+  }
+
+  if (!(merged.slip?.odds > 1.01)) {
+    const api = await fetchBtiSlipViaApi(tabId);
+    if (api.slip?.odds > 1.01) {
+      lastBtiFrame = { tabId, frameId: api.frameId };
+      return { slip: api.slip, frameId: api.frameId };
+    }
   }
 
   if (merged.slip?.odds > 1.01) lastBtiFrame = { tabId, frameId: merged.frameId };
@@ -391,8 +418,13 @@ async function readBtiOddsOnce(btiTab, poly) {
   if (!btiTab?.id) return null;
 
   const hint = poly ? btiHintFromPoly(poly) : {};
-  const merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true, ...hint }, true);
-  return merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip) ? merged.slip : null;
+  let merged = await readBtiFromAllFrames(btiTab.id, { preferActiveSlip: true, ...hint }, true);
+  if (merged.slip?.odds > 1.01 && isBtiSlipOddsSource(merged.slip)) return merged.slip;
+
+  const api = await fetchBtiSlipViaApi(btiTab.id, btiTab.url);
+  if (api.slip?.odds > 1.01) return api.slip;
+
+  return null;
 }
 
 async function sendBtiToFrames(tabId, frameIds, msg) {
