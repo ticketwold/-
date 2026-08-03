@@ -2,13 +2,14 @@
 
 const SNAP_TIMEOUT_MS = 40000;
 const SCAN_TIMEOUT_MS = 90000;
-const ODDS_POLL_MS = 250;
-const ODDS_POLL_ARMED_MS = 60;
-const AMOUNT_SYNC_INTERVAL_MS = 120;
+const ODDS_POLL_MS = 100;
+const ODDS_POLL_ARMED_MS = 100;
+const AMOUNT_SYNC_INTERVAL_MS = 100;
 const AMOUNT_SYNC_ARMED_MS = 80;
-const PANEL_LOOP_MS = 400;
+const PANEL_LOOP_MS = 200;
 const PANEL_LOOP_ARMED_MS = 16;
-const ODDS_GAP_FILL_MS = 5000;
+const ODDS_GAP_FILL_MS = 3000;
+const ODDS_INSTANT_FRESH_MS = 800;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
 const BTI_REAL_CHANGE_EPS = 0.03;
 
@@ -288,6 +289,11 @@ function clearKnownOdds(side = 'all') {
   }
 }
 
+function isKnownOddsFresh(side, now = Date.now()) {
+  if (side === 'bti') return lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_INSTANT_FRESH_MS;
+  return lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_INSTANT_FRESH_MS;
+}
+
 function isBtiSlipMissingReason(reason) {
   return !!(reason && /텐텐뱃.*(배당 없음|슬립)/.test(reason));
 }
@@ -373,7 +379,9 @@ function applyInstantOdds(msg) {
   }
   lastSynced.at = 0;
   amountSyncQueued = true;
-  updateStatusFromSnap(patchSnapFromKnown(liveSnap.ok ? liveSnap : {}, cfg), cfg);
+  const patched = patchSnapFromKnown(liveSnap.ok ? liveSnap : {}, cfg);
+  liveSnap = patched;
+  updateStatusFromSnap(patched, cfg);
   return true;
 }
 
@@ -406,7 +414,10 @@ function stabilizeSnap(snap, cfg) {
       || slipSource === 'brute-dom' || slipSource === 'brute-inject'
       || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
-    if (lastKnownOdds.btiO > 1 && next) {
+    const freshKnown = isKnownOddsFresh('bti', now);
+    if (freshKnown && lastKnownOdds.btiO > 1 && next && oddsDelta(lastKnownOdds.btiO, next) >= BTI_REAL_CHANGE_EPS) {
+      snap.btiO = lastKnownOdds.btiO;
+    } else if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
         snap.btiO = next;
@@ -433,7 +444,10 @@ function stabilizeSnap(snap, cfg) {
   if (snap.polyO > 1 && isScanPolySlip(snap.poly)) {
     const next = normalizeSportsOdds(snap.polyO);
     const fromSlipUi = isBcSlipUiSource(snap.poly);
-    if (lastKnownOdds.polyO > 1 && next) {
+    const freshKnown = isKnownOddsFresh('poly', now);
+    if (freshKnown && lastKnownOdds.polyO > 1 && next && oddsDelta(lastKnownOdds.polyO, next) >= BTI_REAL_CHANGE_EPS) {
+      snap.polyO = lastKnownOdds.polyO;
+    } else if (lastKnownOdds.polyO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.polyO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
         snap.polyO = next;
@@ -1054,11 +1068,10 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'ODDS_CHANGED') {
     applyInstantOdds(msg);
     amountSyncQueued = true;
-    refreshOddsLive();
-    if ($('preSync')?.checked) liveAmountSync(true);
     if (armedLocal && liveSnap?.ok) {
-      maybeStrikeOnSnap(liveSnap, getConfig(), 'odds-event');
+      maybeStrikeOnSnap(patchSnapFromKnown(liveSnap, getConfig()), getConfig(), 'odds-event');
     }
+    if ($('preSync')?.checked) liveAmountSync(true);
   }
   if (msg.type === 'BTI_STAKE_CHANGED') {
     lastSynced.at = 0;

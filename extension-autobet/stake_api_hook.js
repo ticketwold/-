@@ -26,7 +26,7 @@
     const id = obj.id || obj.outcomeId || '';
     const active = obj.active;
 
-    if (odds > 1.01 && odds < 50 && isSlipContext(keyPath)) {
+    if (odds > 1.01 && odds < 100 && isSlipContext(keyPath)) {
       if (active === false) return null;
       return {
         odds: Math.round(odds * 1000) / 1000,
@@ -77,7 +77,7 @@
         const o = outcomes[0];
         const odds = pm(o?.odds ?? o?.outcome?.odds ?? o?.price);
         const name = o?.outcome?.name || o?.name || o?.selectionName || '';
-        if (odds > 1.01 && odds < 50) {
+        if (odds > 1.01 && odds < 100) {
           return {
             odds: Math.round(odds * 1000) / 1000,
             teamLabel: String(name).slice(0, 80),

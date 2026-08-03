@@ -2,8 +2,9 @@
 (function () {
   'use strict';
 
-  const VER = 3;
-  let oddsLatch = { odds: 0, team: '', at: 0 };
+  const VER = 4;
+  const API_FRESH_MS = 2500;
+  const ODDS_MAX = 100;
 
   const SLIP_HINT = /bet\s*slip|betslip|betting\s*slip|single|multi|parlay|place\s*bet|total\s*odds|combined\s*odds|potential\s*payout|est\.?\s*payout|베팅\s*슬립|베팅하기|베팅\s*금액|배팅|총\s*배당|합계\s*배당|예상\s*당첨|당첨\s*금액|배당\s*금|multiplier/i;
   const PLACE_BET = /^(place\s*bet|bet\s*now|confirm(\s*bet)?|베팅하기|배팅하기|베팅|배팅|확인)$/i;
@@ -15,13 +16,13 @@
 
   function parseOdds(t) {
     const s = String(t || '').trim().replace(',', '.');
-    const m = s.match(/^(\d{1,2}\.\d{1,3})$/);
+    const m = s.match(/^(\d{1,3})(?:\.(\d{1,3}))?$/);
     if (m) {
-      const n = pm(m[1]);
-      if (n > 1.01 && n < 50) return Math.round(n * 1000) / 1000;
+      const n = pm(m[1] + (m[2] != null ? `.${m[2]}` : ''));
+      if (n > 1.01 && n < ODDS_MAX) return Math.round(n * 1000) / 1000;
     }
     const n = pm(s);
-    if (n > 1.01 && n < 50) return Math.round(n * 1000) / 1000;
+    if (n > 1.01 && n < ODDS_MAX) return Math.round(n * 1000) / 1000;
     return null;
   }
 
@@ -306,6 +307,8 @@
       if (/\bodds\b/i.test(cls)) score += 40;
       const row = scopeTextFromEl(node, 8);
       if (SLIP_HINT.test(row)) score += 50;
+      if (/total\s*odds|combined\s*odds|총\s*배당|합계\s*배당/i.test(row)) score += 120;
+      if (/potential\s*payout|예상\s*당첨|place\s*bet|베팅하기/i.test(row)) score -= 40;
       hits.push({ odds: o, score, cls: cls.slice(0, 40) });
     });
     hits.sort((a, b) => b.score - a.score);
@@ -360,46 +363,29 @@
     return '';
   }
 
-  function readApiSlip() {
+  function readApiSlip(maxAgeMs = API_FRESH_MS) {
     try {
       const api = window.__stakeApiSlip;
-      if (!(api?.odds > 1.01) || Date.now() - (api.capturedAt || 0) > 180000) return null;
+      if (!(api?.odds > 1.01) || Date.now() - (api.capturedAt || 0) > maxAgeMs) return null;
       return { ...api, sourceKind: 'stake-api-slip' };
     } catch (_) {
       return null;
     }
   }
 
-  function latchOdds(slip) {
-    if (!(slip?.odds > 1.01)) {
-      oddsLatch = { odds: 0, team: '', at: 0 };
-      return slip;
+  function pickBestSlipOdds(domHit, apiHit) {
+    if (domHit?.odds > 1.01 && !(apiHit?.odds > 1.01)) return domHit;
+    if (!(domHit?.odds > 1.01) && apiHit?.odds > 1.01) return apiHit;
+    if (!(domHit?.odds > 1.01)) return null;
+    const domAge = domHit.readAt || 0;
+    const apiAge = apiHit?.capturedAt || 0;
+    if (apiHit?.odds > 1.01 && apiAge > domAge && Math.abs(apiHit.odds - domHit.odds) >= 0.02) {
+      return { ...apiHit, method: 'api-slip-fresh' };
     }
-    const now = Date.now();
-    if (oddsLatch.odds > 1.01 && now - oddsLatch.at < 4000 && Math.abs(oddsLatch.odds - slip.odds) > 0.12) {
-      if (!slip.fromSlip && slip.method !== 'slip-odds-node') slip.odds = oddsLatch.odds;
-    }
-    oddsLatch = { odds: slip.odds, team: slip.teamLabel || '', at: now };
-    return slip;
+    return domHit;
   }
 
-  async function readStakeNativeSlipAsync() {
-    await ensureSlipOpen();
-    return readStakeNativeSlip();
-  }
-
-  function readStakeNativeSlip() {
-    const api = readApiSlip();
-    if (api) {
-      return latchOdds({
-        ...api,
-        source: 'stake',
-        sourceKind: 'stake-api-slip',
-        method: 'api-slip',
-        fromSlip: true
-      });
-    }
-
+  function buildSlipFromDom() {
     const panel = findBetSlipPanel();
     if (!panel?.root) return null;
 
@@ -410,7 +396,7 @@
     const stakeInput = findBestStakeInput(root, placeBtn);
     const stakeVal = stakeInput ? readFieldValue(stakeInput) : 0;
 
-    return latchOdds({
+    return {
       odds: oddsHit.odds,
       stake: stakeVal > 0 ? stakeVal : (oddsHit.stake || null),
       payout: oddsHit.payout || null,
@@ -421,8 +407,22 @@
       source: 'stake',
       sourceKind: 'stake-native-slip',
       method: oddsHit.method,
-      fromSlip: true
-    });
+      fromSlip: true,
+      readAt: Date.now()
+    };
+  }
+
+  async function readStakeNativeSlipAsync() {
+    await ensureSlipOpen();
+    return readStakeNativeSlip();
+  }
+
+  function readStakeNativeSlip() {
+    const dom = buildSlipFromDom();
+    const api = readApiSlip();
+    const picked = pickBestSlipOdds(dom, api);
+    if (!picked) return null;
+    return picked;
   }
 
   function setNativeValue(el, value) {
@@ -528,4 +528,10 @@
   window.__stakePlaceBet = placeStakeBet;
   window.__stakeDiagReport = diagReport;
   window.__stakeSlipReadVer = VER;
+
+  try {
+    window.addEventListener('__stakeSlipApiUpdate', () => {
+      try { window.dispatchEvent(new CustomEvent('__stakeSlipDomTick')); } catch (_) {}
+    });
+  } catch (_) {}
 })();

@@ -545,8 +545,9 @@ function isStrikeBcSlip(slip) {
   if (/storage|window-|script-json|all-text|board-selected/i.test(method)) return false;
   if (kind === 'bc-api' && slip.capturedAt && Date.now() - slip.capturedAt > 120000) return false;
   return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
+    || kind === 'stake-native-slip' || kind === 'stake-api-slip' || kind === 'stake-api'
     || (slip.fromPayout && slip.stake > 0)
-    || /shadow-slip|bet-btn|stake-input|near-stake|betby-outcome|coupon|api-cache/i.test(method);
+    || /shadow-slip|bet-btn|stake-input|near-stake|betby-outcome|coupon|api-cache|slip-odds-node|total-odds-label/i.test(method);
 }
 
 function isRelaxedBcSlip(slip) {
@@ -560,7 +561,9 @@ function scorePolySlip(slip) {
   if (!(slip?.odds > 1)) return -1;
   let score = 0;
   if (slip.sourceKind === 'bc-native-slip') score += 300;
+  else if (slip.sourceKind === 'stake-native-slip' || slip.sourceKind === 'stake-api-slip') score += 320;
   else if (slip.sourceKind === 'bc-api') score += 280;
+  else if (slip.sourceKind === 'stake-api') score += 280;
   else if (slip.fromPayout && !slip.pendingToWin) score += 200;
   else if (slip.sourceKind === 'sports-slip') score += 240;
   else if (slip.sourceKind === 'sports-board-selected') score -= 120;
@@ -570,8 +573,12 @@ function scorePolySlip(slip) {
   if (slip.fromPayout && slip.stake > 0) score += 150;
   if (slip.stake > 0) score += 30;
   if (slip.pendingToWin) score -= 40;
-  if (slip.odds > 8 && !slip.fromPayout) score -= 200;
-  else if (slip.odds > 5.5 && !slip.fromPayout) score -= 80;
+  const isStakeSlip = slip.source === 'stake'
+    || /stake-native-slip|stake-api-slip|stake-api/i.test(slip.sourceKind || '');
+  if (!isStakeSlip) {
+    if (slip.odds > 8 && !slip.fromPayout) score -= 200;
+    else if (slip.odds > 5.5 && !slip.fromPayout) score -= 80;
+  }
   if (slip.odds >= 1.05 && slip.odds <= 3.5) score += 15;
   return score;
 }

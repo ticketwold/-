@@ -13,18 +13,22 @@ function isStakeSportsPage() {
   }
 }
 
-async function readLeg2Slip() {
-  if (typeof window.__stakeReadNativeSlipAsync === 'function') {
-    return await window.__stakeReadNativeSlipAsync();
-  }
+function readLeg2SlipSync() {
   if (typeof window.__stakeReadNativeSlip === 'function') {
     return window.__stakeReadNativeSlip();
   }
   return null;
 }
 
+async function readLeg2Slip() {
+  if (typeof window.__stakeReadNativeSlipAsync === 'function') {
+    return await window.__stakeReadNativeSlipAsync();
+  }
+  return readLeg2SlipSync();
+}
+
 function probeLeg2BetUi() {
-  const slip = readLeg2Slip();
+  const slip = readLeg2SlipSync();
   const inputs = document.querySelectorAll('input[inputmode="decimal"], input[type="number"], input[type="text"]');
   let inputCount = 0;
   for (const inp of inputs) {
@@ -95,7 +99,7 @@ async function placeLeg2Bet(amount, opts = {}) {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'PING') {
-    sendResponse({ ok: true, site: predictionSiteId(), version: '1.0' });
+    sendResponse({ ok: true, site: predictionSiteId(), version: '1.1' });
     return false;
   }
   if (msg.type === 'READ_SLIP') {
@@ -133,13 +137,11 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 
   function slipKey(slip) {
     if (!slip) return '';
-    const o = slip.odds > 1 ? (Math.round(slip.odds * 100) / 100) : 0;
-    return `${o.toFixed(2)}_${slip.teamLabel || ''}`;
+    const o = slip.odds > 1 ? (Math.round(slip.odds * 1000) / 1000) : 0;
+    return `${o.toFixed(3)}_${slip.teamLabel || ''}`;
   }
 
-  function tick() {
-    if (!isStakeSportsPage()) return;
-    const slip = readLeg2Slip();
+  function publish(slip) {
     if (!slip?.odds || slip.odds <= 1) {
       if (last !== '') {
         last = '';
@@ -153,6 +155,11 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip }); } catch (_) {}
   }
 
+  function tick() {
+    if (!isStakeSportsPage()) return;
+    publish(readLeg2SlipSync());
+  }
+
   function schedule() {
     if (pending) return;
     pending = true;
@@ -162,11 +169,13 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (document.body) {
     document.addEventListener('click', schedule, true);
     document.addEventListener('input', schedule, true);
+    window.addEventListener('__stakeSlipDomTick', schedule);
+    window.addEventListener('__stakeSlipApiUpdate', schedule);
     new MutationObserver(schedule).observe(document.body, {
       subtree: true, childList: true, characterData: true,
       attributes: true, attributeFilter: ['class', 'value', 'aria-pressed', 'aria-selected']
     });
-    setInterval(tick, 250);
+    setInterval(tick, 16);
     tick();
   }
 })();
