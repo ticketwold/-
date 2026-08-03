@@ -13,6 +13,11 @@
 // ─ 금액 입력: input#counter (class: betslip_fe_CounterSecondary_input)
 // ─ 베팅 버튼: button.sportsbook-Button (텍스트: "베팅하기")
 
+(function() {
+'use strict';
+if (window.__btiContentLoaded) return;
+window.__btiContentLoaded = true;
+
 // BTI content script v2.24
 
 function parseOddsText(txt) {
@@ -2706,7 +2711,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 console.log('[텐텐뱃 v5] content script loaded');
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.4.8');
+  document.documentElement.setAttribute('data-autobet-bti', '2.4.9');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
 } catch (_) {}
+
+})();

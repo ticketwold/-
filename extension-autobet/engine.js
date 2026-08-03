@@ -538,30 +538,30 @@ async function probeBtiInjectStatus(tabId) {
 async function injectAllBtiFramesTab(tabId, force = false) {
   const frames = await getAllFrames(tabId);
   const count = frames.length;
-  const prev = btiAllInjectedFrames.get(tabId) || 0;
   const errors = [];
 
-  if (!force && prev >= count && prev > 0) {
-    const cached = await probeBtiInjectStatus(tabId);
-    if (cached.framesWithScript > 0) return { ok: true, skipped: true, errors, ...cached };
+  const probeBefore = await probeBtiInjectStatus(tabId);
+  const prev = btiAllInjectedFrames.get(tabId) || 0;
+  if (!force && prev >= count && prev > 0 && probeBefore.framesWithScript > 0) {
+    return { ok: true, skipped: true, errors, ...probeBefore };
   }
 
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [0] },
-      files: ['bti_content.js']
-    });
-  } catch (e) {
-    errors.push(`f0:${String(e?.message || e).slice(0, 100)}`);
-  }
+  const needFrames = frames.filter((f) => {
+    if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return false;
+    const hit = probeBefore.hits.find((h) => h.frameId === f.frameId);
+    return !hit?.has;
+  });
 
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ['bti_content.js']
-    });
-  } catch (e) {
-    errors.push(`all:${String(e?.message || e).slice(0, 100)}`);
+  for (const f of needFrames) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [f.frameId] },
+        files: ['bti_content.js']
+      });
+      btiScriptReady.add(`${tabId}:${f.frameId}`);
+    } catch (e) {
+      if (f.frameId === 0) errors.push(`f0:${String(e?.message || e).slice(0, 100)}`);
+    }
   }
 
   try {
@@ -576,7 +576,6 @@ async function injectAllBtiFramesTab(tabId, force = false) {
 
   btiAllInjectedFrames.set(tabId, count);
   btiScriptReady.add(`all:${tabId}`);
-  for (const f of frames) btiScriptReady.add(`${tabId}:${f.frameId}`);
 
   const probe = await probeBtiInjectStatus(tabId);
   if (probe.framesWithScript === 0) {
@@ -595,6 +594,16 @@ async function injectAllBtiFramesTab(tabId, force = false) {
 async function ensureBtiScript(tabId, frameId) {
   const key = `${tabId}:${frameId}`;
   if (btiScriptReady.has(key)) return;
+  try {
+    const probe = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => typeof window.__btiReadOdds === 'function'
+    });
+    if (probe?.[0]?.result) {
+      btiScriptReady.add(key);
+      return;
+    }
+  } catch (_) {}
   try {
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ['bti_content.js'] });
     btiScriptReady.add(key);
