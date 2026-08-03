@@ -108,7 +108,7 @@ async function verifyBtiSite() {
     status.textContent = '확인 중…';
     status.className = 'sync-badge';
   }
-  logLine('텐텐뱃 연결 확인 중…', 'info');
+  logLine('텐텐뱃 연결 확인 중… (스포츠 탭을 먼저 클릭하세요)', 'info');
   try {
     const res = await withTimeout(
       new Promise((resolve, reject) => {
@@ -154,21 +154,36 @@ async function verifyBtiSite() {
   }
 }
 
+async function findTabsViaBackground(leg2Pref) {
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: 'FIND_TABS', leg2: leg2Pref }, (response) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else if (!response) reject(new Error('탭 탐색 응답 없음'));
+        else if (!response.ok) reject(new Error(response.reason || '탭 탐색 실패'));
+        else resolve({ btiTab: response.btiTab, polyTab: response.polyTab });
+      });
+    }),
+    60000,
+    '탭 탐색'
+  );
+}
+
 async function syncLeg2Site() {
   if (leg2SyncBusy) return;
   leg2SyncBusy = true;
   const cfg = getConfig();
   saveConfig();
-  logLine(`${leg2PrefLabel(cfg.leg2)} 연결 중…`, 'info');
+  logLine(`${leg2PrefLabel(cfg.leg2)} 연결 중… (텐텐뱃·${leg2PrefShort(cfg.leg2)} 탭을 먼저 클릭하세요)`, 'info');
   $('syncBtn').disabled = true;
   try {
-    const found = await findTabs(cfg.leg2);
+    const found = await findTabsViaBackground(cfg.leg2);
     if (!found.btiTab) {
-      logLine('텐텐뱃(x10x10s) 탭을 열어주세요', 'err');
+      logLine('텐텐뱃 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 다시 [연결확인]', 'err');
       return;
     }
     if (!found.polyTab) {
-      logLine(`${leg2PrefLabel(cfg.leg2)} 탭을 열어주세요 — 스포츠 페이지`, 'err');
+      logLine(`${leg2PrefLabel(cfg.leg2)} 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 다시 [연결]`, 'err');
       return;
     }
     leg2Synced = true;

@@ -428,6 +428,179 @@ async function enrichTabUrls(tabs) {
   }));
 }
 
+const tabUrlProbeCache = new Map();
+const TAB_BIND_KEY = 'autoBetTabBind';
+let recentWebTabIds = [];
+
+function getRecentWebTabIds() {
+  return recentWebTabIds.slice();
+}
+
+function installRecentWebTabTracker() {
+  if (installRecentWebTabTracker._done || !chrome.tabs?.onActivated) return;
+  installRecentWebTabTracker._done = true;
+  const noteWebTab = (tab) => {
+    if (!tab?.id) return;
+    const url = tabEffectiveUrl(tab);
+    if (url && (isExtensionPageUrl(url) || /^chrome:|^edge:|^devtools:/i.test(url))) return;
+    recentWebTabIds = [tab.id, ...recentWebTabIds.filter((id) => id !== tab.id)].slice(0, 8);
+  };
+  chrome.tabs.onActivated.addListener(({ tabId }) => {
+    chrome.tabs.get(tabId).then(noteWebTab).catch(() => {});
+  });
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    chrome.tabs.query({ active: true, windowId }).then((tabs) => {
+      if (tabs[0]) noteWebTab(tabs[0]);
+    }).catch(() => {});
+  });
+}
+
+async function probeTabTopUrl(tabId) {
+  const cached = tabUrlProbeCache.get(tabId);
+  if (cached && Date.now() - cached.at < 20000) return cached.url;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => location.href
+    });
+    const url = String(results?.[0]?.result || '');
+    if (url && /^https?:/i.test(url)) {
+      tabUrlProbeCache.set(tabId, { url, at: Date.now() });
+      return url;
+    }
+  } catch (_) {}
+  return '';
+}
+
+async function resolveTabUrlEnhanced(tab) {
+  if (!tab) return '';
+  let url = tabEffectiveUrl(tab);
+  if (url && !isExtensionPageUrl(url)) return url;
+  if (!tab.id) return '';
+  url = await getTabUrl(tab.id);
+  if (url && !isExtensionPageUrl(url)) return url;
+  return probeTabTopUrl(tab.id);
+}
+
+async function loadTabBindings() {
+  try {
+    const data = await chrome.storage.local.get(TAB_BIND_KEY);
+    return data[TAB_BIND_KEY] || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function saveTabBindings(patch) {
+  const prev = await loadTabBindings();
+  await chrome.storage.local.set({ [TAB_BIND_KEY]: { ...prev, ...patch } });
+}
+
+async function tabStillExists(tabId) {
+  if (!tabId) return false;
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function tryBoundBtiTab(bindings, activeId) {
+  if (!bindings?.btiTabId || !(await tabStillExists(bindings.btiTabId))) return null;
+  try {
+    const tab = await chrome.tabs.get(bindings.btiTabId);
+    const score = await scoreBtiTabByPing(tab, activeId);
+    if (score >= 80) return tab;
+    const url = await resolveTabUrlEnhanced(tab);
+    if (isLeg1TabUrl(url) || scoreTabTitleForLeg1(tab) >= 40) return tab;
+  } catch (_) {}
+  return null;
+}
+
+async function tryBoundLeg2Tab(bindings, leg2Pref, activeId) {
+  if (!bindings?.leg2TabId || bindings.leg2Pref !== leg2Pref) return null;
+  if (!(await tabStillExists(bindings.leg2TabId))) return null;
+  try {
+    const tab = await chrome.tabs.get(bindings.leg2TabId);
+    const score = await scoreLeg2TabByPing(tab, leg2Pref, activeId);
+    if (score >= 80) return tab;
+    const url = await resolveTabUrlEnhanced(tab);
+    if (urlMatchesLeg2Pref(url, leg2Pref) || scoreTabTitleForLeg2(tab, leg2Pref) >= 40) return tab;
+  } catch (_) {}
+  return null;
+}
+
+async function tryRecentTabsForBti(recentIds, activeId) {
+  for (const tabId of recentIds) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (isSkippableProbeTab(tab)) continue;
+      const url = await resolveTabUrlEnhanced(tab);
+      if (url && isLeg2Url(url) && !isLeg1TabUrl(url) && scoreTabTitleForLeg1(tab) < 30) continue;
+      const titleScore = scoreTabTitleForLeg1(tab);
+      const pingScore = await scoreBtiTabByPing(tab, activeId);
+      const urlScore = isLeg1TabUrl(url) ? scoreLeg1Tab(url, activeId, tabId) : 0;
+      if (pingScore >= 80 || urlScore + titleScore >= 20 || titleScore >= 50) return tab;
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function scoreLeg2TabByPing(tab, leg2Pref, activeId) {
+  const tabId = tab.id;
+  let score = scoreTabTitleForLeg2(tab, leg2Pref);
+  const url = await resolveTabUrlEnhanced(tab);
+  if (url && !urlMatchesLeg2Pref(url, leg2Pref)) return 0;
+  if (url && isLeg1TabUrl(url) && !urlMatchesLeg2Pref(url, leg2Pref)) return 0;
+  if (tabId === activeId) score += 20;
+  if (url && isLeg2SportsUrl(url)) score += 35;
+  try {
+    await ensureLeg2Script(tabId, 0, url);
+    const ping = await withTimeout(sendPoly(tabId, { type: 'PING' }, 0), 1200, 'leg2 ping');
+    if (ping?.ok) score += 280;
+    const probe = await withTimeout(sendPoly(tabId, { type: 'PROBE_POLY' }, 0), 1400, 'leg2 probe');
+    if (probe?.probe?.hasPanel || probe?.probe?.slipOdds > 1) score += 120;
+    if (probe?.probe?.hasInput) score += 60;
+  } catch (_) {}
+  return score;
+}
+
+async function findLeg2TabByProbe(tabs, leg2Pref, activeId, recentIds = []) {
+  const tried = new Set();
+  const ordered = [];
+  for (const id of recentIds) {
+    if (!tried.has(id)) { tried.add(id); ordered.push(id); }
+  }
+  for (const tab of tabs) {
+    if (tab?.id && !tried.has(tab.id)) { tried.add(tab.id); ordered.push(tab.id); }
+  }
+
+  let best = null;
+  let bestScore = -1;
+  for (const tabId of ordered.slice(0, 28)) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (isSkippableProbeTab(tab)) continue;
+      const url = await resolveTabUrlEnhanced(tab);
+      if (url && isLeg1TabUrl(url) && !urlMatchesLeg2Pref(url, leg2Pref)) continue;
+      let score = scoreTabTitleForLeg2(tab, leg2Pref);
+      if (url && urlMatchesLeg2Pref(url, leg2Pref)) score += scoreLeg2Tab(url, activeId, tabId, leg2Pref);
+      if (score < 40) {
+        score = Math.max(score, await scoreLeg2TabByPing(tab, leg2Pref, activeId));
+      } else {
+        score = Math.max(score, await scoreLeg2TabByPing(tab, leg2Pref, activeId));
+      }
+      if (score > bestScore && score >= 50) {
+        bestScore = score;
+        best = tab;
+      }
+    } catch (_) {}
+  }
+  return best;
+}
+
 function leg2ScriptFile(url) {
   return leg2SiteKey(url) === 'stake' ? 'stake_content.js' : 'polymarket_content.js';
 }
@@ -493,39 +666,64 @@ async function scoreBtiTabByFrames(tabId, activeId) {
 
 async function scoreBtiTabByPing(tab, activeId) {
   const tabId = tab.id;
-  let score = 0;
-  const url = tabEffectiveUrl(tab) || await getTabUrl(tabId);
+  let score = scoreTabTitleForLeg1(tab);
+  const url = await resolveTabUrlEnhanced(tab);
   if (isLeg1TabUrl(url)) score += 220;
-  if (url && isLeg2Url(url) && !isLeg1TabUrl(url)) return 0;
+  if (url && isLeg2Url(url) && !isLeg1TabUrl(url) && scoreTabTitleForLeg1(tab) < 40) return 0;
   if (tabId === activeId) score += 35;
 
   const frames = await getAllFrames(tabId);
   const ordered = [...frames].sort((a, b) => scoreBtiFrameUrl(b.url || '') - scoreBtiFrameUrl(a.url || ''));
-  for (const f of ordered.slice(0, 8)) {
+  const frameIds = ordered.length ? ordered.map((f) => f.frameId) : [0];
+  for (const frameId of frameIds.slice(0, 10)) {
     try {
-      await ensureBtiScript(tabId, f.frameId);
-      const ping = await withTimeout(sendBti(tabId, f.frameId, { type: 'PING' }), 1100, 'ping');
+      await ensureBtiScript(tabId, frameId);
+      const ping = await withTimeout(sendBti(tabId, frameId, { type: 'PING' }), 1100, 'ping');
       if (ping?.ok) {
         score += 280 + Math.min(ping.buttonCount || 0, 80) + (ping.hasInput ? 120 : 0) + (ping.hasSlip ? 80 : 0);
-        if (score >= 250) return score;
+        if (score >= 120) return score;
       }
+    } catch (_) {}
+  }
+  if (!frames.length || (frames.length === 1 && !frames[0]?.url)) {
+    try {
+      await ensureBtiScript(tabId, 0);
+      const ping = await withTimeout(sendBti(tabId, 0, { type: 'PING' }), 1100, 'ping');
+      if (ping?.ok) score += 260;
     } catch (_) {}
   }
   return score;
 }
 
-async function findBtiTabByFrameProbe(tabs, activeId) {
-  const candidates = tabs.filter((tab) => {
-    if (!tab?.id || isSkippableProbeTab(tab)) return false;
-    const url = tabEffectiveUrl(tab);
-    if (url && isLeg2Url(url) && !isLeg1TabUrl(url)) return false;
-    return true;
-  });
+async function findBtiTabByFrameProbe(tabs, activeId, recentIds = []) {
+  const seen = new Set();
+  const candidates = [];
+  for (const id of recentIds) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      try {
+        const tab = await chrome.tabs.get(id);
+        if (tab?.id) candidates.push(tab);
+      } catch (_) {}
+    }
+  }
+  for (const tab of tabs) {
+    if (tab?.id && !seen.has(tab.id)) {
+      seen.add(tab.id);
+      candidates.push(tab);
+    }
+  }
 
-  const scored = await Promise.all(candidates.slice(0, 24).map(async (tab) => {
-    const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
+  const scored = await Promise.all(candidates.filter((tab) => {
+    if (!tab?.id || isSkippableProbeTab(tab)) return false;
+    return true;
+  }).slice(0, 30).map(async (tab) => {
+    const url = await resolveTabUrlEnhanced(tab);
+    if (url && isLeg2Url(url) && !isLeg1TabUrl(url) && scoreTabTitleForLeg1(tab) < 30) {
+      return { tab, score: 0 };
+    }
     const frameScore = await scoreBtiTabByFrames(tab.id, activeId);
-    let score = frameScore;
+    let score = frameScore + scoreTabTitleForLeg1(tab);
     if (isLeg1TabUrl(url)) score += 100;
     if (tab.id === activeId) score += 15;
     if (score < 120) {
@@ -536,68 +734,83 @@ async function findBtiTabByFrameProbe(tabs, activeId) {
   }));
 
   const best = scored
-    .filter((row) => row.score >= 120)
+    .filter((row) => row.score >= 80)
     .sort((a, b) => b.score - a.score)[0];
   return best?.tab || null;
 }
 
 async function findTabs(leg2Pref = 'bcgame') {
-  const [allTabs, leg1PatternTabs, leg2PatternTabs] = await Promise.all([
+  const [allTabs, leg1PatternTabs, leg2PatternTabs, bindings] = await Promise.all([
     chrome.tabs.query({}),
     queryTabsByUrlPatterns(leg1TabUrlPatterns()),
-    queryTabsByUrlPatterns(leg2TabUrlPatterns(leg2Pref))
+    queryTabsByUrlPatterns(leg2TabUrlPatterns(leg2Pref)),
+    loadTabBindings()
   ]);
   const tabs = await enrichTabUrls(await mergeTabs(allTabs, leg1PatternTabs, leg2PatternTabs));
+  const recentIds = getRecentWebTabIds();
   let btiTab = null;
   let btiBestScore = -1;
   const leg2Tabs = [];
   const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const activeId = activeTabs[0]?.id;
 
-  for (const tab of tabs) {
-    let url = tabEffectiveUrl(tab);
-    if (!url && tab?.id) url = await getTabUrl(tab.id);
-    if (url && urlMatchesLeg2Pref(url, leg2Pref)) leg2Tabs.push({ tab, url });
-    const leg1Score = url ? scoreLeg1Tab(url, activeId, tab.id) : -1;
-    if (leg1Score > btiBestScore) {
-      btiBestScore = leg1Score;
-      btiTab = tab;
-    }
-  }
+  btiTab = await tryBoundBtiTab(bindings, activeId);
+  if (!btiTab) btiTab = await tryRecentTabsForBti(recentIds, activeId);
 
-  if (!btiTab && leg1PatternTabs.length) {
-    for (const tab of leg1PatternTabs) {
-      const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
-      const leg1Score = scoreLeg1Tab(url, activeId, tab.id);
+  if (!btiTab) {
+    for (const tab of tabs) {
+      const url = await resolveTabUrlEnhanced(tab);
+      const leg1Score = (url ? scoreLeg1Tab(url, activeId, tab.id) : -1) + scoreTabTitleForLeg1(tab);
       if (leg1Score > btiBestScore) {
         btiBestScore = leg1Score;
         btiTab = tab;
       }
     }
+    if (!btiTab && leg1PatternTabs.length) {
+      for (const tab of leg1PatternTabs) {
+        const url = await resolveTabUrlEnhanced(tab);
+        const leg1Score = scoreLeg1Tab(url, activeId, tab.id) + scoreTabTitleForLeg1(tab);
+        if (leg1Score > btiBestScore) {
+          btiBestScore = leg1Score;
+          btiTab = tab;
+        }
+      }
+    }
+    if (!btiTab) {
+      btiTab = await findBtiTabByFrameProbe(tabs, activeId, recentIds);
+    }
   }
 
-  if (!btiTab) {
-    btiTab = await findBtiTabByFrameProbe(tabs, activeId);
+  for (const tab of tabs) {
+    const url = await resolveTabUrlEnhanced(tab);
+    if (url && urlMatchesLeg2Pref(url, leg2Pref)) leg2Tabs.push({ tab, url });
   }
 
-  let polyTab = null;
+  let polyTab = await tryBoundLeg2Tab(bindings, leg2Pref, activeId);
   let bestScore = -1;
   for (const { tab, url } of leg2Tabs) {
-    const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref);
-    if (score > bestScore) { bestScore = score; polyTab = tab; }
+    const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref) + scoreTabTitleForLeg2(tab, leg2Pref);
+    if (score > bestScore) { bestScore = score; polyTab = polyTab || tab; }
   }
 
   if (!polyTab && leg2PatternTabs.length) {
     for (const tab of leg2PatternTabs) {
-      const url = tabEffectiveUrl(tab) || await getTabUrl(tab.id);
-      const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref);
+      const url = await resolveTabUrlEnhanced(tab);
+      const score = scoreLeg2Tab(url, activeId, tab.id, leg2Pref) + scoreTabTitleForLeg2(tab, leg2Pref);
       if (score > bestScore) { bestScore = score; polyTab = tab; }
     }
   }
 
+  if (!polyTab) {
+    polyTab = await findLeg2TabByProbe(tabs, leg2Pref, activeId, recentIds);
+  }
+
+  if (btiTab?.id) saveTabBindings({ btiTabId: btiTab.id }).catch(() => {});
+  if (polyTab?.id) saveTabBindings({ leg2TabId: polyTab.id, leg2Pref }).catch(() => {});
+
   return {
-    btiTab: btiTab ? { id: btiTab.id, url: tabEffectiveUrl(btiTab) || btiTab.url || '' } : null,
-    polyTab: polyTab ? { id: polyTab.id, url: tabEffectiveUrl(polyTab) || polyTab.url || '' } : null
+    btiTab: btiTab ? { id: btiTab.id, url: (await resolveTabUrlEnhanced(btiTab)) || '' } : null,
+    polyTab: polyTab ? { id: polyTab.id, url: (await resolveTabUrlEnhanced(polyTab)) || '' } : null
   };
 }
 
@@ -847,9 +1060,12 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const found = await findTabs(leg2Pref);
   if (!found.btiTab) {
     const tabs = await chrome.tabs.query({});
-    const labels = [...new Set(tabs.map((t) => tabLabelForHint(t)).filter(Boolean))].slice(0, 6);
-    const hint = labels.length ? ` (탭 ${tabs.length}개 · ${labels.join(', ')})` : ` (탭 ${tabs.length}개)`;
-    return { ok: false, reason: `텐텐뱃(x10x10s) 스포츠 탭을 열어주세요${hint}` };
+    const labels = [...new Set(tabs.map((t) => tabLabelForHint(t)).filter(Boolean))].slice(0, 8);
+    const hint = labels.length ? ` (탭 ${tabs.length}개 · ${labels.join(' | ')})` : ` (탭 ${tabs.length}개)`;
+    return {
+      ok: false,
+      reason: `텐텐뱃 탭을 찾지 못했습니다 — 스포츠 페이지를 클릭한 뒤 [연결확인]${hint}`
+    };
   }
   const board = await searchBtiBoardFromFrames(found.btiTab);
   const probes = await probeBtiFramesDiagnostic(found.btiTab);

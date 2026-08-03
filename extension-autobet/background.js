@@ -102,6 +102,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'FIND_TABS') {
+    findTabs(msg.leg2 || 'bcgame')
+      .then((found) => sendResponse({ ok: true, ...found }))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '탭 탐색 실패' }));
+    return true;
+  }
+
   if (msg.type === 'OPEN_AUTOBET_PANEL') {
     openPanel().then((id) => sendResponse({ ok: true, windowId: id })).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -148,5 +155,6 @@ chrome.runtime.onStartup.addListener(() => {
 
 loadConfig().then(() => {
   console.log('[자동배팅] background — 별도 창 패널');
+  if (typeof installRecentWebTabTracker === 'function') installRecentWebTabTracker();
   if (armed) openPanel().catch(() => {});
 });

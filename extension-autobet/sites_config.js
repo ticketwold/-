@@ -108,8 +108,30 @@ function tabLabelForHint(tab) {
     try { return new URL(u).hostname; } catch (_) {}
   }
   const title = String(tab?.title || '').trim();
-  if (title && !/^chrome/i.test(title)) return title.slice(0, 36);
+  if (title) return title.slice(0, 40);
+  if (tab?.id) return `#${tab.id}`;
   return '';
+}
+
+function scoreTabTitleForLeg1(tab) {
+  const title = String(tab?.title || '');
+  if (!title) return 0;
+  let score = 0;
+  if (/x10x10|10x10|텐텐|tenten|live8588|fxf774/i.test(title)) score += 65;
+  if (/스포츠|sports|sport/i.test(title)) score += 12;
+  return score;
+}
+
+function scoreTabTitleForLeg2(tab, pref) {
+  const title = String(tab?.title || '');
+  if (!title) return 0;
+  if (pref === 'stake') {
+    if (/stake/i.test(title)) return /sports|스포츠|sport/i.test(title) ? 72 : 52;
+  }
+  if (pref === 'bcgame') {
+    if (/bc\.?game|bcgame/i.test(title)) return /sports|스포츠|sport/i.test(title) ? 68 : 48;
+  }
+  return 0;
 }
 
 function isWrapperUrl(url) {
