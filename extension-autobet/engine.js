@@ -7,6 +7,7 @@ let lastBtiBoardFrame = null;
 let lastBcLeg2Frame = null;
 let polyScriptReady = new Set();
 let btiScriptReady = new Set();
+const btiAllInjectedFrames = new Map();
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -228,7 +229,7 @@ async function rankBtiFramesByPing(tabId, frameIds, limit = 12) {
   const results = await Promise.all(allIds.map(async (frameId) => {
     try {
       await ensureBtiScript(tabId, frameId);
-      const ping = await withTimeout(sendBti(tabId, frameId, { type: 'PING' }), 300, 'ping');
+      const ping = await withTimeout(sendBti(tabId, frameId, { type: 'PING' }), 1200, 'ping');
       if (!ping?.ok) return { frameId, score: 0 };
       let score = (ping.buttonCount || 0)
         + (ping.slipOdds > 1.01 ? 320 : 0)
@@ -256,7 +257,7 @@ async function prioritizeBtiFrameIds(tabId, frameIds, limit = 12) {
 async function readBtiOddsInstant(tabId, hint = {}) {
   if (!tabId) return null;
   const readHint = { preferActiveSlip: true, ...hint };
-  const frameIds = [];
+  let frameIds = [];
   if (lastBtiSlipFrame?.tabId === tabId) frameIds.push(lastBtiSlipFrame.frameId);
   if (lastBtiFrame?.tabId === tabId && !frameIds.includes(lastBtiFrame.frameId)) frameIds.push(lastBtiFrame.frameId);
   if (!frameIds.length) {
@@ -437,14 +438,22 @@ function sendPoly(tabId, msg, frameId = 0) {
 }
 
 async function injectAllBtiFramesTab(tabId) {
-  const key = `all:${tabId}`;
-  if (btiScriptReady.has(key)) return;
+  const frames = await getAllFrames(tabId);
+  const count = frames.length;
+  const prev = btiAllInjectedFrames.get(tabId) || 0;
+  if (prev >= count && prev > 0) return;
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['bti_content.js']
     });
-    btiScriptReady.add(key);
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['bti_api_hook.js'],
+      world: 'MAIN'
+    });
+    btiAllInjectedFrames.set(tabId, count);
+    btiScriptReady.add(`all:${tabId}`);
   } catch (_) {}
 }
 
@@ -1174,6 +1183,7 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
 
 async function verifyBtiConnection(leg2Pref = 'bcgame') {
   const found = await findTabs(leg2Pref);
+  if (found.btiTab?.id) await injectAllBtiFramesTab(found.btiTab.id);
   if (!found.btiTab) {
     const tabs = await enumerateAllTabs();
     return {
@@ -1197,6 +1207,7 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
 
 async function probeBtiFramesDiagnostic(btiTab) {
   if (!btiTab?.id) return [];
+  await injectAllBtiFramesTab(btiTab.id);
   const frames = await getAllFrames(btiTab.id);
   return Promise.all(frames.slice(0, 20).map(async (f) => {
     if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return null;
@@ -1228,6 +1239,7 @@ async function probeBtiFramesDiagnostic(btiTab) {
 }
 
 async function bruteReadBtiOdds(tabId) {
+  await injectAllBtiFramesTab(tabId);
   const frames = await getAllFrames(tabId);
   const sorted = [...frames].sort((a, b) => {
     const sa = (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(a.url) ? 1000 : 0) + scoreBtiFrameUrl(a.url || '');

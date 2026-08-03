@@ -577,6 +577,9 @@ function isStrikeBcSlip(slip) {
 function isRelaxedBcSlip(slip) {
   if (!(slip?.odds > 1.01 && slip.odds <= 8)) return false;
   if (slip.sourceKind === 'sports-text') return false;
+  const kind = slip.sourceKind || '';
+  if (kind === 'stake-native-slip' || kind === 'stake-api-slip' || kind === 'stake-api') return true;
+  if (slip.source === 'stake' && slip.fromSlip) return true;
   return !!(slip.hasInput || slip.inputCount > 0 || slip.stake > 0 || slip.fromPayout || slip.method);
 }
 
@@ -996,6 +999,27 @@ async function injectStakeSlipRead(tabId) {
   }
 }
 
+async function readStakeDirectSlip(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['stake_slip_read.js', 'stake_content.js']
+    });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      func: async () => {
+        if (typeof window.__stakeEnsureSlipOpen === 'function') await window.__stakeEnsureSlipOpen();
+        if (typeof window.__stakeReadNativeSlipAsync === 'function') return await window.__stakeReadNativeSlipAsync();
+        if (typeof window.__stakeReadNativeSlip === 'function') return window.__stakeReadNativeSlip();
+        return null;
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function readStakeSportsSlip(polyTab, opts = {}) {
   if (!polyTab?.id) return null;
   const instant = opts.instant === true;
@@ -1022,6 +1046,13 @@ async function readStakeSportsSlip(polyTab, opts = {}) {
   const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])].slice(0, 14);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const direct = await readStakeDirectSlip(polyTab.id);
+    const directHit = acceptBcSlipForScan(direct) || (isTrustedBcSlip(direct) ? direct : null);
+    if (directHit?.odds > 1.01) {
+      lastBcLeg2Frame = { tabId: polyTab.id, frameId: 0 };
+      return mergePolySlipWithCache(polyTab.id, directHit);
+    }
+
     for (const frameId of frameIds) {
       try {
         if (frameId === 0) {

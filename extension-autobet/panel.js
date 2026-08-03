@@ -24,7 +24,7 @@ function isBcSlipUiSource(slip) {
   if (slip.source === 'stake') return true;
   const kind = slip.sourceKind || '';
   return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
-    || kind === 'stake-native-slip' || kind === 'stake-api';
+    || kind === 'stake-native-slip' || kind === 'stake-api-slip' || kind === 'stake-api';
 }
 
 function isScanPolySlip(slip) {
