@@ -95,6 +95,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'VERIFY_BTI') {
+    verifyBtiConnection(msg.leg2 || 'bcgame')
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ ok: false, reason: e?.message || '텐텐뱃 연결확인 실패' }));
+    return true;
+  }
+
   if (msg.type === 'OPEN_AUTOBET_PANEL') {
     openPanel().then((id) => sendResponse({ ok: true, windowId: id })).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

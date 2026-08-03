@@ -711,6 +711,25 @@ async function searchBtiBoardFromFrames(btiTab, query = '') {
   return scored[0] || { ok: false, events: [], hits: [], hitCount: 0, buttonCount: 0, eventCount: 0 };
 }
 
+async function verifyBtiConnection(leg2Pref = 'bcgame') {
+  const found = await findTabs(leg2Pref);
+  if (!found.btiTab) {
+    return { ok: false, reason: '텐텐뱃(x10x10s) 스포츠 탭을 열어주세요' };
+  }
+  const board = await searchBtiBoardFromFrames(found.btiTab);
+  const probes = await probeBtiFramesDiagnostic(found.btiTab);
+  return {
+    ok: true,
+    btiTab: found.btiTab,
+    board: {
+      buttonCount: board.buttonCount || 0,
+      eventCount: board.eventCount || 0,
+      hitCount: board.hitCount || 0
+    },
+    probes: probes.slice(0, 8)
+  };
+}
+
 async function probeBtiFramesDiagnostic(btiTab) {
   if (!btiTab?.id) return [];
   const frames = await getAllFrames(btiTab.id);
@@ -1602,14 +1621,15 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   }
   const bti = arbBti;
 
-  const polyO = polyOddsForScan(poly);
-  const btiO = arbBti?.odds > 1.01 ? normalizeSportsOdds(arbBti.odds) : null;
-  const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
-  const polyUsd = (btiO && polyO) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
+  const polyOVal = polyOddsForScan(poly);
+  const btiO = arbBti?.odds > 1.01 ? normalizeSportsOdds(arbBti.odds) : 0;
+  const polyO = polyOVal > 1.01 ? polyOVal : 0;
+  const profit = (btiO > 1.01 && polyO > 1.01) ? calcProfit(btiO, polyO) : null;
+  const polyUsd = (btiO > 1.01 && polyO > 1.01) ? calcPolyBetUsd(btiBetKrw, btiO, polyO, usdRate) : 0;
 
   let reason = '';
-  if (!btiO && polyO) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
-  else if (btiO && !polyO) reason = poly?.odds > 1.01
+  if (btiO <= 1.01 && polyO > 1.01) reason = '텐텐뱃 배당 없음 — 스포츠 페이지·배당 클릭 확인';
+  else if (btiO > 1.01 && polyO <= 1.01) reason = poly?.odds > 1.01
     ? `${leg2Name} 배당 검증 실패 — 슬립/선택 배당 확인`
     : `${leg2Name} 배당 없음 — 카트에 배당 선택 후 스캔`;
 
