@@ -938,6 +938,7 @@ async function getSnap(cfg, progressLabel, opts = {}) {
     leg2Synced: true,
     fastScan: opts.connectLight ? true : (opts.focusTab ? false : (opts.fastScan !== false)),
     instant: opts.instant === true,
+    found: tabCache || opts.found || null,
     ...opts
   };
   const timeoutMs = opts.focusTab ? SCAN_TIMEOUT_MS : SNAP_TIMEOUT_MS;

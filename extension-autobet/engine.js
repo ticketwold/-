@@ -218,6 +218,41 @@ async function readBtiOddsFromFrame(tabId, frameId, readHint, timeoutMs = BTI_RE
   return null;
 }
 
+async function rankBtiFramesByPing(tabId, frameIds, limit = 12) {
+  await injectAllBtiFramesTab(tabId);
+  const frames = await getAllFrames(tabId);
+  const allIds = [...new Set([
+    ...frameIds,
+    ...frames.map((f) => f.frameId)
+  ])].slice(0, Math.max(limit, 24));
+  const results = await Promise.all(allIds.map(async (frameId) => {
+    try {
+      await ensureBtiScript(tabId, frameId);
+      const ping = await withTimeout(sendBti(tabId, frameId, { type: 'PING' }), 300, 'ping');
+      if (!ping?.ok) return { frameId, score: 0 };
+      let score = (ping.buttonCount || 0)
+        + (ping.slipOdds > 1.01 ? 320 : 0)
+        + (ping.hasInput ? 220 : 0)
+        + (ping.hasSlip ? 160 : 0);
+      if (/widgets-x/i.test(ping.href || '')) score += 80;
+      return { frameId, score };
+    } catch (_) {
+      return { frameId, score: 0 };
+    }
+  }));
+  return results
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((r) => r.frameId);
+}
+
+async function prioritizeBtiFrameIds(tabId, frameIds, limit = 12) {
+  const pingFirst = await rankBtiFramesByPing(tabId, frameIds, limit);
+  if (!pingFirst.length) return frameIds;
+  const rest = frameIds.filter((id) => !pingFirst.includes(id));
+  return [...pingFirst, ...rest];
+}
+
 async function readBtiOddsInstant(tabId, hint = {}) {
   if (!tabId) return null;
   const readHint = { preferActiveSlip: true, ...hint };
@@ -279,6 +314,9 @@ function polyOddsForScan(poly) {
     return normalizeSportsOdds(poly.odds);
   }
   if (isTrustedBcSlip(poly)) return normalizeSportsOdds(poly.odds);
+  if (typeof isRelaxedBcSlip === 'function' && isRelaxedBcSlip(poly)) {
+    return normalizeSportsOdds(poly.odds);
+  }
   return null;
 }
 
@@ -396,6 +434,18 @@ function sendPoly(tabId, msg, frameId = 0) {
       resolve(chrome.runtime.lastError ? null : res);
     });
   });
+}
+
+async function injectAllBtiFramesTab(tabId) {
+  const key = `all:${tabId}`;
+  if (btiScriptReady.has(key)) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['bti_content.js']
+    });
+    btiScriptReady.add(key);
+  } catch (_) {}
 }
 
 async function ensureBtiScript(tabId, frameId) {
@@ -1280,6 +1330,7 @@ function attachBtiFrameMeta(slip, frameId) {
 
 async function readBtiOddsOnce(btiTab, poly, opts = {}) {
   if (!btiTab?.id) return null;
+  await injectAllBtiFramesTab(btiTab.id);
   const hint = buildBtiReadHint(poly, opts);
   const deep = opts.deepScan === true || opts.focusTab === true || opts.fastScan === false;
 
@@ -1288,11 +1339,10 @@ async function readBtiOddsOnce(btiTab, poly, opts = {}) {
     if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
     hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: true });
     if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
-    return null;
+  } else {
+    let hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: true });
+    if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
   }
-
-  let hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: true });
-  if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
 
   if (deep) {
     try {
@@ -1300,11 +1350,13 @@ async function readBtiOddsOnce(btiTab, poly, opts = {}) {
       if (merged.slip?.odds > 1.01) return attachBtiFrameMeta(merged.slip, merged.frameId);
     } catch (_) {}
 
-    hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: false });
+    let hit = await readBtiOddsFast(btiTab.id, { ...hint, fastScan: false });
     if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
+  }
 
-    hit = await bruteReadBtiOdds(btiTab.id);
-    if (hit?.odds > 1.01) return attachBtiFrameMeta(hit, hit._frameId);
+  if (opts.forScan || opts.instant || opts.focusTab) {
+    const brute = await bruteReadBtiOdds(btiTab.id);
+    if (brute?.odds > 1.01) return attachBtiFrameMeta(brute, brute._frameId);
   }
 
   return null;
@@ -1974,6 +2026,12 @@ async function readSnapshot(leg2Pref, btiBetKrw, usdRate, opts = {}) {
   }
 
   const found = await findTabs(leg2Pref);
+  if (opts.found?.btiTab?.id) {
+    found.btiTab = opts.found.btiTab;
+  }
+  if (opts.found?.polyTab?.id) {
+    found.polyTab = opts.found.polyTab;
+  }
   if (!found.btiTab && !found.polyTab) {
     return { ok: false, reason: `x10x10s + ${leg2Name} 탭을 열어주세요`, found };
   }
