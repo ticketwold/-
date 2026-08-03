@@ -315,6 +315,36 @@ function isSportscenterBetslipUrl(url) {
   return /\/api\/sportscenter\/betslip/i.test(String(url || ''));
 }
 
+function sportscenterBetslipPathPrefix(url) {
+  const href = String(url || '');
+  const m = href.match(/^(https?:\/\/[^?#]+?)(\/in-play\/[^?#]*?)\/api\/sportscenter\/betslip/i);
+  if (m) return m[2];
+  try {
+    const p = new URL(href).pathname;
+    const pm = p.match(/^(.*)\/api\/sportscenter\/betslip/i);
+    if (pm) return pm[1];
+  } catch (_) {}
+  return '';
+}
+
+function resolveBtiSlipApiPaths(url) {
+  const paths = [];
+  const prefix = sportscenterBetslipPathPrefix(url);
+  if (prefix) {
+    paths.push(`${prefix}/api/sportscenter/betslip`);
+    paths.push(`${prefix}/api/sportscenter/betslip/get`);
+    paths.push(`${prefix}/api/sportscenter/slip`);
+  }
+  for (const p of [
+    '/api/sportscenter/betslip',
+    '/api/sportscenter/betslip/get',
+    '/api/sportscenter/slip'
+  ]) {
+    if (!paths.includes(p)) paths.push(p);
+  }
+  return paths;
+}
+
 function isWidgetsXBetslipUrl(url) {
   return /widgets-x|betslip-root|sportscenter\/betslip/i.test(url || '');
 }

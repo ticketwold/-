@@ -104,6 +104,9 @@ function parseBtiApiSlipData(data) {
   return walk(data, 0);
 }
 
+const btiApiFetchCooldown = new Map();
+const BTI_API_FETCH_COOLDOWN_MS = 8000;
+
 async function fetchBtiJsonInFrame(tabId, frameId, path) {
   try {
     const via = await sendBti(tabId, frameId, {
@@ -117,7 +120,19 @@ async function fetchBtiJsonInFrame(tabId, frameId, path) {
     target: { tabId, frameIds: [frameId] },
     world: 'MAIN',
     func: async (p) => {
-      const fetchUrl = p.startsWith('http') ? p : (location.origin.replace(/\/$/, '') + p);
+      let fetchUrl = p;
+      if (!String(p).startsWith('http')) {
+        const pathPart = String(p).startsWith('/') ? p : '/' + p;
+        const href = location.href || '';
+        const m = href.match(/^(https?:\/\/[^?#]+?)(\/in-play\/[^?#]*?)\/api\/sportscenter\/betslip/i);
+        if (m && /^\/api\/sportscenter\//i.test(pathPart)) {
+          fetchUrl = m[1] + m[2] + pathPart;
+        } else if (pathPart.includes('/api/sportscenter/')) {
+          fetchUrl = location.origin.replace(/\/$/, '') + pathPart;
+        } else {
+          fetchUrl = location.origin.replace(/\/$/, '') + pathPart;
+        }
+      }
       const res = await fetch(fetchUrl, { credentials: 'include', cache: 'no-store' });
       if (!res.ok) return { error: String(res.status) };
       return await res.json();
@@ -156,15 +171,33 @@ async function readBtiApiSlipHook(tabId, frameId) {
   }
 }
 
-async function fetchBtiSlipViaApi(tabId) {
+async function fetchBtiSlipViaApi(tabId, opts = {}) {
+  const now = Date.now();
+  const last = btiApiFetchCooldown.get(tabId) || 0;
+  if (!opts.force && now - last < BTI_API_FETCH_COOLDOWN_MS) {
+    return { slip: null, frameId: 0 };
+  }
+  btiApiFetchCooldown.set(tabId, now);
+
+  const frameUrlMap = await getFrameUrlMap(tabId);
   const order = await orderBtiFrameIds(tabId);
-  const frames = order.slice(0, 4);
+  const apiFrames = order.filter((fid) => {
+    const url = frameUrlMap[fid] || '';
+    return (typeof isSportscenterBetslipUrl === 'function' && isSportscenterBetslipUrl(url))
+      || (typeof isWidgetsXBetslipUrl === 'function' && isWidgetsXBetslipUrl(url));
+  });
+  const frames = (apiFrames.length ? apiFrames : order).slice(0, 3);
+
   for (const frameId of frames) {
     const hooked = await readBtiApiSlipHook(tabId, frameId);
     if (hooked?.odds > 1.01) return { slip: hooked, frameId };
   }
-  const paths = BTI_API_SLIP_PATHS.slice(0, 3);
+
   for (const frameId of frames) {
+    const frameUrl = frameUrlMap[frameId] || '';
+    const paths = typeof resolveBtiSlipApiPaths === 'function'
+      ? resolveBtiSlipApiPaths(frameUrl).slice(0, 3)
+      : BTI_API_SLIP_PATHS.slice(0, 2);
     await ensureBtiScript(tabId, frameId);
     for (const path of paths) {
       try {
@@ -334,10 +367,12 @@ async function readBtiOddsFast(tabId, hint = {}) {
     }
   }
 
-  try {
-    const api = await withTimeout(fetchBtiSlipViaApi(tabId), fast ? 3000 : 5000, 'BTI API');
-    if (api.slip?.odds > 1.01) return api.slip;
-  } catch (_) {}
+  if (!readHint.forScan) {
+    try {
+      const api = await withTimeout(fetchBtiSlipViaApi(tabId), fast ? 3000 : 5000, 'BTI API');
+      if (api.slip?.odds > 1.01) return api.slip;
+    } catch (_) {}
+  }
 
   return null;
 }

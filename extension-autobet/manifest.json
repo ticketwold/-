@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 자동배팅",
-  "version": "2.5.5",
+  "version": "2.5.6",
   "description": "텐텐뱃·BC.Game·Stake.com 양방 자동배팅 — 배당 스캔·금액 동기화",
   "incognito": "spanning",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom"],

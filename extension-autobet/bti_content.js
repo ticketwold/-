@@ -2791,7 +2791,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'FETCH_BTI_JSON') {
-    const fetchUrl = msg.url || (location.origin.replace(/\/$/, '') + (msg.path || ''));
+    let fetchUrl = msg.url || '';
+    if (!fetchUrl) {
+      const path = String(msg.path || '');
+      const pathPart = path.startsWith('/') ? path : '/' + path;
+      if (pathPart.includes('/in-play/') && pathPart.includes('/api/sportscenter/')) {
+        fetchUrl = location.origin.replace(/\/$/, '') + pathPart;
+      } else {
+        const href = location.href || '';
+        const m = href.match(/^(https?:\/\/[^?#]+?)(\/in-play\/[^?#]*?)\/api\/sportscenter\/betslip/i);
+        if (m && /^\/api\/sportscenter\//i.test(pathPart)) {
+          fetchUrl = m[1] + m[2] + pathPart;
+        } else {
+          fetchUrl = location.origin.replace(/\/$/, '') + pathPart;
+        }
+      }
+    }
     fetch(fetchUrl, { credentials: 'include' })
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status) + ' @ ' + fetchUrl);
@@ -3028,7 +3043,7 @@ function installMainWorldBtiBridge() {
 }
 
 try {
-  document.documentElement.setAttribute('data-autobet-bti', '2.5.5');
+  document.documentElement.setAttribute('data-autobet-bti', '2.5.6');
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
   window.__btiDiag = () => buildBtiDiagPayload();
