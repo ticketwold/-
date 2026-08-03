@@ -2569,11 +2569,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 (function startBtiObserver() {
   let lastOddsKey = '';
   let pending = false;
+  let suppressReadUntil = 0;
 
   function oddsKey(slip) {
     if (!slip?.odds || slip.odds <= 1) return '';
-    const o = Math.round(slip.odds * 100) / 100;
-    return `${o.toFixed(2)}_${slip.marketKey || ''}_${slip.selectionText || ''}_${slip.teamLabel || ''}`;
+    const o = Math.round(slip.odds * 1000) / 1000;
+    return `${o.toFixed(3)}_${slip.marketKey || ''}_${slip.selectionText || ''}_${slip.teamLabel || ''}`;
+  }
+
+  function signalCartChange() {
+    lastOddsKey = '';
+    btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
+    try {
+      chrome.runtime.sendMessage({
+        type: 'ODDS_CHANGED',
+        source: 'bti',
+        slip: null,
+        suspended: true,
+        cartChange: true
+      });
+    } catch (e) {}
   }
 
   function stabilizeBtiSlip(slip) {
@@ -2581,6 +2596,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   function checkAndNotify() {
+    if (Date.now() < suppressReadUntil) return;
+
     const raw = readBtiOdds();
     if (!raw || !raw.odds || raw.odds <= 1) {
       if (lastOddsKey !== '') {
@@ -2624,8 +2641,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!btn) return;
       lastBoardClickAt = Date.now();
       lastBoardClickBtn = btn;
-      btiOddsLatch = { odds: 0, source: '', at: 0, key: '' };
-      notifyNow();
+      suppressReadUntil = Date.now() + 140;
+      signalCartChange();
+      requestAnimationFrame(() => requestAnimationFrame(notifyNow));
     }, true);
 
     const obs = new MutationObserver(scheduleCheck);

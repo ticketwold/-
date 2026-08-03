@@ -49,7 +49,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'AUTOBET_ARM') {
     armed = !!msg.armed;
     saveConfig({ armed }).then(() => {
-      if (armed) logEntry('무장', 'info');
+      if (armed) logEntry('오토시작', 'info');
       broadcast({ type: 'AUTOBET_ARMED', armed });
       sendResponse({ ok: true, armed });
     });

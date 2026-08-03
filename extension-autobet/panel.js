@@ -10,6 +10,7 @@ const PANEL_LOOP_MS = 200;
 const PANEL_LOOP_ARMED_MS = 16;
 const ODDS_GAP_FILL_MS = 3000;
 const ODDS_INSTANT_FRESH_MS = 800;
+const ODDS_TRANSITION_MS = 700;
 const ODDS_STABLE_EPS = typeof ODDS_NOISE_EPS === 'number' ? ODDS_NOISE_EPS : 0.008;
 const BTI_REAL_CHANGE_EPS = 0.03;
 
@@ -52,6 +53,8 @@ let lastKnownOdds = { btiO: null, polyO: null, btiAt: 0, polyAt: 0, polyTrusted:
 let lastProfitStrikeKey = '';
 let leg2Synced = false;
 let leg2SyncedSite = '';
+let btiSynced = false;
+let knownOddsMeta = { btiSel: '', polySel: '', transitionUntil: 0 };
 
 function isLeg2Connected(cfg) {
   const c = cfg || getConfig();
@@ -65,6 +68,14 @@ function updateLeg2Labels(cfg) {
   if (oddsLabel) oddsLabel.textContent = `${leg1Label()} / ${leg2PrefShort(c.leg2)}`;
   const preSyncLabel = $('preSyncLabel');
   if (preSyncLabel) preSyncLabel.textContent = `실시간 금액 동기화 (${leg1Label()} → ${leg2})`;
+}
+
+function updateBtiSyncUi(synced) {
+  const el = $('btiSyncStatus');
+  if (el) {
+    el.textContent = synced ? '연결됨' : '미확인';
+    el.className = synced ? 'sync-badge synced' : 'sync-badge';
+  }
 }
 
 function updateSyncUi(cfg) {
@@ -81,6 +92,49 @@ function updateSyncUi(cfg) {
   $('testBetBtn').disabled = !connected;
   $('armBtn').disabled = armedLocal || !connected;
   updateLeg2Labels(c);
+}
+
+async function verifyBtiSite() {
+  const cfg = getConfig();
+  const btn = $('btiVerifyBtn');
+  if (btn) btn.disabled = true;
+  logLine('텐텐뱃 연결 확인 중…', 'info');
+  try {
+    const found = await findTabs(cfg.leg2);
+    if (!found.btiTab) {
+      logLine('텐텐뱃(x10x10s) 스포츠 탭을 열어주세요', 'err');
+      btiSynced = false;
+      updateBtiSyncUi(false);
+      return;
+    }
+    tabCache = { ...(tabCache || {}), btiTab: found.btiTab };
+    btiSynced = true;
+    chrome.runtime.sendMessage({ type: 'AUTOBET_SET_CONFIG', config: { btiSynced: true } });
+    updateBtiSyncUi(true);
+    logLine(`텐텐뱃 연결됨 (탭 ${found.btiTab.id})`, 'ok');
+
+    const board = await scanBtiBoard(found.btiTab);
+    logLine(
+      `배당판 — 버튼 ${board.buttonCount || 0} · 경기 ${board.eventCount || 0}`,
+      (board.buttonCount || 0) > 0 ? 'ok' : 'info'
+    );
+
+    if (typeof probeBtiFramesDiagnostic === 'function') {
+      const probes = await probeBtiFramesDiagnostic(found.btiTab);
+      for (const p of probes.slice(0, 6)) {
+        const tag = p.widgetsX ? 'wx' : '  ';
+        const line = `  f${p.frameId}${tag}: btn${p.buttons} slip${p.slipOdds > 1 ? p.slipOdds.toFixed(3) : '-'} in${p.hasInput ? 'Y' : 'N'}`;
+        logLine(`${line} · ${(p.url || '(main)').slice(-48)}`, p.slipOdds > 1 ? 'ok' : 'info');
+      }
+    }
+    $('statusHint').textContent = '텐텐뱃 연결됨 — 오른쪽 사이트 [연결] 후 배당 클릭';
+  } catch (e) {
+    btiSynced = false;
+    updateBtiSyncUi(false);
+    logLine(`텐텐뱃 연결 실패: ${e.message}`, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function syncLeg2Site() {
@@ -172,6 +226,10 @@ function applyConfig(cfg) {
   if (cfg.preSyncAmount != null) $('preSync').checked = cfg.preSyncAmount;
   if (cfg.leg2Synced != null) leg2Synced = !!cfg.leg2Synced;
   if (cfg.leg2SyncedSite) leg2SyncedSite = cfg.leg2SyncedSite;
+  if (cfg.btiSynced != null) {
+    btiSynced = !!cfg.btiSynced;
+    updateBtiSyncUi(btiSynced);
+  }
   armedLocal = !!cfg.armed;
   setArmedUi(armedLocal);
   updateSyncUi(cfg);
@@ -184,10 +242,10 @@ function setArmedUi(armed) {
   const st = $('armStatus');
   if (st) {
     if (armed && (btiSlipPaused || pendingStrike)) {
-      st.textContent = '무장·대기';
+      st.textContent = '오토·대기';
       st.className = 'armed paused';
     } else {
-      st.textContent = armed ? '무장' : '해제';
+      st.textContent = armed ? '오토' : '대기';
       st.className = armed ? 'armed' : 'disarmed';
     }
   }
@@ -253,7 +311,7 @@ function disarmAfterStrike(reason) {
   lastStrikeAt = Date.now();
   chrome.runtime.sendMessage({ type: 'AUTOBET_ARM', armed: false });
   const hint = $('statusHint');
-  if (hint) hint.textContent = '배팅 완료 — 자동 해제됨 (🔴 무장으로 재시작)';
+  if (hint) hint.textContent = '배팅 완료 — 자동 중지됨 ([오토시작]으로 재개)';
   if (reason) logLine(reason, 'info');
 }
 
@@ -275,6 +333,42 @@ function isLeg2SlipMissingReason(reason, cfg) {
 
 function isBcSlipMissingReason(reason) {
   return isLeg2SlipMissingReason(reason);
+}
+
+function slipSelectionKey(slip) {
+  if (!slip) return '';
+  return `${slip.selectionText || slip.teamLabel || ''}|${slip.marketKey || slip.eventText || ''}`.trim();
+}
+
+function isOddsTransition(now = Date.now()) {
+  return now < knownOddsMeta.transitionUntil;
+}
+
+function beginOddsTransition(side = 'all') {
+  if (side === 'bti' || side === 'all') {
+    lastKnownOdds.btiO = null;
+    lastKnownOdds.btiAt = 0;
+    knownOddsMeta.btiSel = '';
+  }
+  if (side === 'poly' || side === 'all') {
+    lastKnownOdds.polyO = null;
+    lastKnownOdds.polyAt = 0;
+    lastKnownOdds.polyTrusted = false;
+    knownOddsMeta.polySel = '';
+    if (typeof clearPolyOddsCache === 'function') clearPolyOddsCache();
+  }
+  knownOddsMeta.transitionUntil = Date.now() + ODDS_TRANSITION_MS;
+  lastSynced.at = 0;
+  amountSyncQueued = true;
+  $('oddsVal').textContent = '- / -';
+  if (liveSnap?.ok) {
+    liveSnap = {
+      ...liveSnap,
+      btiO: side === 'poly' ? liveSnap.btiO : null,
+      polyO: side === 'bti' ? liveSnap.polyO : null,
+      profit: null
+    };
+  }
 }
 
 function clearKnownOdds(side = 'all') {
@@ -300,21 +394,24 @@ function isBtiSlipMissingReason(reason) {
 
 function displayOdds(btiO, polyO, snapReason) {
   const now = Date.now();
+  const inTransition = isOddsTransition(now);
   const bcMissing = isBcSlipMissingReason(snapReason);
   const btiMissing = isBtiSlipMissingReason(snapReason);
+  const allowGap = !inTransition;
   const bti = btiO > 1 ? btiO
-    : (!btiMissing && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
+    : (allowGap && !btiMissing && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS && lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : null);
   const poly = polyO > 1 ? polyO
-    : (!bcMissing && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
+    : (allowGap && !bcMissing && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS && lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : null);
   $('oddsVal').textContent = `${bti > 1 ? bti.toFixed(3) : '-'} / ${poly > 1 ? poly.toFixed(3) : '-'}`;
 }
 
 function patchSnapFromKnown(snap, cfg) {
+  const inTransition = isOddsTransition();
   const bcMissing = isBcSlipMissingReason(snap.reason);
   const btiMissing = isBtiSlipMissingReason(snap.reason);
   const partial = {
-    btiO: btiMissing ? snap.btiO : (lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO),
-    polyO: bcMissing || !lastKnownOdds.polyTrusted ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO)
+    btiO: inTransition ? snap.btiO : (btiMissing ? snap.btiO : (lastKnownOdds.btiO > 1 ? lastKnownOdds.btiO : snap.btiO)),
+    polyO: inTransition ? snap.polyO : (bcMissing || !lastKnownOdds.polyTrusted ? snap.polyO : (lastKnownOdds.polyO > 1 ? lastKnownOdds.polyO : snap.polyO))
   };
   if (partial.btiO > 1 && partial.polyO > 1) {
     partial.profit = calcProfit(partial.btiO, partial.polyO);
@@ -339,8 +436,13 @@ function selectionLabelChanged(a, b) {
 function applyInstantOdds(msg) {
   if (!isLeg2Connected()) return false;
   if (msg.suspended || !msg?.slip?.odds || msg.slip.odds <= 1) {
-    if (msg.source === 'bti') clearKnownOdds('bti');
-    else clearKnownOdds('poly');
+    if (msg.cartChange || msg.suspended) {
+      beginOddsTransition(msg.source === 'bti' ? 'bti' : 'poly');
+    } else if (msg.source === 'bti') {
+      clearKnownOdds('bti');
+    } else {
+      clearKnownOdds('poly');
+    }
     return false;
   }
   if (msg.source !== 'bti') {
@@ -354,11 +456,15 @@ function applyInstantOdds(msg) {
   if (!o) return false;
   const now = Date.now();
   if (msg.source === 'bti') {
+    const selKey = slipSelectionKey(msg.slip);
+    if (knownOddsMeta.btiSel && selKey && selKey !== knownOddsMeta.btiSel) {
+      beginOddsTransition('bti');
+    }
+    knownOddsMeta.btiSel = selKey;
     const newSel = msg.slip?.selectionText || msg.slip?.teamLabel || '';
     const oldSel = liveSnap?.bti?.selectionText || liveSnap?.bti?.teamLabel || '';
     if (selectionLabelChanged(newSel, oldSel)) {
-      clearKnownOdds('bti');
-      lastSynced.at = 0;
+      beginOddsTransition('bti');
     }
     const slipSource = msg.slip?.source || '';
     const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
@@ -371,6 +477,11 @@ function applyInstantOdds(msg) {
     lastKnownOdds.btiO = o;
     lastKnownOdds.btiAt = now;
   } else {
+    const selKey = slipSelectionKey(msg.slip);
+    if (knownOddsMeta.polySel && selKey && selKey !== knownOddsMeta.polySel) {
+      beginOddsTransition('poly');
+    }
+    knownOddsMeta.polySel = selKey;
     const fromSlipUi = isBcSlipUiSource(msg.slip);
     if (!fromSlipUi && lastKnownOdds.polyO > 1 && !oddsChangedSignificantly(lastKnownOdds.polyO, o, ODDS_STABLE_EPS)) return false;
     lastKnownOdds.polyO = o;
@@ -414,9 +525,12 @@ function stabilizeSnap(snap, cfg) {
       || slipSource === 'brute-dom' || slipSource === 'brute-inject'
       || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
       || slipSource === 'bti-api' || String(slipSource).includes('bti-api');
-    const freshKnown = isKnownOddsFresh('bti', now);
-    if (freshKnown && lastKnownOdds.btiO > 1 && next && oddsDelta(lastKnownOdds.btiO, next) >= BTI_REAL_CHANGE_EPS) {
-      snap.btiO = lastKnownOdds.btiO;
+    const selKey = slipSelectionKey(snap.bti);
+    if (selKey && knownOddsMeta.btiSel && selKey !== knownOddsMeta.btiSel) {
+      snap.btiO = next;
+      lastKnownOdds.btiO = next;
+      lastKnownOdds.btiAt = now;
+      knownOddsMeta.btiSel = selKey;
     } else if (lastKnownOdds.btiO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.btiO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
@@ -434,8 +548,9 @@ function stabilizeSnap(snap, cfg) {
       snap.btiO = next;
       lastKnownOdds.btiO = next;
       lastKnownOdds.btiAt = now;
+      if (selKey) knownOddsMeta.btiSel = selKey;
     }
-  } else if (!btiMissing && lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
+  } else if (!btiMissing && !isOddsTransition(now) && lastKnownOdds.btiO > 1 && now - lastKnownOdds.btiAt < ODDS_GAP_FILL_MS) {
     snap.btiO = lastKnownOdds.btiO;
   } else if (!snap.btiO) {
     snap.btiO = null;
@@ -444,9 +559,13 @@ function stabilizeSnap(snap, cfg) {
   if (snap.polyO > 1 && isScanPolySlip(snap.poly)) {
     const next = normalizeSportsOdds(snap.polyO);
     const fromSlipUi = isBcSlipUiSource(snap.poly);
-    const freshKnown = isKnownOddsFresh('poly', now);
-    if (freshKnown && lastKnownOdds.polyO > 1 && next && oddsDelta(lastKnownOdds.polyO, next) >= BTI_REAL_CHANGE_EPS) {
-      snap.polyO = lastKnownOdds.polyO;
+    const selKey = slipSelectionKey(snap.poly);
+    if (selKey && knownOddsMeta.polySel && selKey !== knownOddsMeta.polySel) {
+      snap.polyO = next;
+      lastKnownOdds.polyO = next;
+      lastKnownOdds.polyAt = now;
+      lastKnownOdds.polyTrusted = true;
+      knownOddsMeta.polySel = selKey;
     } else if (lastKnownOdds.polyO > 1 && next) {
       const delta = oddsDelta(lastKnownOdds.polyO, next);
       if (fromSlipUi || delta >= BTI_REAL_CHANGE_EPS) {
@@ -467,12 +586,13 @@ function stabilizeSnap(snap, cfg) {
       lastKnownOdds.polyO = next;
       lastKnownOdds.polyAt = now;
       lastKnownOdds.polyTrusted = true;
+      if (selKey) knownOddsMeta.polySel = selKey;
     }
   } else if (bcMissing || (snap.reason && /BC\.Game.*(배당|슬립)/.test(snap.reason))) {
     clearKnownOdds('poly');
     snap.polyO = null;
     snap.poly = null;
-  } else if (!bcMissing && lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
+  } else if (!bcMissing && !isOddsTransition(now) && lastKnownOdds.polyO > 1 && lastKnownOdds.polyTrusted && now - lastKnownOdds.polyAt < ODDS_GAP_FILL_MS) {
     snap.polyO = lastKnownOdds.polyO;
   } else if (snap.polyO > 1 && !isScanPolySlip(snap.poly)) {
     snap.polyO = null;
@@ -742,7 +862,7 @@ async function liveAmountSync(force) {
 
 async function executeStrike(snap, cfg, label) {
   if (strikeLock || haltAutoBet) {
-    if (haltAutoBet) logLine('배팅 완료 상태 — 무장 후 재시작', 'err');
+    if (haltAutoBet) logLine('배팅 완료 상태 — [오토시작] 후 재개', 'err');
     else logLine('이미 배팅 진행 중', 'err');
     return;
   }
@@ -893,7 +1013,7 @@ function arm(armed) {
         btiSlipPaused = false;
       }
       setArmedUi(res.armed);
-      logLine(armed ? '무장 — 수익 구간 시 1회 배팅 후 자동 해제' : '해제', armed ? 'strike' : 'info');
+      logLine(armed ? '오토시작 — 수익 구간 시 1회 배팅 후 자동 중지' : '오토 멈춤', armed ? 'strike' : 'info');
       if (armed) {
         lastProfitStrikeKey = '';
         amountSyncQueued = true;
@@ -1056,6 +1176,7 @@ $('leg2Site')?.addEventListener('change', () => {
   $('statusHint').textContent = `${leg2PrefLabel(getConfig().leg2)} 선택됨 — [연결] 버튼을 눌러주세요`;
 });
 
+$('btiVerifyBtn')?.addEventListener('click', () => verifyBtiSite());
 $('syncBtn')?.addEventListener('click', () => syncLeg2Site());
 
 chrome.runtime.onMessage.addListener((msg) => {

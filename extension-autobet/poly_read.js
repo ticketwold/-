@@ -444,7 +444,17 @@ function finalizeBcPolySlip(slip) {
 
 function cachePolyOdds(tabId, slip) {
   if (!tabId || !isTrustedBcSlip(slip)) return;
-  polyOddsCache.set(tabId, { slip: { ...slip }, at: Date.now() });
+  polyOddsCache.set(tabId, { slip: { ...slip }, at: Date.now(), selKey: slipSelectionKeyPoly(slip) });
+}
+
+function slipSelectionKeyPoly(slip) {
+  if (!slip) return '';
+  return `${slip.teamLabel || slip.selectionText || ''}|${slip.eventText || ''}`.trim();
+}
+
+function clearPolyOddsCache(tabId) {
+  if (tabId) polyOddsCache.delete(tabId);
+  else polyOddsCache.clear();
 }
 
 function getCachedPolyOdds(tabId, maxAgeMs = 4000) {
@@ -461,7 +471,11 @@ function mergePolySlipWithCache(tabId, slip) {
   }
   if (slip?.odds > 1) {
     const cached = getCachedPolyOdds(tabId, 8000);
-    if (cached?.odds > 1 && isScanBcSlip(cached) && isScanBcSlip(slip)
+    const slipSel = slipSelectionKeyPoly(slip);
+    const cacheSel = cached ? slipSelectionKeyPoly(cached) : '';
+    if (cached?.odds > 1 && cacheSel && slipSel && cacheSel !== slipSel) {
+      polyOddsCache.delete(tabId);
+    } else if (cached?.odds > 1 && isScanBcSlip(cached) && isScanBcSlip(slip)
       && typeof stabilizeSportsOdds === 'function'
       && oddsDelta(cached.odds, slip.odds) < ODDS_NOISE_EPS) {
       slip = { ...slip, odds: stabilizeSportsOdds(cached.odds, slip.odds) };

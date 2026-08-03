@@ -134,11 +134,25 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 (function observe() {
   let last = '';
   let pending = false;
+  let suppressReadUntil = 0;
 
   function slipKey(slip) {
     if (!slip) return '';
     const o = slip.odds > 1 ? (Math.round(slip.odds * 1000) / 1000) : 0;
     return `${o.toFixed(3)}_${slip.teamLabel || ''}`;
+  }
+
+  function signalCartChange() {
+    last = '';
+    try {
+      chrome.runtime.sendMessage({
+        type: 'ODDS_CHANGED',
+        source: predictionSiteId(),
+        slip: null,
+        suspended: true,
+        cartChange: true
+      });
+    } catch (_) {}
   }
 
   function publish(slip) {
@@ -157,6 +171,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 
   function tick() {
     if (!isStakeSportsPage()) return;
+    if (Date.now() < suppressReadUntil) return;
     publish(readLeg2SlipSync());
   }
 
@@ -167,6 +182,14 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   }
 
   if (document.body) {
+    document.addEventListener('click', (e) => {
+      if (!isStakeSportsPage()) return;
+      const hit = e.target?.closest?.('button, [role="button"], [class*="selection"], [class*="Selection"], [class*="outcome"]');
+      if (!hit) return;
+      suppressReadUntil = Date.now() + 140;
+      signalCartChange();
+      schedule();
+    }, true);
     document.addEventListener('click', schedule, true);
     document.addEventListener('input', schedule, true);
     window.addEventListener('__stakeSlipDomTick', schedule);
