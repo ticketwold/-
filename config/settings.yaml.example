@@ -1,0 +1,90 @@
+# 양방배팅 프로그램 설정
+
+poll_interval: 3.0
+min_profit_margin: 0.5
+total_stake: 100000
+max_concurrent_bets: 3
+dry_run: true
+log_level: INFO
+
+site_a:
+  name: "Pinnacle"
+  enabled: true
+  base_url: "https://www.pinnacle.com/ko/"
+  adapter: pinnacle
+  skip_live: true
+  league_filter: []
+  username: ""
+  password: ""
+
+# ★ 10벳 공통 URL + 페이지 내 종목 탭(nav_texts)으로 전환
+site_b:
+  name: "x10x10s"
+  enabled: true
+  base_url: "https://www.x10x10s.com"
+  adapter: pbc00
+  page_url: "https://www.x10x10s.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+  gamecode: "19"
+  game_child_seq: "3659"
+  event: "N"
+  headless: false
+  cookies_path: "config/pbc00_session.json"
+  username: "여기에_pbc00_아이디"
+  password: "여기에_pbc00_비밀번호"
+  manual_login: true
+  skip_tenbet_navigation: true
+  manual_tenbet: false
+  login_wait_seconds: 180
+  selectors: {}
+  sport_pages:
+    football:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["축구", "Soccer", "Football"]
+      bti_sport_id: "1"
+    baseball:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["야구", "Baseball"]
+      bti_sport_id: "3"
+    basketball:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["농구", "Basketball"]
+      bti_sport_id: "2"
+    esports:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["e스포츠", "E스포츠", "Esports", "E-Sports"]
+      bti_sport_id: "64"
+    tennis:
+      enabled: true
+      gamecode: "19"
+      game_child_seq: "3659"
+      event: "N"
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["테니스", "Tennis"]
+      bti_sport_id: "6"
+
+sports:
+  - football
+  - baseball
+  - basketball
+  - esports
+  - tennis
+
+markets:
+  - moneyline
+  - over_under

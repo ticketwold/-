@@ -1,0 +1,60 @@
+# 실제 Pinnacle + pbc00 가상배팅 테스트
+poll_interval: 3.0
+min_profit_margin: 0.1
+total_stake: 100000
+max_concurrent_bets: 5
+dry_run: true
+log_level: INFO
+
+site_a:
+  name: "Pinnacle"
+  adapter: pinnacle
+  base_url: "https://www.pinnacle.com/ko/"
+  skip_live: true
+  league_filter: []
+
+site_b:
+  name: "PBC00"
+  adapter: pbc00
+  base_url: "https://pbc00.com"
+  page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+  gamecode: "19"
+  game_child_seq: "3659"
+  event: "N"
+  headless: false
+  manual_login: true
+  cookies_path: "config/pbc00_session.json"
+  username: ""
+  password: ""
+  sport_pages:
+    football:
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["축구", "Soccer", "Football"]
+    baseball:
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["야구", "Baseball"]
+    basketball:
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["농구", "Basketball"]
+    esports:
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["e스포츠", "E스포츠", "Esports", "E-Sports"]
+    tennis:
+      enabled: true
+      page_url: "https://pbc00.com/game/newDetail/0?gamecode=19&game_child_seq=3659&event=N"
+      nav_texts: ["테니스", "Tennis"]
+
+sports:
+  - football
+  - baseball
+  - basketball
+  - esports
+  - tennis
+
+markets:
+  - moneyline
+  - over_under
