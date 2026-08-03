@@ -1,37 +1,49 @@
-# 양방 자동배팅 (extension-autobet)
+# 양방 자동배팅 (TypeScript MV3)
 
-양방배팅봇(`extension-legacy`)과 **함께** 설치하는 별도 확장 프로그램입니다.
+## 구조
 
-## 기능
+```
+extension-autobet/
+├── src/
+│   ├── background/          service_worker.ts
+│   ├── shared/
+│   │   ├── utils/calculator.ts   ← odds.js 계산 로직 (변경 없음)
+│   │   ├── config/sites.ts
+│   │   ├── types/
+│   │   ├── messaging/       chrome.storage / runtime
+│   │   └── dom/             MutationObserver · rAF 스케줄러
+│   ├── engine/              탭·슬립·배팅 오케스트레이션
+│   ├── content/             사이트별 content script
+│   └── panel/               React UI
+├── public/manifest.json     MV3 manifest (빌드 시 dist로 복사)
+├── dist/                    Chrome에 로드할 빌드 결과
+└── package.json
+```
 
-- 양방배팅봇 수익률 신호 또는 직접 슬립 읽기로 **수익 구간 감지**
-- 조건 충족 시 **텐텐뱃 + BC.Game 동시 배팅** (`Promise.all` 병렬)
-- 무장 전 **슬립·금액 사전 준비** (pre-warm)
-- 양방배팅봇과 **페이지 브릿지** 연동 (localStorage 공유)
+## 개발
+
+```bash
+cd extension-autobet
+npm install
+npm run build      # dist/ 생성
+npm run dev        # watch 빌드
+npm run lint
+npm run typecheck
+```
 
 ## 설치
 
-1. `extension-legacy` (양방배팅봇 v5.8.2+) 설치
-2. `extension-autobet` (이 폴더) 설치
-3. Chrome `chrome://extensions` → 둘 다 **새로고침**
+1. `npm run build`
+2. Chrome `chrome://extensions` → **개발자 모드**
+3. **압축해제된 확장 프로그램 로드** → `extension-autobet/dist` 폴더 선택
 
-## 사용법
+## v3.0.0 변경 요약
 
-1. x10x10s 스포츠 + BC.Game 스포츠/예측 탭 열기
-2. 양방배팅봇에서 **계산 시작** (금액·배당 동기화)
-3. **양방 자동배팅** 아이콘 클릭 → 패널 열기
-4. 최소 수익률·금액 설정 → **🔴 무장**
-5. 수익 구간 진입 시 **자동 동시 배팅** (성공 후 자동 해제)
+- **Manifest V3** · `service_worker.ts` (ES module)
+- **TypeScript strict** · ESLint · Prettier
+- **React 패널** (기존 UI·기능 100% 유지, `panel-controller` 로직 보존)
+- **계산 엔진** → `src/shared/utils/calculator.ts`
+- **불필요한 16ms setInterval 제거** → MutationObserver + rAF 스케줄러
+- **content script** 사이트별 폴더 분리 (`content/bti`, `content/bc`, `content/stake`)
 
-## BC.Game 스포츠 URL 예시
-
-`https://bc.game/ko/sports/counter-strike/counter-strike-2/.../team-spirit-mouz-...`
-
-- 경기 페이지에서 **배당 클릭** → 베팅슬립 열기
-- 금액 입력란·베팅하기 버튼이 보이면 자동배팅 준비 완료
-
-## 주의
-
-- 브라우저 환경상 **0.0001초 보장은 불가**합니다. 병렬 클릭 + 16ms 감지 + 사전 무장으로 최대한 빠르게 동작합니다.
-- 한쪽만 체결될 수 있습니다. 반드시 소액으로 테스트하세요.
-- 자동배팅 성공 후 **무장이 자동 해제**됩니다 (연속 배팅 방지).
+레거시 JS는 `src/**/*.legacy.ts`에 보존되며, 점진적으로 순수 TS 모듈로 이전할 수 있습니다.

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+tests/e2e/harness-bundle.mjs
+tests/e2e/results.json
+tests/e2e/live-smoke-report.json
+test-results/

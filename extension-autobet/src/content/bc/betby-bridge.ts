@@ -1,0 +1,1 @@
+import './betby-bridge.legacy';
