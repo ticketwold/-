@@ -1234,7 +1234,8 @@ const __polyReadPublicApi = {
   readPolyOddsOnce,
   scorePolySlip,
   probeBcSlipFrames,
-  probeLeg2SlipFrames
+  probeLeg2SlipFrames,
+  clearPolyOddsCache
 };
 
 Object.assign(globalThis, __polyReadPublicApi);

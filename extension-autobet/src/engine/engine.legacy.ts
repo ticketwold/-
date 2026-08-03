@@ -2675,7 +2675,11 @@ const __enginePublicApi = {
   syncBothAmounts,
   sendBti,
   sendPoly,
-  prewarmTabs
+  prewarmTabs,
+  readArbBotBridgeState,
+  verifyStrikeReady,
+  checkBtiSlipUi,
+  searchBtiBoardFromFrames
 };
 
 Object.assign(globalThis, __enginePublicApi);

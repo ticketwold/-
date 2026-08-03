@@ -70,4 +70,20 @@ declare global {
   function installRecentWebTabTracker(): void;
   function isScanBcSlip(slip: unknown): boolean;
   function isTrustedBcSlip(slip: unknown): boolean;
+  function readArbBotBridgeState(
+    btiTab: chrome.tabs.Tab,
+    polyTab: chrome.tabs.Tab
+  ): Promise<Record<string, unknown> | null>;
+  function verifyStrikeReady(
+    found: Record<string, unknown>,
+    hint?: Record<string, unknown>,
+    poly?: Record<string, unknown> | null,
+    opts?: Record<string, unknown>
+  ): Promise<Record<string, unknown>>;
+  function checkBtiSlipUi(btiTab: chrome.tabs.Tab): Promise<Record<string, unknown>>;
+  function searchBtiBoardFromFrames(
+    btiTab: chrome.tabs.Tab,
+    query?: string
+  ): Promise<Record<string, unknown>>;
+  function clearPolyOddsCache(tabId?: number): void;
 }
