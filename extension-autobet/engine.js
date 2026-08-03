@@ -598,6 +598,15 @@ async function probeBtiInjectStatus(tabId) {
   };
 }
 
+function isJunkBtiFrameUrl(url) {
+  const u = String(url || '');
+  if (!u || u === 'about:blank') return true;
+  if (/recaptcha|google\.com\/recaptcha|hcaptcha|doubleclick|googlesyndication|player\.twitch|facebook\.com\/tr/i.test(u)) return true;
+  if (/streambridge\.feedconstruct\.com\/player/i.test(u)) return true;
+  if (/accounts-iframe|amazon-ivs|tracker\.html/i.test(u)) return true;
+  return false;
+}
+
 async function injectAllBtiFramesTab(tabId, force = false) {
   const frames = await getAllFrames(tabId);
   const count = frames.length;
@@ -610,6 +619,7 @@ async function injectAllBtiFramesTab(tabId, force = false) {
   }
 
   const needFrames = frames.filter((f) => {
+    if (isJunkBtiFrameUrl(f.url)) return false;
     if (/doubleclick|googlesyndication|tracker\.html|amazon-ivs|hcaptcha/i.test(f.url || '')) return false;
     const hit = probeBefore.hits.find((h) => h.frameId === f.frameId);
     return !hit?.has;
@@ -627,14 +637,15 @@ async function injectAllBtiFramesTab(tabId, force = false) {
     }
   }
 
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ['bti_api_hook.js'],
-      world: 'MAIN'
-    });
-  } catch (e) {
-    errors.push(`api:${String(e?.message || e).slice(0, 100)}`);
+  const hookFrames = frames.filter((f) => !isJunkBtiFrameUrl(f.url));
+  for (const f of hookFrames.slice(0, 14)) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [f.frameId] },
+        files: ['bti_api_hook.js'],
+        world: 'MAIN'
+      });
+    } catch (_) {}
   }
 
   btiAllInjectedFrames.set(tabId, count);
@@ -1488,7 +1499,7 @@ async function verifyBtiConnection(leg2Pref = 'bcgame') {
     scriptOk,
     scriptWarning: scriptOk
       ? ''
-      : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.5.7 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
+      : `스크립트 주입 실패 (${inject.errors?.join(' · ') || '원인 불명'}) — chrome://extensions 에서 확장 v2.5.8 활성화 후 [텐텐뱃 열기]로 탭을 여세요`,
     board: {
       buttonCount: board.buttonCount || 0,
       eventCount: board.eventCount || 0,
