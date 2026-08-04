@@ -1621,4 +1621,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.6 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 배당 캐시 유지`, 'info');
+log(`v5.7.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');

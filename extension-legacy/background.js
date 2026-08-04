@@ -668,7 +668,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.7.6] background loaded — 텐텐뱃 배당 캐시 유지');
+console.log('[양방봇 v5.7.7] background loaded');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
