@@ -426,7 +426,7 @@ async function ensureBtiScript(tabId, frameId) {
 async function ensurePolyScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
   if (polyScriptReady.has(key)) return;
-  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js'];
+  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null
@@ -513,10 +513,21 @@ async function injectReadBcSports(tabId, frameId = 0) {
   }
 }
 
+function scorePolySlip(slip) {
+  if (!slip?.odds || slip.odds <= 1) return -1;
+  let s = slip.odds;
+  if (slip.fromSlip) s += 1000;
+  if (slip.sourceKind === 'bc-native-slip' || slip.sourceKind === 'sports-slip') s += 500;
+  if (slip.fromPayout) s += 200;
+  if (slip.stake > 0) s += 50;
+  return s;
+}
+
 async function readPolySlipAllFrames(bcTab) {
   const order = await orderBcFrames(bcTab.id);
   const seen = new Set();
   let best = null;
+  let bestScore = -1;
 
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
@@ -528,9 +539,12 @@ async function readPolySlipAllFrames(bcTab) {
       const injected = await injectReadBcSports(bcTab.id, frameId);
       if (injected?.odds > 1) slip = injected;
     }
-    if (slip?.fromPayout && slip.odds > 1) return slip;
-    if (slip?.odds > 1 || slip?.needsStake) {
-      if (!best || slip.fromPayout || (slip.odds > 1 && !best.odds)) best = slip;
+    if (!slip?.odds && !slip?.fromPayout) continue;
+    const sc = scorePolySlip(slip);
+    if (slip.fromPayout && slip.odds > 1 && sc >= bestScore) return slip;
+    if (sc > bestScore) {
+      bestScore = sc;
+      best = slip;
     }
   }
   return best;
@@ -1163,10 +1177,55 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
   return res || { success: false, reason: '응답 없음' };
 }
 
+async function probeBcFrame(tabId, frameId, url) {
+  let score = scoreBcFrameUrl(url);
+  try {
+    await ensurePolyScript(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => {
+        let score = 0;
+        let slipOdds = 0;
+        let sourceKind = '';
+        if (typeof window.__bcProbeStakeFrame === 'function') {
+          const p = window.__bcProbeStakeFrame();
+          score += p.score || 0;
+          if (p.hasSlip && p.hasInput) score += 200;
+        } else {
+          const body = document.body?.innerText || '';
+          if (/베팅\s*슬립|bet\s*slip/i.test(body)) score += 50;
+          if (/USDT/i.test(body)) score += 30;
+        }
+        if (typeof window.__bcScrapeOdds === 'function') {
+          const r = window.__bcScrapeOdds();
+          if (r?.odds > 1.01) {
+            slipOdds = r.odds;
+            sourceKind = r.sourceKind || '';
+            score += 40;
+            if (sourceKind === 'bc-native-slip' || sourceKind === 'sports-slip') score += 120;
+            if (r.stake > 0) score += 20;
+          }
+        }
+        return { score, slipOdds, sourceKind };
+      }
+    });
+    const probe = results?.[0]?.result || {};
+    score += probe.score || 0;
+    return { score, ...probe };
+  } catch (_) {
+    return { score, slipOdds: 0, sourceKind: '' };
+  }
+}
+
 async function orderBcFrames(tabId) {
   const frames = await getAllFrames(tabId);
-  const sorted = [...frames].sort((a, b) => scoreBcFrameUrl(b.url) - scoreBcFrameUrl(a.url));
-  const order = sorted.map((f) => f.frameId);
+  const probed = await Promise.all(frames.map(async (f) => {
+    const p = await probeBcFrame(tabId, f.frameId, f.url);
+    return { frameId: f.frameId, ...p };
+  }));
+  probed.sort((a, b) => b.score - a.score);
+  const order = probed.map((p) => p.frameId);
   if (!order.includes(0)) order.unshift(0);
   return [...new Set(order)];
 }
@@ -1207,11 +1266,12 @@ async function setPolyAmount(polyTab, amountUsd) {
   let lastRes = null;
 
   const mainTries = await Promise.all(
-    order.slice(0, 10).map(async (frameId) => {
+    order.map(async (frameId) => {
       const res = await setBcStakeMain(polyTab.id, frameId, amountUsd);
       return { frameId, res };
     })
   );
+  mainTries.sort((a, b) => (b.res?.ok ? 1 : 0) - (a.res?.ok ? 1 : 0) || (b.res?.stake || 0) - (a.res?.stake || 0));
   for (const { res } of mainTries) {
     if (res?.ok) return res;
     if (res?.stake > 0) lastRes = res;
@@ -1550,4 +1610,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.2 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 스포츠 서치/금액동기화`, 'info');
+log(`v5.7.3 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 슬립 금액동기화`, 'info');
