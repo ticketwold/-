@@ -372,24 +372,90 @@ async function ensureBtiScript(tabId, frameId) {
 async function ensurePolyScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
   if (polyScriptReady.has(key)) return;
+  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js'];
+  for (const file of mainFiles) {
+    try {
+      const target = frameId != null
+        ? { tabId, frameIds: [frameId] }
+        : { tabId, allFrames: true };
+      await chrome.scripting.executeScript({ target, files: [file], world: 'MAIN' });
+    } catch (_) {}
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['bc_betby_bridge.js'],
+      world: 'MAIN'
+    });
+  } catch (_) {}
   try {
     const target = frameId != null
       ? { tabId, frameIds: [frameId] }
       : { tabId, allFrames: true };
-    await chrome.scripting.executeScript({
-      target,
-      files: ['bc_content.js', 'bc_slip_read.js']
-    });
+    await chrome.scripting.executeScript({ target, files: ['bc_content.js'] });
+    try {
+      await chrome.scripting.executeScript({ target, files: ['bc_slip_read.js'] });
+    } catch (_) {}
     polyScriptReady.add(key);
     if (frameId == null) polyScriptReady.add(String(tabId));
   } catch (_) {
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['bc_content.js', 'bc_slip_read.js']
-      });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['bc_content.js'] });
       polyScriptReady.add(String(tabId));
     } catch (_2) {}
+  }
+}
+
+async function injectReadBcSports(tabId, frameId = 0) {
+  try {
+    await ensurePolyScript(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => {
+        try {
+          if (typeof window.__bcScrapeOdds === 'function') {
+            const r = window.__bcScrapeOdds();
+            if (r && (r.odds > 1.01 || (r.ok && r.odds > 1.01))) {
+              const odds = r.odds;
+              const team = r.teamLabel || r.selectionText || r.outcome || '';
+              const stake = r.stake > 0 ? r.stake : null;
+              const payout = r.payout > 0 ? r.payout : null;
+              return {
+                source: 'bcgame',
+                odds,
+                teamLabel: team,
+                outcome: team,
+                selectionText: r.selectionText || team,
+                displayLabel: r.displayLabel || `${odds.toFixed(3)}${stake ? ` · ${stake} USDT` : ''}`,
+                stake,
+                payout,
+                fromPayout: !!r.fromPayout || (stake > 0 && payout > stake),
+                fromSlip: true,
+                sourceKind: r.sourceKind || 'sports-slip',
+                marketKind: 'ml'
+              };
+            }
+          }
+          if (window.__bcApiSlip?.odds > 1.01) {
+            const r = window.__bcApiSlip;
+            return {
+              source: 'bcgame',
+              odds: r.odds,
+              teamLabel: r.teamLabel || '',
+              fromPayout: !!r.fromPayout,
+              fromSlip: true,
+              sourceKind: 'bc-api',
+              marketKind: 'ml'
+            };
+          }
+        } catch (_) {}
+        return null;
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -404,7 +470,11 @@ async function readPolySlipAllFrames(bcTab) {
     seen.add(frameId);
     await ensurePolyScript(bcTab.id, frameId);
     const res = await sendPoly(bcTab.id, { type: 'READ_SLIP' }, frameId);
-    const slip = res?.slip;
+    let slip = res?.slip;
+    if (!slip?.odds && !slip?.fromPayout) {
+      const injected = await injectReadBcSports(bcTab.id, frameId);
+      if (injected?.odds > 1) slip = injected;
+    }
     if (slip?.fromPayout && slip.odds > 1) return slip;
     if (slip?.odds > 1 || slip?.needsStake) {
       if (!best || slip.fromPayout || (slip.odds > 1 && !best.odds)) best = slip;
@@ -1206,4 +1276,4 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 refreshSlips();
-log(`v5.6.3 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 + BC.Game`, 'info');
+log(`v5.6.4 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 + BC.Game`, 'info');

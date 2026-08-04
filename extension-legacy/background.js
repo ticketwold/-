@@ -209,17 +209,40 @@ async function findBcTab() {
   return { id: best.id, url: best.url };
 }
 
+async function ensureBcMainScripts(tabId, frameId = null) {
+  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js'];
+  for (const file of mainFiles) {
+    try {
+      const target = frameId != null
+        ? { tabId, frameIds: [frameId] }
+        : { tabId, allFrames: true };
+      await chrome.scripting.executeScript({ target, files: [file], world: 'MAIN' });
+    } catch (_) {}
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['bc_betby_bridge.js'],
+      world: 'MAIN'
+    });
+  } catch (_) {}
+}
+
 async function ensureBcScript(tabId, frameId = null) {
-  const files = ['bc_content.js', 'bc_slip_read.js'];
+  await ensureBcMainScripts(tabId, frameId);
+  const isolatedFiles = ['bc_content.js', 'bc_slip_read.js'];
   try {
     const target = frameId != null
       ? { tabId, frameIds: [frameId] }
       : { tabId, allFrames: true };
-    await chrome.scripting.executeScript({ target, files });
+    await chrome.scripting.executeScript({ target, files: ['bc_content.js'] });
+    try {
+      await chrome.scripting.executeScript({ target, files: ['bc_slip_read.js'] });
+    } catch (_) {}
     return true;
   } catch (_) {
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, files });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['bc_content.js'] });
       return true;
     } catch (_2) {}
     return false;
@@ -489,4 +512,4 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.6.3] background loaded — 텐텐뱃 + BC.Game');
+console.log('[양방봇 v5.6.4] background loaded — 텐텐뱃 + BC.Game');

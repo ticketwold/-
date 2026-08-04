@@ -1,4 +1,1773 @@
-import{r as zt}from"./chunks/dom-probe-BpiOFHTx.js";function B(){return"bcgame"}function P(){try{return/bti-sports\.(io|com)/i.test(location.hostname)||gt()?!0:/bc\.game/i.test(location.hostname)&&/\/sports\//i.test(location.pathname)}catch{return!1}}function gt(){return!!(A()||/베팅\s*슬립|bet\s*slip/i.test(document.body?.innerText||"")||document.querySelector('[class*="betslip"], [class*="Betslip"], [class*="bet-slip"]')||document.querySelector('button[class*="master_fe_Selections_selection"], button[class*="Selections_selection"], button.sportsbook-Button')||document.querySelector('.button__bet__odds, [class*="eventSelection"], [class*="betInformation__title"]'))}function V(t){const e=parseFloat(String(t||"").trim());return!Number.isFinite(e)||e<=1.01||e>=100?null:e}function Zt(){const t=[],e=new WeakSet;function n(s,i){if(!s||i>100)return;if(s.nodeType===3){const a=s.textContent?.trim();a&&t.push(a);return}if(s.nodeType!==1||e.has(s))return;e.add(s);let c=s.shadowRoot;if(!c&&typeof chrome<"u"&&chrome.dom?.openOrClosedShadowRoot)try{c=chrome.dom.openOrClosedShadowRoot(s)}catch{}c&&n(c,i+1);for(const a of s.childNodes)n(a,i+1)}n(document.documentElement,0);const r=t.join(" ").replace(/\s+/g," ").trim(),o=(document.body?.innerText||"").replace(/\s+/g," ").trim();return r.length>=o.length?r:o}function A(){const t=[];function e(s,i){if(!(!s||i>120)){if(s.nodeType===1){const c=s.tagName,a=c==="DIV"&&(s.isContentEditable||s.getAttribute?.("contenteditable")==="true");(c==="INPUT"||c==="TEXTAREA"||a)&&b(s)&&t.push(s);let l=s.shadowRoot;if(!l&&typeof chrome<"u"&&chrome.dom?.openOrClosedShadowRoot)try{l=chrome.dom.openOrClosedShadowRoot(s)}catch{}l&&e(l,i+1);for(const u of s.childNodes)e(u,i+1);return}if(s.nodeType===11)for(const c of s.childNodes)e(c,i+1)}}e(document.documentElement,0);let n=null,r=-1;const o=window.innerWidth||1200;for(const s of t){const i=`${s.id||""} ${s.className||""} ${s.placeholder||""} ${s.getAttribute?.("aria-label")||""} ${s.value||""}`;if(/search|검색|email|password|login|phone/i.test(i))continue;let c=0,a=s,l="";for(let d=0;d<12&&a;d++)l+=` ${(a.innerText||a.textContent||"").slice(0,200)}`,a=a.parentElement||a.getRootNode?.()?.host||null;/bet\s*slip|betslip|total\s*stake|place\s*(a\s*)?bet|베팅\s*슬립|총\s*베팅/i.test(l)&&(c+=200),/USDT|usdt|counter|Counter|베팅|stake|amount|bet|wager/i.test(i)&&(c+=80),(s.getAttribute?.("inputmode")==="decimal"||s.inputMode==="decimal")&&(c+=40);const u=s.getBoundingClientRect?.();u&&u.x>o*.5&&(c+=60),(s.id==="counter"||/CounterSecondary_input|counter__input/i.test(String(s.className||"")))&&(c+=200),c>r&&(r=c,n=s)}return n}function ot(t){return/내\s*베팅|베팅\s*내역|bet\s*history|my\s*bets|open\s*bets|settled\s*bets|bethistory|진행\s*중|정산\s*완료|미정산|past\s*bets/i.test(String(t||""))}function tt(t){if(!t)return!1;let e=t;for(let n=0;n<24&&e;n++){const r=[e.id||"",String(e.className||""),e.getAttribute?.("data-testid")||"",e.getAttribute?.("aria-label")||"",(e.textContent||"").slice(0,100)].join(" ");if(/my-?bets|bet-?history|bethistory|open-?bets|settled|historybets|past-?bets|BetHistory|betHistory|내\s*베팅|베팅\s*내역/i.test(r))return!0;e=e.parentElement||e.getRootNode?.()?.host||null}return!1}function st(){const t=z();return t?(t.innerText||t.textContent||"").replace(/\s+/g," ").trim():""}function yt(){const t=st();if(!t)return!1;if(/슬립이\s*비어|선택한\s*베팅\s*없|베팅을\s*선택|베팅\s*카트|no\s*selection|empty\s*(bet\s*)?slip|add\s*selections?|카트가\s*비어/i.test(t))return!0;const e=xt(t);if(e.stake>0&&e.payout>e.stake)return!1;const o=z()?.querySelector?.('[class*="betInformation__title"], [class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]'),s=/vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(t)&&!ot(t.slice(0,240));return!o&&!s}function xt(t){const e=String(t||st()||Zt()).replace(/\s+/g," ");let n=0,r=0;const o=e.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i),s=e.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);return o&&(n=parseFloat(o[1].replace(/,/g,""))||0),s&&(r=parseFloat(s[1].replace(/,/g,""))||0),{stake:n,payout:r}}function $(){const t=xt();if(t.stake>0)return t.stake;const e=A();if(e){const o=e.value??e.textContent??e.getAttribute?.("value")??"",s=String(o).replace(/,/g,"").match(/([\d]+(?:\.\d+)?)/);if(s){const i=parseFloat(s[1]);if(Number.isFinite(i)&&i>0&&i<1e5)return i}}const r=(document.body?.innerText||"").replace(/\s+/g," ").match(/총\s*베팅\s*금액\s*([\d,]+(?:\.\d+)?)/i);if(r){const o=parseFloat(r[1].replace(/,/g,""));if(Number.isFinite(o)&&o>0)return o}return 0}function z(){let t=null,e=-1;for(const n of document.querySelectorAll('div, section, aside, form, [class*="slip"], [class*="Slip"]')){if(!b(n))continue;const r=(n.textContent||"").replace(/\s+/g," ").trim();if(!/베팅\s*슬립|bet\s*slip/i.test(r))continue;const o=r.length;if(o<25||o>6e3)continue;let s=0;/예상\s*당첨|총\s*베팅/i.test(r)&&(s+=140),/베팅하기/i.test(r)&&(s+=100),/USDT/i.test(r)&&(s+=80),n.querySelector?.("input")&&(s+=70),/vs\.?|승자|맵\s*[-–]/i.test(r)&&(s+=40),/\d+\.\d{1,3}/.test(r)&&(s+=30),s+=Math.min(o/35,60),s>e&&(e=s,t=n)}return t}function Wt(t){const e=String(t||"").replace(/\s+/g," ").trim();if(!e||ot(e))return null;const n=/베팅\s*슬립|bet\s*slip|betslip/i.test(e),r=/예상\s*당첨|총\s*베팅|베팅하기|place\s*(a\s*)?bet|total\s*stake|potential\s*win/i.test(e);if(!n&&!r||n&&!r&&!/\d+\.\d{2,3}/.test(e))return null;let o=0,s=e.match(/총\s*베팅(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i);if(s&&(o=parseFloat(s[1].replace(/,/g,""))||0),o||(s=e.match(/total\s*stake[^\d]{0,16}([\d,]+(?:\.\d+)?)/i),s&&(o=parseFloat(s[1].replace(/,/g,""))||0)),!o&&!/베팅\s*슬립|betslip/i.test(e))for(const m of e.matchAll(/([\d,]+(?:\.\d+)?)\s*USDT/gi)){const y=parseFloat(m[1].replace(/,/g,""));if(Number.isFinite(y)&&y>=1&&y<=5e4){o=y;break}}let i=0;s=e.match(/예상\s*당첨(?:\s*금액|금액)?\s*([\d,]+(?:\.\d+)?)/i),s&&(i=parseFloat(s[1].replace(/,/g,""))||0);let c=null;o>0&&i>o&&(c=Math.round(i/o*1e3)/1e3);let a="",l="";const u=e.match(/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,40})/i);u&&(l=`${u[1].trim()} vs ${u[2].trim()}`);const d=e.match(/(?:맵\s*[-–]\s*승자|세\s*번째\s*맵|네\s*번째\s*번?\s*맵|승자|winner)[^\dA-Za-z가-힣]{0,30}([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,40})/i);if(d&&(a=d[1].trim()),!c&&(a||l||o>0&&i>o)){const m=new Set([o,i,10,20,50,100,300].filter(S=>S>0)),y=[...e.matchAll(/\b(\d+\.\d{1,3})\b/g)].map(S=>V(S[1])).filter(S=>S&&!m.has(S)&&Math.abs(S-o)>.4),x=y.filter(S=>S>=1.01&&S<=5.5);x.length?c=Math.min(...x):y.length&&(c=Math.min(...y.filter(S=>S<20)))}if(!(c>1.01))return null;const f=o>0&&i>o,p=/(?:total\s*odds?|combined\s*odds?|@)\s*[:=]?\s*\d+\.\d{2,3}/i.test(e);return!f&&!a&&!l&&!p?null:(c=Math.round(c*1e3)/1e3,{odds:c,teamLabel:a,eventText:l,stake:o||null,payout:i||null})}function St(){if(wt())return null;const t=z();if(!t||tt(t))return null;const e=Wt((t.innerText||t.textContent||"").replace(/\s+/g," "));return e?{source:"bcgame",...e,outcome:e.teamLabel,selectionText:e.teamLabel,displayLabel:`${e.odds.toFixed(3)}${e.stake>0?` · ${e.stake} USDT`:""}`,marketKind:"ml",sourceKind:"bc-native-slip",fromPayout:e.stake>0&&e.payout>e.stake,fromSlip:!0,hasInput:!!A()}:null}let k={odds:0,source:"",at:0,key:""};function Vt(t){if(!t)return!1;if(t.fromSlip===!0||t.source==="slip-latched")return!0;const e=t.sourceKind||"";return e==="bc-native-slip"||e==="sports-slip"||e==="bc-api"||t.fromPayout&&t.stake>0}function I(t){if(!(t?.odds>1.01))return t;const e=Math.round(t.odds*1e3)/1e3,n=`${t.teamLabel||t.selectionText||""}_${t.eventText||""}`;return Vt(t)?(k={odds:e,source:"slip",at:Date.now(),key:n},{...t,odds:e,fromSlip:!0}):k.source==="slip"&&k.key===n&&Date.now()-k.at<8e3&&Math.abs(e-k.odds)>=.015?{...t,odds:k.odds,source:"slip-latched",fromSlip:!0}:(k={odds:e,source:t.sourceKind||"board",at:Date.now(),key:n},{...t,odds:e})}function Gt(t){const e=String(t||"").replace(/\s+/g," ").trim();return!e||e.includes("슬립")||e.includes("내 베팅")||e.includes("로그인")||e.includes("정리")||e==="최대"||e.includes("전체")||/^\+\s*[\d,]+\s*₩/.test(e)?!1:!!(e.includes("배당 수락")||e.includes("배당수락")||/수락.*베팅|베팅.*수락/i.test(e)||e.includes("베팅하기")||/^place\s*bet$/i.test(e)||e==="Bet Now"||e==="Bet"||e==="베팅 확인"||e.includes("베팅 확인"))}function et(){const t=[];function e(n,r){if(!(!n||r>120)){if(n.nodeType===1){const o=n.tagName,s=n.getAttribute?.("role")||"";(o==="BUTTON"||s==="button")&&!n.disabled&&b(n)&&t.push(n);let i=n.shadowRoot;if(!i&&typeof chrome<"u"&&chrome.dom?.openOrClosedShadowRoot)try{i=chrome.dom.openOrClosedShadowRoot(n)}catch{}i&&e(i,r+1);for(const c of n.childNodes)e(c,r+1);return}if(n.nodeType===11)for(const o of n.childNodes)e(o,r+1)}}e(document.documentElement,0);for(const n of t){const r=(n.textContent||"").trim();if(r.includes("배당 수락")||r.includes("배당수락"))return n}for(const n of t){const r=(n.textContent||"").trim();if(Gt(r)||(n.className||"").includes("sportsbook-Button")&&/베팅|bet/i.test(r))return n}return null}function Yt(){if(yt())return null;const t=St();if(t?.odds>1.01)return t;const e=!!A();if(!e)return null;const n=[...document.querySelectorAll('[class*="betslip"], [class*="Betslip"], [class*="bet-slip"]')];if(!n.length){const r=z();r&&n.push(r)}if(!n.length)return null;for(const r of n)if(!tt(r))for(const o of r.querySelectorAll('[class*="bet"], [class*="Bet"]')){if(!b(o)||tt(o))continue;const s=(o.textContent||"").trim();if(s.length<6||s.length>900)continue;const i=/W[12]|betInformation|우승|winner|맵|map|team|vs|승자/i.test(s);if(o.querySelector("input")&&!i||!i)continue;const c=o.querySelectorAll('[class*="betInformation__title"]'),a=c[0]?.textContent?.trim()||"",l=c[1]?.textContent?.trim()||"",d=o.querySelector('[class*="eventName"], [class*="betInformation__eventName"]')?.textContent?.trim()||"",f=`${a} ${l} ${d} ${s}`;let p=null;for(const E of o.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="UpdateNotification"]'))if(p=V(E.textContent),p)break;if(!p){const E=[];for(const j of o.querySelectorAll("span, div, b, strong")){const ct=(j.textContent||"").trim();if(!/^\d+\.\d{1,3}$/.test(ct))continue;const at=V(ct);at&&E.push(at)}E.length&&(p=E[E.length-1])}if(!(p>1.01))continue;let m="",y="";if(d){for(const E of[" vs "," VS "," 대 "])if(d.includes(E)){[m,y]=d.split(E,2).map(j=>j.trim());break}}let x=a;/^W1$/i.test(x)&&(x=m||x),/^W2$/i.test(x)&&(x=y||x);const S=$();return{source:"bcgame",odds:p,teamLabel:x,outcome:x,selectionText:a||x,displayLabel:`${p.toFixed(3)}${S>0?` · $${S.toFixed(2)}`:""}`,stake:S||null,eventText:d,homeTeam:m,awayTeam:y,marketKind:/핸디|handicap|hdp|spread/i.test(f)?"ah":/오버|언더|over|under|총계|total/i.test(f)?"ou":"ml",sourceKind:"sports-slip",fromPayout:!1,fromSlip:!0,hasInput:e}}return null}function wt(){if(yt())return!0;const t=st(),e=/vs\.?|승자|맵\s*[-–]|winner|\bW[12]\b/i.test(t)&&!ot(t.slice(0,240));return!z()?.querySelector?.('[class*="betInformation__title"], [class*="betInformation"], [class*="Selection"], [class*="selection"], [class*="coupon"], [class*="Coupon"], [class*="BetItem"], [class*="bet-item"]')&&!e}function O(){if(wt())return k={odds:0,source:"",at:0,key:""},null;if(typeof window.__bcReadNativeSlip=="function")try{const n=window.__bcReadNativeSlip();if(n?.odds>1.01)return I({odds:n.odds,teamLabel:n.teamLabel||n.selectionText||n.outcome||"",selectionText:n.selectionText||n.teamLabel||n.outcome||"",sourceKind:n.sourceKind||"bc-native-slip",source:n.method||n.sourceKind||"bc-native-slip",fromSlip:n.fromSlip!==!1,fromPayout:!!n.fromPayout})}catch{}const t=Yt();if(t?.odds>1.01)return I(t);const e=St();return e?.odds>1.01?I(e):k.source==="slip"&&k.odds>1.01&&Date.now()-k.at<8e3?I({odds:k.odds,teamLabel:k.key,sourceKind:"bc-native-slip",source:"slip-latched",fromSlip:!0}):null}function D(){const t=O(),e=A(),n=et(),r=t?.odds>1.01?t.odds:0,o=r>1&&(t.sourceKind==="bc-native-slip"||t.sourceKind==="sports-slip"||t.fromPayout);return{hasPanel:!!(e&&o),hasInput:!!e,stake:$(),hasBtn:!!(n&&!n.disabled),btnText:n?(n.textContent||"").trim().slice(0,60):"",btnDisabled:n?!!n.disabled:null,team:t?.teamLabel||"",slipOdds:r,hasSlipSelection:!!o,slipKind:t?.sourceKind||"",url:location.href,mode:"sports"}}async function X(t){t&&(t.dispatchEvent(new KeyboardEvent("keydown",{bubbles:!0,key:"Enter",code:"Enter",keyCode:13})),t.dispatchEvent(new KeyboardEvent("keyup",{bubbles:!0,key:"Enter",code:"Enter",keyCode:13})),t.dispatchEvent(new KeyboardEvent("keydown",{bubbles:!0,key:"Tab",code:"Tab",keyCode:9})),t.dispatchEvent(new KeyboardEvent("keyup",{bubbles:!0,key:"Tab",code:"Tab",keyCode:9})),t.dispatchEvent(new FocusEvent("blur",{bubbles:!0})),await h(150))}async function Z(t,e=!0){const n=Math.max(.01,Math.round(t*100)/100),r=A();if(!r)return{ok:!1,reason:"베팅슬립 없음 — 배당 클릭 후 금액 입력란 확인"};const o=$();if(!e&&o&&Math.abs(o-n)<.05)return{ok:!0,stake:o,method:"unchanged"};const s=String(n);r.focus?.();try{r.select?.(),document.execCommand("selectAll",!1,null),document.execCommand("insertText",!1,s)?(r.dispatchEvent(new InputEvent("input",{bubbles:!0,data:s,inputType:"insertText"})),r.dispatchEvent(new Event("change",{bubbles:!0}))):await R(r,s)}catch{await R(r,s)}await X(r),await h(120);let i=$();if((!(i>0)||Math.abs(i-n)>.2)&&(await R(r,s),await X(r),await h(120),i=$()),!(i>0)||Math.abs(i-n)>.2){r.focus?.();for(const a of s){const l=r instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,u=Object.getOwnPropertyDescriptor(l,"value")?.set,d=(r.value||"")+a;u?u.call(r,d):r.value=d,r.dispatchEvent(new InputEvent("input",{bubbles:!0,data:a,inputType:"insertText"})),await h(20)}await X(r),await h(120),i=$()}const c=(()=>{const a=r.value??r.textContent??"",l=String(a).replace(/,/g,"").match(/([\d]+(?:\.\d+)?)/);return l?parseFloat(l[1]):0})();return i>0&&Math.abs(i-n)<.5?{ok:!0,stake:i,method:"type",target:n,inputVal:c}:c>0&&Math.abs(c-n)<.25?{ok:!0,partial:!0,stake:i||c,inputVal:c,target:n,method:"type-input-only"}:{ok:!1,reason:c>0&&Math.abs(c-n)<.2?`금액 미반영 — 입력 ${c} · 총베팅 ${i||0} (Enter/탭 후 확인)`:`금액 입력 실패 — $${n} 직접 입력`,stake:i||c||0,inputVal:c,target:n}}async function jt(t){if(!t)return null;let e=null,n=0;for(const r of document.querySelectorAll('button, [role="button"]')){if(!b(r))continue;const o=(r.textContent||"").replace(/\s+/g," ").trim();if(!o||o.length>140||!w(t,o))continue;const s=V(o.match(/(\d+\.\d{1,3})\s*$/)?.[1]||"");let i=M(r)+80;s&&(i+=40),i>n&&(n=i,e=r)}return e&&(L(e),await h(300)),e}async function kt(t){if(A()&&O()?.odds>1.01)return{ok:!0,alreadyOpen:!0};const e=await jt(t);for(let n=0;n<15;n++){if(A()&&O()?.odds>1.01)return{ok:!0,clicked:!!e};await h(120)}return{ok:!1,reason:"BC.Game 슬립 없음 — 배당 클릭",probe:D()}}async function Xt(t,e={}){const n=!!e.skipFill,r=!!e.fastStrike,o=e.teamHint||"";if(!A()){if(r)return{success:!1,reason:"베팅슬립 없음",probe:D()};const f=await kt(o);if(!f.ok)return{success:!1,reason:f.reason||"베팅슬립 없음",probe:f.probe}}const s=Math.max(.01,Math.round(t*100)/100);if(n)if(r){const f=$();if(!f||Math.abs(f-s)>.2){const p=await Z(s,!0);if(!p.ok)return{success:!1,reason:p.reason||"금액 입력 실패"}}}else{const f=$();if(!f||Math.abs(f-s)>.2){const p=await Z(s,!0);if(!p.ok)return{success:!1,reason:p.reason||"금액 입력 실패"}}}else{const f=await Z(s,!0);if(!f.ok)return{success:!1,reason:f.reason||"금액 입력 실패",probe:D()}}let i=null;const c=r?4:n?6:20;for(let f=0;f<c&&(f>0&&await h(r?6:n?25:100),i=et(),!(i&&!i.disabled));f++)i=null;if(!i)return{success:!1,reason:"베팅하기 버튼 없음 — 슬립 열기",probe:D()};const a=(i.textContent||"").trim();L(i),await h(r?20:350);const l=et();l&&l!==i&&/배당|수락|accept/i.test(l.textContent||"")&&(L(l),await h(r?40:200));const u=it();u&&L(u);const d=await Kt(null,i);return d.btnText=a.slice(0,60),d.method=r?"sports-fast":"sports",d}function rt(){if(P()||gt())return O();const t=O();return t?.odds>1.01?t:qt()}function vt(){return P()?D():N()}async function Jt(t){return P()?kt(t):Ut(t)}async function Ct(t,e=!0){return P()?Z(t,e):Rt(t,e)}async function At(t,e={}){return P()?Xt(t,e):ve(t,e)}const Qt=/\bto\s*win\b|우승|당첨(금)?|획득|예상\s*수익/i,lt=/\bamount\b|금액/i,Ht=/\bbuy\b|매수|구매/i,W=/avg\.?\s*price|average\s*price|평균\s*가격/i,te=/(?:amount|금액)\s*\(\s*usdt\s*\)/i;function F(t){const e=parseFloat(String(t||"").replace(/,/g,"").replace(/[+,\s]/g,""));return Number.isFinite(e)?e:NaN}function Tt(t){const e=String(t||""),n=[/\bto\s*win\b/i,/우승/,/당첨(?:금)?/,/획득/,/예상\s*수익/];let r=-1;for(const o of n){const s=e.match(o);s&&(r<0||s.index<r)&&(r=s.index)}return r}function b(t){if(!t)return!1;const e=t.getBoundingClientRect();return e.width>0&&e.height>0}function T(t){const e=(t?.textContent||"").replace(/\s+/g," ").trim();return/^(Buy|Sell|매수|매도|구매|판매)$/i.test(e)}function ut(t){const e=`${t?.placeholder||""} ${t?.getAttribute?.("aria-label")||""} ${t?.id||""}`.toLowerCase();return/search|검색/.test(e)}function ee(t){const e=String(t||"").trim();let n=e.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);if(n){const r=F(n[1]);if(r>0)return r}if(n=e.match(/^\$?\s*([\d,]+(?:\.\d+)?)/),n){const r=F(n[1]);if(r>0)return r}if(n=e.match(/^≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i),n){const r=F(n[1]);if(r>0)return r}return null}function ne(t){const e=Qt.test(t),n=lt.test(t),r=Ht.test(t),o=/\bshares\b/i.test(t);if(!e&&!n&&!(r&&o)||n&&!r&&!e&&!o)return-1;let s=0;n&&(s+=35),r&&(s+=30),e&&(s+=25),o&&(s+=20),(/\blimit\b/i.test(t)||/\bmarket\b/i.test(t)||/마켓/i.test(t))&&(s+=15),W.test(t)&&(s+=20),t.length<=450?s+=160:t.length<=900?s+=90:t.length>2e3?s-=280:t.length>1200?s-=120:s+=Math.min(t.length/40,15),te.test(t)&&(s+=45),/\b(?:buy|구매)\s+(yes|no|예|아니오)\b/i.test(t)&&(s+=40);const i=t.search(lt),c=Tt(t);return i>=0&&c>=0&&Math.abs(i-c)<450&&(s+=75),/\+\s*\$1\s*@\s*1\s*¢/i.test(t)&&(s-=120),t.length<40&&(s-=50),s}function g(){let t=null,e=-1;for(const n of document.querySelectorAll("div, section, aside, form")){if(!b(n))continue;const r=n.innerText||"";if(!n.querySelector('input, [contenteditable="true"]')||r.length>8e3)continue;const o=ne(r);o<0||o>e&&(e=o,t=n)}return t}function h(t){return new Promise(e=>setTimeout(e,t))}function q(t){const e=t||g()||document;for(const o of e.querySelectorAll("label, span, p, div")){const s=(o.textContent||"").trim();if(!/^amount/i.test(s)&&!/^금액/i.test(s))continue;const c=(o.closest("div")||o.parentElement)?.querySelector('input, textarea, [contenteditable="true"]');if(c&&b(c)&&!ut(c))return c}const n=Array.from(e.querySelectorAll('input, textarea, [contenteditable="true"]')).filter(o=>b(o)&&!ut(o));for(const o of n){const s=(o.placeholder||"").toLowerCase(),i=(o.getAttribute("aria-label")||"").toLowerCase(),c=(o.getAttribute("name")||"").toLowerCase();if(s.includes("amount")||s.includes("$")||s.includes("usdt")||i.includes("amount")||c.includes("amount"))return o}const r=n.filter(o=>!t||t.contains(o));for(const o of r){const s=(o.getAttribute("type")||"").toLowerCase();if(s==="number"||s==="text"||s===""||o.isContentEditable)return o}return r[0]||e.querySelector('input:not([placeholder*="earch" i])')}function oe(t){if(!t)return null;const e=t.isContentEditable?t.textContent:t.value,n=parseFloat(String(e||"").replace(/[$,\s]/g,""));return Number.isFinite(n)&&n>0?n:null}function ft(t){return oe(q(t))}function Et(t){const e=t||g();if(!e)return ft(null);const n=q(e);if(n){for(const c of[n.value,n.getAttribute("value"),n.textContent,n.getAttribute("aria-valuenow"),n.getAttribute("data-value")]){const a=parseFloat(String(c||"").replace(/[$,\s]/g,""));if(Number.isFinite(a)&&a>0)return a}const i=n.closest("div")||n.parentElement;if(i){const c=(i.textContent||"").match(/\$\s*([\d,]+(?:\.\d+)?)/);if(c){const a=parseFloat(c[1].replace(/,/g,""));if(a>0&&a<1e5)return a}}}const r=ft(e);if(r)return r;const o=(e.innerText||"").replace(/\s+/g," "),s=[/(?:Amount|금액)(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,/\bamount\b[^$\d]{0,20}\$?\s*([\d,]+(?:\.\d+)?)/i];for(const i of s){const c=o.match(i);if(!c)continue;const a=parseFloat(c[1].replace(/,/g,""));if(a>0&&a<1e5)return a}return null}function Bt(t){return ee(t)}function se(t,e){return!!(/¢/.test(t)||/\b(?:avg\.?\s*)?price\b/i.test(t)&&e>0&&e<=99)}function J(t,e,n){return!t||t<=0||e&&Math.abs(t-e)<.02||se(n,t)?!1:!!(Math.abs(t-Math.round(t))>.001||e&&t>=e*1.35)}function $t(t){const e=(t?.innerText||"").replace(/\s+/g," "),n=Tt(e);if(n<0)return null;const r=e.slice(n,n+200),o=[/(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i,/(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i,/(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?\$\s*([\d,]+(?:\.\d+)?)/i];for(const s of o){const i=r.match(s);if(!i)continue;const c=F(i[1]);if(c>0)return c}return null}function re(t){const e=t||g(),n=$t(e);if(n)return n;const r=[e,document.body].filter(Boolean),o=[];for(const s of r){const i=s.innerText||"",c=[/\bto\s*win\b/gi,/우승/g,/당첨(?:금)?/g,/획득/g];for(const a of c)for(const l of i.matchAll(a)){const u=i.slice(l.index,l.index+500);for(const d of u.matchAll(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/gi)){const f=F(d[1]),p=u.slice(Math.max(0,d.index-24),d.index+d[0].length+24);W.test(p)||/(?:amount|금액)\s*\(|사용\s*가능|available|slippage|슬리피지/i.test(p)||f>=.01&&o.push({v:f,score:135})}for(const d of u.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)){const f=F(d[1]),p=u.slice(Math.max(0,d.index-24),d.index+d[0].length+24);W.test(p)||/¢|price\s*\d|≈/i.test(p)||f>=.5&&o.push({v:f,score:120})}for(const d of u.matchAll(/\b([\d,]+\.\d{2})\b/g)){const f=u.slice(Math.max(0,d.index-24),d.index+d[0].length+24);if(W.test(f)||/¢|amount|금액/i.test(f))continue;const p=F(d[1]);p>=.5&&o.push({v:p,score:100})}}for(const a of s.querySelectorAll("*")){const l=(a.textContent||"").replace(/\s+/g," ").trim();if(!/^to\s*win$/i.test(l)&&!/^우승$/i.test(l)&&!/^당첨(?:금)?$/i.test(l))continue;let u=a.parentElement;for(let d=0;d<6&&u;d++){for(const f of u.querySelectorAll("span, div, p, strong, h1, h2, h3")){if(f.children.length>3)continue;const p=(f.textContent||"").trim();if(/avg\.?\s*price|¢/i.test(p))continue;let m=Bt(p);if(!m){const x=p.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);x&&(m=parseFloat(x[1].replace(/,/g,"")))}if(!m||m<.5)continue;let y=90-d*8;try{parseFloat(getComputedStyle(f).fontSize||"0")>=18&&(y+=40)}catch{}o.push({v:m,score:y})}u=u.parentElement}}}return o.length?(o.sort((s,i)=>i.score-s.score||i.v-s.v),o[0].v):null}function ie(t,e){const n=$t(t||g());if(n)return n;const r=re(t);if(r)return r;const o=[t,document.body].filter(Boolean),s=[];for(const i of o){const c=i.innerText||"";for(const a of c.matchAll(/to\s*win/gi)){const l=c.slice(a.index,a.index+600);for(const u of l.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)){const d=parseFloat(u[1].replace(/,/g,"")),f=l.slice(Math.max(0,u.index-8),u.index+u[0].length+8);J(d,e,f)&&s.push(d)}for(const u of l.matchAll(/\b([\d,]+\.\d{2})\b/g)){const d=l.lastIndexOf(`
-`,u.index)+1,f=l.indexOf(`
-`,u.index),p=l.slice(d,f===-1?l.length:f);if(/¢/.test(p))continue;const m=parseFloat(u[1].replace(/,/g,""));J(m,e,p)&&s.push(m)}}for(const a of i.querySelectorAll("*")){const l=(a.textContent||"").trim();if(!/^to\s*win/i.test(l.replace(/[^\w\s]/gi,"")))continue;let u=a.nextElementSibling;for(let d=0;d<8&&u;d++){const f=(u.textContent||"").trim();if(/¢|avg\.?\s*price/i.test(f)){u=u.nextElementSibling;continue}const p=Bt(f);p&&J(p,e,f)&&s.push(p),u=u.nextElementSibling}}}return s.length?Math.max(...s):null}const ce=1,ae=99;function v(t){return Number.isFinite(t)&&t>=ce&&t<ae}function le(t){const e=(t?.innerText||"").replace(/\s+/g," "),n=[],r=[{re:/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi,score:120},{re:/average\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi,score:120},{re:/평균\s*가격\s*(\d+(?:\.\d+)?)\s*¢/gi,score:120},{re:/price\s*(\d+(?:\.\d+)?)\s*¢/gi,score:60}];for(const{re:o,score:s}of r){let i;for(;(i=o.exec(e))!==null;){const c=parseFloat(i[1]),a=e.slice(Math.max(0,i.index-16),i.index+i[0].length+16);/min|max|slippage|fee|spread|limit|impact/i.test(a)||v(c)&&n.push({cents:c,score:s})}}return n.length?(n.sort((o,s)=>s.score-o.score),n[0].cents):null}function C(t){const e=String(t||"").replace(/\s+/g," ").trim();if(/^\+\s*\$/.test(e)||/^sell\s+/i.test(e)||/@\s*\d/.test(e)&&/\+\s*\$/.test(e))return null;let n=e.match(/(\d+(?:\.\d+)?)\s*¢/);if(n){const r=parseFloat(n[1]);if(v(r))return r}if(n=e.match(/(\d+(?:\.\d+)?)\s*%/),n){const r=parseFloat(n[1]);if(v(r))return r}if(/^0\.\d{2,4}$/.test(e)){const r=parseFloat(e)*100;if(v(r))return r}return null}function ue(t){return/^(yes|no)$/i.test(String(t||"").trim())}function w(t,e){if(!t)return!0;const n=String(t).trim(),r=String(e||"");if(ue(n))return new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`,"i").test(r);const o=l=>l.toLowerCase().replace(/[^a-z0-9가-힣]/g,""),s=o(n),i=o(r);if(!s||!i)return!1;if(i.includes(s)||s.includes(i))return!0;const c=n.split(/\s+/).filter(l=>l.length>=2)[0];if(c){const l=o(c);if(l.length>=3&&(i.includes(l)||l.includes(i)))return!0}const a=n.split(/\s+/).filter(l=>l.length>=2);return a.length>=2&&a.every(l=>new RegExp(l.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"i").test(r))?!0:a.some(l=>l.length>=3&&new RegExp(l.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"i").test(r))}function _t(t){const e=[];for(const n of document.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(n)||T(n))continue;const r=M(n),o=(n.textContent||"").replace(/\s+/g," ").trim();if(!o||o.length>120)continue;const s=C(o);if(!s||t&&!w(t,o))continue;let i=r+150;r<30&&!/active|selected|pressed|border-primary|ring-/i.test(String(n.className||""))||(t&&w(t,o)&&(i+=100),/^yes\b|^no\b/i.test(o)&&(i+=40),e.push({cents:s,score:i,t:o}))}return e.length?(e.sort((n,r)=>r.score-n.score),e[0].cents):K(t)}function Mt(){const t=g(),e=[];if(t){let n=t.parentElement;for(let r=0;r<10&&n&&n!==document.body;r++){const o=n.querySelectorAll('button, [role="button"]');if(Array.from(o).some(i=>C(i.textContent||""))&&o.length>=2&&o.length<=40){e.push(n);break}n=n.parentElement}e.push(t)}return e.length?e:[document.body]}function Ft(t){if(!t)return null;const e=[],n=Mt();for(const r of n)for(const o of r.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(o)||T(o))continue;const s=(o.textContent||"").replace(/\s+/g," ").trim();if(!s||s.length>140)continue;const i=C(s);if(!i)continue;let c=w(t,s);if(!c){const d=(o.closest('[class*="outcome"], [class*="Outcome"], li, div')?.textContent||o.parentElement?.textContent||"").replace(/\s+/g," ").trim();c=w(t,d)}if(!c)continue;const a=M(o);let l=0;w(t,s)&&(l+=120),l+=a,a>=80&&(l+=300),/^buy\s+/i.test(s)&&(l+=40),l+=Math.max(0,90-s.length),e.push({cents:i,score:l,t:s})}return e.length?(e.sort((r,o)=>o.score-r.score),e[0].cents):null}function Lt(t,e){if(!t||!e||t<=0||e<=0)return null;const n=e>=t?e:t+e,r=n/t;return!Number.isFinite(r)||r<=1.001||r>100?null:{odds:r,totalPayout:n,profit:n-t,priceCents:Math.round(t/n*1e3)/10}}function fe(t,e){return Lt(t,e)?.priceCents??null}function K(t){const e=[];for(const n of document.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(n)||T(n))continue;const r=(n.textContent||"").replace(/\s+/g," ").trim(),o=C(r);if(!o||t&&!w(t,r))continue;let s=0;n.getAttribute("aria-pressed")==="true"&&(s+=90),(n.getAttribute("data-state")==="on"||n.getAttribute("data-state")==="checked")&&(s+=90),n.getAttribute("aria-selected")==="true"&&(s+=80);const i=String(n.className||"");/active|selected|checked|pressed|border-primary|ring-/i.test(i)&&(s+=60),r.length<80&&(s+=10),e.push({cents:o,score:s})}return e.length?(e.sort((n,r)=>r.score-n.score),e[0].cents):null}function Pt(t){if(!t)return null;const e=[],n=[g(),document.body].filter(Boolean);for(const r of n)for(const o of r.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(o)||T(o))continue;const s=(o.textContent||"").replace(/\s+/g," ").trim();if(!w(t,s))continue;const i=C(s);if(!i)continue;let c=M(o);/^buy\s+/i.test(s)&&(c+=20),e.push({cents:i,score:c,t:s})}return e.length?(e.sort((r,o)=>o.score-r.score),e[0].cents):K(t)}function M(t){let e=0;t.getAttribute("aria-pressed")==="true"&&(e+=120),t.getAttribute("aria-selected")==="true"&&(e+=110),(t.getAttribute("data-state")==="on"||t.getAttribute("data-state")==="checked")&&(e+=110);const n=String(t.className||"");return/active|selected|checked|pressed|border-primary|ring-/i.test(n)&&(e+=80),e}function de(t){return String(t||"").replace(/\d+(?:\.\d+)?\s*¢/g,"").replace(/\d+(?:\.\d+)?\s*%/g,"").replace(/^(?:buy|구매|sell|매도)\s+/i,"").trim()}function Nt(){const t=[],e=new Set;for(const r of Mt())for(const o of r.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(o)||T(o))continue;const s=(o.textContent||"").replace(/\s+/g," ").trim();if(!s||s.length>120||e.has(s))continue;e.add(s);const i=C(s);if(!i)continue;const c=de(s);if(c.length<2||c.length>72||/^(yes|no|over|under|draw|tie)$/i.test(c))continue;const a=M(o);let l=a;a>=80?l+=220:a>=50?l+=100:a>=20&&(l+=40),/^buy\s+/i.test(s)&&(l-=60),t.push({team:c,cents:i,score:l,sel:a,t:s})}if(!t.length)return null;const n=t.filter(r=>r.sel>=20).sort((r,o)=>o.score-r.score);return n.length?n[0]:(t.sort((r,o)=>o.score-r.score),t[0])}function pe(t,e,n){const r=G(t),o=Nt();let s=r||o?.team||"";r&&o&&!w(r,o.team)&&(s=r);let i=null;return s&&(i=Ft(s)||Pt(s)||Ot(s)||_t(s)),!i&&o&&(!s||w(s,o.team))&&(i=o.cents,s||(s=o.team)),i||(i=nt(t,e,n)),!i&&o&&(i=o.cents,s||(s=o.team)),{team:s,boardCents:i}}function Ot(t){const e=[],n=t?10:20;for(const r of document.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(r)||T(r))continue;const o=(r.textContent||"").replace(/\s+/g," ").trim(),s=C(o);if(!s)continue;const i=M(r);i<n||t&&!w(t,o)||e.push({cents:s,score:i+(t&&w(t,o)?50:0),t:o})}return e.length?(e.sort((r,o)=>o.score-r.score),e[0].cents):null}function me(){for(const t of document.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(t)||T(t)||!(t.getAttribute("aria-pressed")==="true"||t.getAttribute("aria-selected")==="true"||t.getAttribute("data-state")==="on"||t.getAttribute("data-state")==="checked"))continue;const n=(t.textContent||"").replace(/\s+/g," ").trim(),r=n.match(/^(yes|no)\b/i);if(r)return r[1];const o=n.replace(/\d+(?:\.\d+)?\s*¢/g,"").replace(/\d+(?:\.\d+)?\s*%/g,"").trim();if(o.length>=2&&o.length<80)return o}return""}function be(t){const e=[],n=[g(),document.body].filter(Boolean);for(const r of n)for(const o of r.querySelectorAll('button, [role="button"], [role="radio"], [class*="outcome"], [class*="Outcome"]')){if(!b(o))continue;const s=(o.textContent||"").replace(/\s+/g," ").trim();if(!s||s.length>160)continue;const i=C(s);if(!i||t&&!w(t,s))continue;let c=40;t&&w(t,s)&&(c+=120),c+=M(o),/^buy\s+/i.test(s)&&(c+=30),e.push({cents:i,score:c})}return e.length?(e.sort((r,o)=>o.score-r.score),e[0].cents):null}function G(t){const e=[t,g(),document.body].filter(Boolean),n=new Set;for(const o of e){if(!o||n.has(o))continue;n.add(o);for(const c of o.querySelectorAll('button, [role="button"]')){if(!b(c))continue;const l=(c.textContent||"").replace(/\s+/g," ").trim().match(/^(?:buy|구매)\s+(.+)$/i);if(l)return l[1].trim()}const i=(o.innerText||"").match(/(?:Buy|매수|구매)\s+([^\n$¢@%]+?)(?:\s*$|\s+(?:Avg|평균)|\s+(?:To win|우승))/i);if(i)return i[1].trim()}const r=me();return r||""}function he(t){const e=t||g()||document.body;for(const n of e.querySelectorAll('button, [role="button"]')){if(!b(n)||T(n))continue;const r=(n.textContent||"").replace(/\s+/g," ").trim();if(!/^buy\s+/i.test(r))continue;const o=C(r);if(o)return o;const s=n.parentElement;if(s){const i=(s.textContent||"").match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);if(i){const c=parseFloat(i[1]);if(v(c))return c}}}return null}function ge(t,e){if(!t.length)return null;t.sort((r,o)=>o.score-r.score);const n=e?["implied","selected-board","avg","buy-btn","selected","buy-team","team-btn","implied-fallback","page","event-board"]:["selected-board","avg","buy-btn","selected","buy-team","team-btn","implied-fallback","page","event-board"];for(const r of n){const o=t.find(s=>s.src===r);if(o)return o.cents}return t[0].cents}function nt(t,e,n){const r=t||g(),o=G(r),s=[],i=e>0&&n>0;function c(d,f,p){v(d)&&s.push({cents:d,score:f,src:p})}const a=fe(e,n);a&&i&&c(a,950,"implied");const l=_t(o);l&&c(l,i?880:920,"selected-board");const u=le(r);if(u&&c(u,i?860:800,"avg"),o){const d=he(r);d&&c(d,500,"buy-btn");const f=Ot(o);f&&c(f,480,"selected");const p=Ft(o);p&&c(p,320,"buy-team");const m=Pt(o);m&&c(m,280,"team-btn")}if(!i&&a&&c(a,260,"implied-fallback"),!s.length){const d=K(o);d&&c(d,200,"page");const f=be(o);f&&c(f,180,"event-board")}return ge(s,i)}function Q(t){return t?Number.isInteger(t)?`${t}¢`:`${t.toFixed(1)}¢`:""}function dt(t){if(!v(t))return null;const e=t/100;return e>0&&e<1?1/e:null}function qt(){const t=g(),e=Et(t),n=ie(t,e),r=pe(t,e,n),o=r.team||G(t),s=Lt(e,n);if(s){const{odds:u,totalPayout:d,profit:f,priceCents:p}=s;return{source:B(),odds:u,priceCents:p,price:p/100,teamLabel:o,outcome:o,selectionText:o||"",displayLabel:`${u.toFixed(3)} · 당첨 ${n.toFixed(2)} USDT`,stake:e,payout:d,toWin:f,hint:`우승 ${n.toLocaleString("en-US",{maximumFractionDigits:2})} USDT ÷ 금액 ${e.toFixed(2)} USDT`,marketKind:"ml",period:"ft",marketKey:`poly_ml_${(o||"out").slice(0,20)}`,fromPayout:!0,liveCents:!1}}if(e>0&&!n){let u=r.boardCents;if(u||(u=nt(t,0,0)),u||(u=K(o)),!u&&t){const f=(t.innerText||"").match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);if(f){const p=parseFloat(f[1]);v(p)&&(u=p)}}const d=dt(u);if(d>1.001){const f=u||pt(d),p=Q(f);return{source:B(),odds:d,priceCents:f,price:f/100,teamLabel:o,outcome:o,selectionText:o?`${o} @ ${p}`:p,displayLabel:`${p} (${d.toFixed(3)})`,stake:e,payout:null,toWin:null,hint:"Amount 입력됨 — To win 계산 중, ¢ 배당 유지",marketKind:"ml",period:"ft",marketKey:`poly_ml_${(o||"out").slice(0,20)}`,fromPayout:!1,liveCents:!0,pendingToWin:!0}}return{source:B(),odds:null,needsStake:!0,teamLabel:o,stake:e,priceCents:v(u)?u:null,hint:"우승(당첨) 계산 대기 중...",marketKind:"ml"}}let i=r.boardCents;if(i||(i=nt(t,0,0)),i||(i=K(o)),!i&&t){const u=(t.innerText||"").match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);if(u){const d=parseFloat(u[1]);v(d)&&(i=d)}}const c=dt(i);if(!c||c<=1.001)return{source:B(),odds:null,needsStake:!0,teamLabel:o,priceCents:v(i)?i:null,hint:i?`${Q(i)} — Amount 입력 시 당첨금 기준 배당`:"BC.Game Amount 입력 후 To win 확인",marketKind:"ml"};const a=i||pt(c),l=Q(a);return{source:B(),odds:c,priceCents:a,price:a/100,teamLabel:o,outcome:o,selectionText:o?`${o} @ ${l}`:l,displayLabel:`${l} (${c.toFixed(3)})`,stake:e||null,payout:null,toWin:null,hint:"Amount 입력 시 To win 기준 배당으로 전환",marketKind:"ml",period:"ft",marketKey:`poly_ml_${(o||"out").slice(0,20)}`,fromPayout:!1,liveCents:!!i}}function pt(t){if(!t||t<=1)return null;const e=Math.round(1e3/t)/10;return v(e)?e:null}function U(t){if(!t)return!1;try{t.scrollIntoView({block:"center",inline:"center"})}catch{}try{t.focus({preventScroll:!0})}catch{}const e=t.getBoundingClientRect(),n=e.left+e.width/2,r=e.top+e.height/2,o={bubbles:!0,cancelable:!0,view:window,clientX:n,clientY:r,button:0,buttons:1};try{t.dispatchEvent(new PointerEvent("pointerdown",{...o,pointerId:1,pointerType:"mouse"}))}catch{}try{t.dispatchEvent(new PointerEvent("pointerup",{...o,pointerId:1,pointerType:"mouse"}))}catch{}return t.dispatchEvent(new MouseEvent("mousedown",o)),t.dispatchEvent(new MouseEvent("mouseup",o)),t.dispatchEvent(new MouseEvent("click",o)),typeof t.click=="function"&&t.click(),!0}async function R(t,e){if(!t)return!1;const n=String(e);t.focus();try{t.click()}catch{}if(t.isContentEditable)return t.textContent=n,t.dispatchEvent(new InputEvent("input",{bubbles:!0,data:n,inputType:"insertFromPaste"})),t.dispatchEvent(new Event("change",{bubbles:!0})),await h(50),!0;const r=t instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,o=Object.getOwnPropertyDescriptor(r,"value")?.set;try{t.select?.(),document.execCommand?.("selectAll",!1,null)}catch{}return o?o.call(t,n):t.value=n,t.dispatchEvent(new InputEvent("input",{bubbles:!0,data:n,inputType:"insertFromPaste"})),t.dispatchEvent(new Event("change",{bubbles:!0})),t.dispatchEvent(new KeyboardEvent("keyup",{bubbles:!0})),t.dispatchEvent(new FocusEvent("blur",{bubbles:!0})),await h(80),!0}function It(t){const e=t||g()||document.body;for(const n of e.querySelectorAll('button, [role="button"], [role="tab"]')){if(!b(n))continue;const r=(n.textContent||"").replace(/\s+/g," ").trim();if(r!=="Buy"&&r!=="매수"&&r!=="구매")continue;return n.getAttribute("aria-pressed")==="true"||n.getAttribute("aria-selected")==="true"||n.getAttribute("data-state")==="active"||/active|selected|bg-/i.test(String(n.className||""))||U(n),!0}return!1}function ye(t){const e=(t?.textContent||"").replace(/\s+/g," ").trim();if(e!=="Buy"&&e!=="매수"&&e!=="Sell"&&e!=="매도"&&e!=="구매"&&e!=="판매")return!1;const r=(t.parentElement?.textContent||"").replace(/\s+/g," ");return/\bBuy\b/.test(r)&&/\bSell\b/.test(r)&&r.length<50}function Y(t){const e=t||g()||document.body;let n=null,r=-1;for(const o of e.querySelectorAll('button, [role="button"]')){if(!b(o)||o.disabled||ye(o))continue;const s=(o.textContent||"").replace(/\s+/g," ").trim();if(!/^buy\b/i.test(s)||s.length<4||/combo|terms|sell|deposit|withdraw/i.test(s))continue;let i=100+s.length;o.classList?.contains("trading-button")&&(i+=500),o.querySelector?.(".trading-button-text")&&(i+=300);const c=o.getBoundingClientRect();c.width>=120&&c.height>=32&&(i+=60),t&&t.contains(o)&&(i+=40),i>r&&(r=i,n=o)}return n}function Dt(t){const e=Y(t);if(e)return e;const n=q(t);if(n){let i=n.parentElement;for(let c=0;c<10&&i;c++){const a=[];for(const l of i.querySelectorAll('button, [role="button"]')){if(!b(l)||l.disabled)continue;const u=(l.textContent||"").replace(/\s+/g," ").trim(),d=u.toLowerCase();if(!u||u.length>120||d==="sell"||d==="buy"&&i.textContent.includes("Sell")&&u.length<6)continue;let f=0;/^buy\b/i.test(u)&&u.length>4&&(f+=100),/\$\d/.test(u)&&(f+=90),/place order|submit/i.test(d)&&(f+=110),/yes|no/i.test(u)&&/buy/i.test(u)&&(f+=80);const p=l.getBoundingClientRect();p.width>=100&&p.height>=36&&(f+=20),f>=70&&a.push({btn:l,score:f,t:u})}if(a.length)return a.sort((l,u)=>u.score-l.score),a[0].btn;i=i.parentElement}}const r=[t,g(),document.body].filter(Boolean),o=new Set,s=[];for(const i of r)for(const c of i.querySelectorAll('button, [role="button"]')){if(!c||o.has(c)||!b(c)||c.disabled)continue;o.add(c);const a=(c.textContent||"").replace(/\s+/g," ").trim(),l=(c.getAttribute("aria-label")||"").trim(),u=`${a} ${l}`.toLowerCase(),d=c.getBoundingClientRect();let f=0;if(/place order|submit order|confirm purchase|confirm buy/i.test(u)&&(f+=120),/^buy\s+.+/i.test(a)&&a.length>6&&(f+=95),/buy.*\$\d|^\$\d.*buy/i.test(a)&&(f+=90),/buy.*(yes|no)\b/i.test(u)&&(f+=85),l&&/buy/i.test(l)&&!/tab/i.test(l)&&(f+=70),a==="Buy"||a==="매수"){const p=(c.parentElement?.textContent||"").replace(/\s+/g," ");f+=/\bSell\b/.test(p)&&p.length<40?5:50}d.width>=90&&d.height>=32&&(f+=15),t&&t.contains(c)&&(f+=25),/\d+¢|shares/i.test(a)&&(f+=10),f>=45&&s.push({btn:c,score:f,t:a.slice(0,60)})}return s.sort((i,c)=>c.score-i.score),s[0]?.btn||null}async function xe(t,e){const n=t||g()||document.body,r=Math.max(1,Math.round(e)),o=[100,10,5,1];let s=r,i=0;for(const c of o)for(;s>=c;){let a=null;for(const l of n.querySelectorAll('button, [role="button"]')){if(!b(l))continue;const u=(l.textContent||"").trim();if(u===`+$${c}`||u===`$${c}`){a=l;break}}if(!a)break;a.click(),U(a),i++,s-=c,await h(150)}return i}function _(t){return Et(t)}async function Rt(t,e=!0){const n=g();if(!n)return{ok:!1,reason:"주문 패널 없음 — outcome 클릭 후 Amount 표시"};It(n),await h(60);const r=Math.max(1,Math.round(t*100)/100),o=_(n);if(!e&&o&&Math.abs(o-r)<.05)return{ok:!0,stake:o,method:"unchanged"};if(o&&Math.abs(o-r)<.02)return{ok:!0,stake:o,method:"skip-same"};const s=q(n);if(s){await R(s,String(r)),await h(60);const i=_(n);if(i&&i>=.5)return{ok:!0,stake:i,method:"type",target:r}}return{ok:!1,reason:`금액 입력 실패 — Amount에 $${r} 직접 입력`,stake:o||0}}async function Se(t,e){const n=Math.max(1,Math.round(e*100)/100),r=_(t);if(r&&r>=.5)return{ok:!0,stake:r,method:"existing"};const o=await xe(t,n);await h(250);let s=_(t);if(s&&s>=.5)return{ok:!0,stake:s,method:"chips",chipClicks:o};const i=q(t);if(i&&(await R(i,String(Math.ceil(n))),await h(200),s=_(t),s&&s>=.5))return{ok:!0,stake:s,method:"type",chipClicks:o};const c=Y(t);return o>0||c?{ok:!0,stake:s||n,method:o?"chips-only":"buy-ready",chipClicks:o}:{ok:!1,reason:`금액 입력 실패 — +$칩 또는 Amount에 $${n} 직접 입력`,stake:s||0}}function we(){return!!document.querySelector('[role="dialog"], [role="alertdialog"], [class*="modal" i], [class*="Modal"], [class*="dialog" i], [class*="Dialog"]')}function it(){const t=[/confirm/i,/place order/i,/submit order/i,/complete purchase/i,/approve/i,/^(submit|continue|yes|확인|승인|주문)$/i],e=[];for(const n of document.querySelectorAll('[role="dialog"], [role="alertdialog"]'))e.push(n);e.length||e.push(document.body);for(const n of e)for(const r of n.querySelectorAll('button, [role="button"]')){if(!b(r)||r.disabled)continue;const o=(r.textContent||"").replace(/\s+/g," ").trim();if(!(!o||o.length>80)&&!(o==="Buy"&&!we())&&t.some(s=>s.test(o)))return r}return null}function ke(){const t=(document.body?.innerText||"").replace(/\s+/g," ");return/order submitted|purchase complete|shares purchased|bought|trade submitted|order placed|매수 완료|주문 완료|confirmed|successfully purchased/i.test(t)}function mt(){const t=(document.body?.innerText||"").replace(/\s+/g," ");return/insufficient (balance|funds)|not enough|failed to (buy|place)|transaction failed|rejected|unable to place|거부|잔액 부족|주문 실패/i.test(t)}async function Kt(t,e){for(let n=0;n<30;n++){if(await h(80),ke())return{success:!0,confirmed:!0,btnText:(e?.textContent||"").trim().slice(0,50)};if(mt())return{success:!1,reason:"주문 거부/잔액 부족"};for(const o of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')){if(!b(o))continue;const s=(o.closest('[role="dialog"], label, div')?.textContent||"").slice(0,200);/risk|understand|agree|accept|terms/i.test(s)&&!o.checked&&o.getAttribute("aria-checked")!=="true"&&U(o)}const r=it();r&&U(r)}return mt()?{success:!1,reason:"주문 거부됨"}:{success:!0,confirmed:!0,pendingWallet:!1,reason:"베팅 클릭 완료"}}function N(){const t=g(),e=Y(t)||Dt(t);return{hasPanel:!!t,hasInput:!!q(t),stake:_(t),hasBtn:!!e,btnText:e?(e.textContent||"").trim().slice(0,60):"",btnDisabled:e?!!e.disabled:null,team:G(t),url:location.href}}function L(t){if(!t)return!1;try{t.scrollIntoView({block:"center",inline:"center"})}catch{}try{t.focus({preventScroll:!0})}catch{}return typeof t.click=="function"&&t.click(),U(t),!0}function bt(t){if(!t)return null;let e=null,n=0;for(const r of document.querySelectorAll('button, [role="button"], [role="radio"]')){if(!b(r)||T(r))continue;const o=(r.textContent||"").replace(/\s+/g," ").trim();if(!o||o.length>140)continue;const s=C(o);let i=w(t,o);if(!i){const l=(r.closest('[class*="outcome"], [class*="Outcome"], li, div')?.textContent||r.parentElement?.textContent||"").replace(/\s+/g," ").trim();i=w(t,l)}if(!i&&!s)continue;let c=M(r);i&&(c+=120),s&&(c+=30),c>n&&(n=c,e=r)}return e}async function Ut(t){if(g())return{ok:!0,alreadyOpen:!0};let e=t?bt(t):null;if(!e){const n=Nt();n?.team&&(e=bt(n.team))}if(!e){for(const n of document.querySelectorAll('button, [role="button"]'))if(!(!b(n)||T(n))&&C(n.textContent||"")){e=n;break}}e&&(L(e),await h(350));for(let n=0;n<20;n++){if(g())return{ok:!0,clicked:!!e};await h(100)}return{ok:!1,reason:"주문 패널 없음 — /event/ 페이지에서 outcome 클릭",probe:N()}}async function ve(t,e={}){const n=!!e.skipFill,r=!!e.fastStrike;let o=g();if(!o){const f=await Ut(e.teamHint||"");if(!f.ok)return{success:!1,reason:f.reason||"주문 패널 없음 — /event/ 페이지에서 outcome 클릭",probe:f.probe||N()};o=g()}if(!o)return{success:!1,reason:"주문 패널 없음 — /event/ 페이지에서 outcome 클릭",probe:N()};It(o),!n&&!r&&await h(120);const s=Math.max(1,Math.round(t*100)/100);let i={ok:!0,method:"presynced",stake:_(o)};if(!n)i=await Se(o,s);else{const f=_(o);(!f||Math.abs(f-s)>.2)&&(i=await Rt(s,!0))}let c=null,a="";const l=n||r?5:25;for(let f=0;f<l&&(await h(n||r?20:100),c=Y(o)||Dt(o),!(c&&(a=(c.textContent||"").trim(),!c.disabled)));f++)c=null;if(!c)return{success:!1,reason:"Buy 팀명 버튼 없음 (예: Buy LGD Gaming)",probe:N(),fillMethod:i.method};if(!i.ok&&!i.chipClicks)return{success:!1,reason:i.reason||"금액 입력 실패",probe:N()};L(c),await h(r?150:400);const u=it();u&&L(u);const d=await Kt(o,c);return d.btnText=a.slice(0,60),d.fillMethod=i.method,d.chipClicks=i.chipClicks||0,d}function ht(t){const e=parseFloat(t);return!Number.isFinite(e)||e<=0||e>=100?null:e>0&&e<1?1/e:100/e}function Ce(t){const e=String(t||"").replace(/\s+/g," ").trim(),n=[/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i,/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+대\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i];for(const r of n){const o=e.match(r);if(!o)continue;const s=o[1].replace(/\s+\d+\s*-\s*\d+.*$/,"").trim(),i=o[2].replace(/\s+\d+\s*-\s*\d+.*$/,"").trim();if(s.length>=2&&i.length>=2)return{home:s,away:i}}return null}function H(t,e,n,r,o,s){const i=`${n}|${r}`.toLowerCase();if(e.has(i))return;const c=ht(o),a=ht(s);!c||!a||(e.add(i),t.push({id:i,home:n,away:r,title:`${n} vs ${r}`,league:"",ml:[{team:n,side:"home",price:o/100,decimal:c},{team:r,side:"away",price:s/100,decimal:a}]}))}function Ae(){const t=O(),e=[];return t?.odds>1.01&&t.teamLabel&&e.push({id:t.teamLabel.slice(0,40),home:t.homeTeam||t.teamLabel,away:t.awayTeam||"",title:t.eventText||t.teamLabel,league:"",ml:[{team:t.teamLabel,side:"pick",price:1/t.odds,decimal:t.odds}]}),{ok:!0,site:"bcgame",url:location.href,matchups:e,hasCart:!!A(),cartSlip:t}}function Te(){const t=[],e=new Set,n=(document.body?.innerText||"").replace(/\r/g,""),r=/([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+(\d+)\s*-\s*(\d+)\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+\d+\s*-\s*\d+\s+\2\s+([\d.]+)\s*(?:¢|%)[\s\S]{0,40}?\6\s+([\d.]+)\s*(?:¢|%)/g;let o;for(;(o=r.exec(n))!==null;)H(t,e,o[1].trim(),o[5].trim(),parseFloat(o[7]),parseFloat(o[8]));if(!t.length)for(const s of document.querySelectorAll("div, article, section, a, button, li")){if(!b(s))continue;const i=(s.innerText||"").replace(/\s+/g," ").trim();if(i.length<20||i.length>600||!/(?:¢|%\s)/.test(i)&&!/\d+\s*-\s*\d+/.test(i))continue;const c=Ce(i);if(c){const m=[...i.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)].map(y=>parseFloat(y[1])).filter(y=>y>0&&y<100);if(m.length>=2){if(H(t,e,c.home,c.away,m[0],m[m.length-1]),t.length>=80)break;continue}}const a=i.split(/\s+\d+\s*-\s*\d+\s+/);if(a.length<2)continue;const l=a[0].trim().split(/\s+/),u=a[1].trim().split(/\s+/),d=l.slice(0,-1).join(" ")||l[0],f=u.slice(0,-1).join(" ")||u[0];if(!d||!f||d.length<2)continue;const p=[...i.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)].map(m=>parseFloat(m[1])).filter(m=>m>0&&m<100);if(!(p.length<2)&&(H(t,e,d,f,p[0],p[p.length-1]),t.length>=80))break}return{ok:!0,site:B(),url:location.href,matchups:t,hasCart:!!g(),cartSlip:qt()}}chrome.runtime.onMessage.addListener((t,e,n)=>{if(t.type==="PING")return n({ok:!0,site:B(),version:"5.3"}),!1;if(t.type==="READ_SLIP")return n({slip:rt()}),!1;if(t.type==="SCAN_BOARD")return n(P()?Ae():Te()),!1;if(t.type==="PROBE_POLY")return n({ok:!0,probe:vt()}),!1;if(t.type==="SET_POLY_AMOUNT")return Ct(t.amount,t.force!==!1).then(n),!0;if(t.type==="ENSURE_POLY_PANEL")return Jt(t.team||"").then(n),!0;if(t.type==="PLACE_BET")return At(t.amount,{skipFill:!!t.skipFill,fastStrike:!!t.fastStrike,teamHint:t.teamHint||t.team||""}).then(n),!0});try{window.__polyPlaceBet=At,window.__polySetAmount=Ct,window.__polyProbe=vt,window.__polyReadSlip=rt}catch{}(function(){let e="",n=!1;function r(a){if(!a)return"";const l=a.odds>1?Math.round(a.odds*100)/100:0,u=a.priceCents>0?a.priceCents.toFixed(1):"c";return`${l.toFixed(2)}_${u}_${a.teamLabel||""}_${a.pendingToWin?"p":""}`}function o(a){return I(a)}function s(){const a=rt();if(!a?.odds||a.odds<=1){if(e!==""){e="",k={odds:0,source:"",at:0,key:""};try{chrome.runtime.sendMessage({type:"ODDS_CHANGED",source:B(),slip:null,suspended:!0})}catch{}}return}const l=o(a),u=r(l);if(u!==e){e=u;try{chrome.runtime.sendMessage({type:"ODDS_CHANGED",source:B(),slip:l})}catch{}}}function i(){e="",s(),requestAnimationFrame(()=>{s(),requestAnimationFrame(s)})}function c(){n||(n=!0,requestAnimationFrame(()=>{n=!1,s()}))}document.body&&(document.addEventListener("click",a=>{a.target?.closest?.('button, [role="button"], [role="radio"], a')&&i()},!0),new MutationObserver(c).observe(document.body,{subtree:!0,childList:!0,characterData:!0,attributes:!0,attributeFilter:["class","data-state","aria-pressed","aria-selected","aria-label","value"]}),document.addEventListener("input",i,!0),document.addEventListener("change",i,!0),i())})();console.log(`[BC.Game v${chrome.runtime.getManifest().version}] content script loaded (${P()?"sports":"predictions"}) — BetBy: sptsportscdn/sptpub iframe`);window.__bcDomProbe=()=>zt("bc-content");console.log("[BC shell] boot",window===window.top?"top":"iframe",(location.href||"").slice(0,100));
-//# sourceMappingURL=polymarket_content.js.map
+// BC.Game content script v5.6.4 — 스포츠 + 예측 배당 (텐텐뱃 양방 전용)
+
+function predictionSiteId() {
+  return 'bcgame';
+}
+
+function isBcSportsPage() {
+  try {
+    if (/betby\.com|sptpub\.com|sptsportscdn|biahosted|cocoesports/i.test(location.hostname)) return true;
+    return /bc\.game/i.test(location.hostname) && /\/sports\//i.test(location.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+function readMainWorldSlipRaw() {
+  try {
+    const el = document.documentElement;
+    const attr = 'data-bc-slip-bridge';
+    const script = document.createElement('script');
+    script.textContent = `(function(){
+      var r=null;
+      try{
+        if(typeof __bcScrapeOdds==='function'){var x=__bcScrapeOdds();if(x&&(x.odds>1.01||x.ok&&x.odds>1.01))r=x;}
+        if(!r&&window.__bcApiSlip&&window.__bcApiSlip.odds>1.01)r=window.__bcApiSlip;
+      }catch(e){}
+      document.documentElement.setAttribute('${attr}',JSON.stringify(r));
+    })();`;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+    const raw = el.getAttribute(attr);
+    el.removeAttribute(attr);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeSportsSlip(raw) {
+  if (!raw) return null;
+  const odds = raw.odds > 1.01 ? raw.odds : null;
+  if (!odds) return null;
+  const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
+  const stake = raw.stake > 0 ? raw.stake : null;
+  const payout = raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);
+  const fromPayout = !!raw.fromPayout || (stake > 0 && payout > stake);
+  return {
+    source: 'bcgame',
+    odds,
+    teamLabel: team,
+    outcome: team,
+    selectionText: raw.selectionText || team,
+    displayLabel: raw.displayLabel || `${odds.toFixed(3)}${stake ? ` · ${stake} USDT` : ''}`,
+    stake,
+    payout,
+    toWin: fromPayout && payout && stake ? payout - stake : null,
+    fromPayout,
+    fromSlip: true,
+    sourceKind: raw.sourceKind || 'sports-slip',
+    eventText: raw.eventText || '',
+    homeTeam: raw.homeTeam || '',
+    awayTeam: raw.awayTeam || '',
+    marketKind: 'ml'
+  };
+}
+
+function readSportsSlip() {
+  if (typeof window.__bcReadNativeSlip === 'function') {
+    try {
+      const native = window.__bcReadNativeSlip();
+      const slip = normalizeSportsSlip(native?.ok ? native : native);
+      if (slip?.odds > 1.01) return slip;
+    } catch (_) {}
+  }
+  return normalizeSportsSlip(readMainWorldSlipRaw());
+}
+
+const RE_WIN_LABEL = /\bto\s*win\b|우승|당첨(금)?|획득|예상\s*수익/i;
+const RE_AMOUNT_LABEL = /\bamount\b|금액/i;
+const RE_BUY_LABEL = /\bbuy\b|매수|구매/i;
+const RE_SELL_LABEL = /\bsell\b|매도|판매/i;
+const RE_AVG_PRICE = /avg\.?\s*price|average\s*price|평균\s*가격/i;
+const RE_AMOUNT_USDT = /(?:amount|금액)\s*\(\s*usdt\s*\)/i;
+
+function parseNumberToken(s) {
+  const v = parseFloat(String(s || '').replace(/,/g, '').replace(/[+,\s]/g, ''));
+  return Number.isFinite(v) ? v : NaN;
+}
+
+function findWinLabelIndex(text) {
+  const t = String(text || '');
+  const patterns = [/\bto\s*win\b/i, /우승/, /당첨(?:금)?/, /획득/, /예상\s*수익/];
+  let best = -1;
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m && (best < 0 || m.index < best)) best = m.index;
+  }
+  return best;
+}
+
+function visible(el) {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+function isBuySellTab(btn) {
+  const t = (btn?.textContent || '').replace(/\s+/g, ' ').trim();
+  return /^(Buy|Sell|매수|매도|구매|판매)$/i.test(t);
+}
+
+function isSearchInput(inp) {
+  const blob = `${inp?.placeholder || ''} ${inp?.getAttribute?.('aria-label') || ''} ${inp?.id || ''}`.toLowerCase();
+  return /search|검색/.test(blob);
+}
+
+function parseMoneyValue(text) {
+  const t = String(text || '').trim();
+  let m = t.match(/^\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/i);
+  if (m) {
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
+  }
+  m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
+  if (m) {
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
+  }
+  m = t.match(/^≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i);
+  if (m) {
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
+  }
+  return null;
+}
+
+function scoreTradePanelText(t) {
+  const hasToWin = RE_WIN_LABEL.test(t);
+  const hasAmount = RE_AMOUNT_LABEL.test(t);
+  const hasBuy = RE_BUY_LABEL.test(t);
+  const hasShares = /\bshares\b/i.test(t);
+  if (!hasToWin && !hasAmount && !(hasBuy && hasShares)) return -1;
+  if (hasAmount && !hasBuy && !hasToWin && !hasShares) return -1;
+
+  let score = 0;
+  if (hasAmount) score += 35;
+  if (hasBuy) score += 30;
+  if (hasToWin) score += 25;
+  if (hasShares) score += 20;
+  if (/\blimit\b/i.test(t) || /\bmarket\b/i.test(t) || /마켓/i.test(t)) score += 15;
+  if (RE_AVG_PRICE.test(t)) score += 20;
+
+  if (t.length <= 450) score += 160;
+  else if (t.length <= 900) score += 90;
+  else if (t.length > 2000) score -= 280;
+  else if (t.length > 1200) score -= 120;
+  else score += Math.min(t.length / 40, 15);
+
+  if (RE_AMOUNT_USDT.test(t)) score += 45;
+  if (/\b(?:buy|구매)\s+(yes|no|예|아니오)\b/i.test(t)) score += 40;
+  const amtIdx = t.search(RE_AMOUNT_LABEL);
+  const winIdx = findWinLabelIndex(t);
+  if (amtIdx >= 0 && winIdx >= 0 && Math.abs(amtIdx - winIdx) < 450) score += 75;
+
+  if (/\+\s*\$1\s*@\s*1\s*¢/i.test(t)) score -= 120;
+  if (t.length < 40) score -= 50;
+  return score;
+}
+
+function findTradePanel() {
+  let best = null;
+  let bestScore = -1;
+  for (const el of document.querySelectorAll('div, section, aside, form')) {
+    if (!visible(el)) continue;
+    const t = el.innerText || '';
+    if (!el.querySelector('input, [contenteditable="true"]')) continue;
+    if (t.length > 8000) continue;
+
+    const score = scoreTradePanelText(t);
+    if (score < 0) continue;
+    if (score > bestScore) { bestScore = score; best = el; }
+  }
+  return best;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function findButtonByText(pattern, root) {
+  const scope = root || document.body;
+  for (const btn of scope.querySelectorAll('button, [role="button"], a')) {
+    if (!visible(btn) || btn.disabled) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (pattern.test(t)) return btn;
+  }
+  return null;
+}
+
+function findAmountInput(panel) {
+  const root = panel || findTradePanel() || document;
+
+  for (const label of root.querySelectorAll('label, span, p, div')) {
+    const lt = (label.textContent || '').trim();
+    if (!/^amount/i.test(lt) && !/^금액/i.test(lt)) continue;
+    const box = label.closest('div') || label.parentElement;
+    const inp = box?.querySelector('input, textarea, [contenteditable="true"]');
+    if (inp && visible(inp) && !isSearchInput(inp)) return inp;
+  }
+
+  const inputs = Array.from(root.querySelectorAll('input, textarea, [contenteditable="true"]'))
+    .filter((inp) => visible(inp) && !isSearchInput(inp));
+  for (const inp of inputs) {
+    const ph = (inp.placeholder || '').toLowerCase();
+    const aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+    const name = (inp.getAttribute('name') || '').toLowerCase();
+    if (ph.includes('amount') || ph.includes('$') || ph.includes('usdt')
+      || aria.includes('amount') || name.includes('amount')) {
+      return inp;
+    }
+  }
+
+  const panelInputs = inputs.filter((inp) => !panel || panel.contains(inp));
+  for (const inp of panelInputs) {
+    const type = (inp.getAttribute('type') || '').toLowerCase();
+    if (type === 'number' || type === 'text' || type === '' || inp.isContentEditable) return inp;
+  }
+  return panelInputs[0] || root.querySelector('input:not([placeholder*="earch" i])');
+}
+
+function readFieldValue(el) {
+  if (!el) return null;
+  const raw = el.isContentEditable ? el.textContent : el.value;
+  const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function readStake(panel) {
+  return readFieldValue(findAmountInput(panel));
+}
+
+function readPanelStake(panel) {
+  const panelEl = panel || findTradePanel();
+  if (!panelEl) return readStake(null);
+
+  const inp = findAmountInput(panelEl);
+  if (inp) {
+    for (const raw of [
+      inp.value,
+      inp.getAttribute('value'),
+      inp.textContent,
+      inp.getAttribute('aria-valuenow'),
+      inp.getAttribute('data-value')
+    ]) {
+      const v = parseFloat(String(raw || '').replace(/[$,\s]/g, ''));
+      if (Number.isFinite(v) && v > 0 && v < 50000) return v;
+    }
+  }
+
+  const fromInput = readStake(panelEl);
+  if (fromInput) return fromInput;
+
+  const text = (panelEl.innerText || '').replace(/\s+/g, ' ');
+  const patterns = [
+    /(?:Amount|금액)(?:\(USDT\))?\s*\n?\s*\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /\bamount\b[^$\d]{0,20}\$?\s*([\d,]+(?:\.\d+)?)/i
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v > 0 && v < 100000) return v;
+  }
+
+  return null;
+}
+
+function parseMoneyOnly(text) {
+  return parseMoneyValue(text);
+}
+
+function isCentPriceContext(ctx, value) {
+  if (/¢/.test(ctx)) return true;
+  if (/\b(?:avg\.?\s*)?price\b/i.test(ctx) && value > 0 && value <= 99) return true;
+  return false;
+}
+
+function isValidPayout(value, stake, ctx) {
+  if (!value || value <= 0) return false;
+  if (stake && Math.abs(value - stake) < 0.02) return false;
+  if (isCentPriceContext(ctx, value)) return false;
+  const hasDecimals = Math.abs(value - Math.round(value)) > 0.001;
+  if (hasDecimals) return true;
+  if (stake && value >= stake * 1.35) return true;
+  return false;
+}
+
+function readToWinNearLabel(panel) {
+  const raw = (panel?.innerText || '').replace(/\s+/g, ' ');
+  const idx = findWinLabelIndex(raw);
+  if (idx < 0) return null;
+  const section = raw.slice(idx, idx + 200);
+  const patterns = [
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?([+]?\s*[\d,]+(?:\.\d+)?)\s*USDT/i,
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?≈\s*US?\$?\s*([\d,]+(?:\.\d+)?)/i,
+    /(?:to\s*win|우승|당첨(?:금)?|획득|예상\s*수익)[\s\S]{0,100}?\$\s*([\d,]+(?:\.\d+)?)/i
+  ];
+  for (const re of patterns) {
+    const m = section.match(re);
+    if (!m) continue;
+    const v = parseNumberToken(m[1]);
+    if (v > 0) return v;
+  }
+  return null;
+}
+
+function readToWinFromPanel(panel) {
+  const panelEl = panel || findTradePanel();
+  const near = readToWinNearLabel(panelEl);
+  if (near) return near;
+
+  const scopes = [panelEl, document.body].filter(Boolean);
+  const values = [];
+
+  for (const scope of scopes) {
+    const raw = scope.innerText || '';
+    const winPatterns = [/\bto\s*win\b/gi, /우승/g, /당첨(?:금)?/g, /획득/g];
+    for (const winRe of winPatterns) {
+      for (const match of raw.matchAll(winRe)) {
+        const section = raw.slice(match.index, match.index + 500);
+        for (const m of section.matchAll(/\+?\s*([\d,]+(?:\.\d+)?)\s*USDT/gi)) {
+          const v = parseNumberToken(m[1]);
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /(?:amount|금액)\s*\(|사용\s*가능|available|slippage|슬리피지/i.test(ctx)) continue;
+          if (v >= 0.01) values.push({ v, score: 135 });
+        }
+        for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+          const v = parseNumberToken(m[1]);
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /¢|price\s*\d|≈/i.test(ctx)) continue;
+          if (v >= 0.5) values.push({ v, score: 120 });
+        }
+        for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
+          const ctx = section.slice(Math.max(0, m.index - 24), m.index + m[0].length + 24);
+          if (RE_AVG_PRICE.test(ctx) || /¢|amount|금액/i.test(ctx)) continue;
+          const v = parseNumberToken(m[1]);
+          if (v >= 0.5) values.push({ v, score: 100 });
+        }
+      }
+    }
+
+    for (const el of scope.querySelectorAll('*')) {
+      const own = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/^to\s*win$/i.test(own) && !/^우승$/i.test(own) && !/^당첨(?:금)?$/i.test(own)) continue;
+
+      let box = el.parentElement;
+      for (let d = 0; d < 6 && box; d++) {
+        for (const node of box.querySelectorAll('span, div, p, strong, h1, h2, h3')) {
+          if (node.children.length > 3) continue;
+          const t = (node.textContent || '').trim();
+          if (/avg\.?\s*price|¢/i.test(t)) continue;
+          let v = parseMoneyOnly(t);
+          if (!v) {
+            const m = t.match(/^\$?\s*([\d,]+(?:\.\d+)?)/);
+            if (m) v = parseFloat(m[1].replace(/,/g, ''));
+          }
+          if (!v || v < 0.5) continue;
+          let score = 90 - d * 8;
+          try {
+            const fs = parseFloat(getComputedStyle(node).fontSize || '0');
+            if (fs >= 18) score += 40;
+          } catch (_) {}
+          values.push({ v, score });
+        }
+        box = box.parentElement;
+      }
+    }
+  }
+
+  if (!values.length) return null;
+  values.sort((a, b) => b.score - a.score || b.v - a.v);
+  return values[0].v;
+}
+
+function readPayoutAmount(panel, stake) {
+  const fromNear = readToWinNearLabel(panel || findTradePanel());
+  if (fromNear) return fromNear;
+
+  const fromPanel = readToWinFromPanel(panel);
+  if (fromPanel) return fromPanel;
+
+  const scopes = [panel, document.body].filter(Boolean);
+  const values = [];
+
+  for (const scope of scopes) {
+    const raw = scope.innerText || '';
+    for (const match of raw.matchAll(/to\s*win/gi)) {
+      const section = raw.slice(match.index, match.index + 600);
+      for (const m of section.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        const ctx = section.slice(Math.max(0, m.index - 8), m.index + m[0].length + 8);
+        if (isValidPayout(v, stake, ctx)) values.push(v);
+      }
+      for (const m of section.matchAll(/\b([\d,]+\.\d{2})\b/g)) {
+        const lineStart = section.lastIndexOf('\n', m.index) + 1;
+        const lineEnd = section.indexOf('\n', m.index);
+        const line = section.slice(lineStart, lineEnd === -1 ? section.length : lineEnd);
+        if (/¢/.test(line)) continue;
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        if (isValidPayout(v, stake, line)) values.push(v);
+      }
+    }
+
+    for (const el of scope.querySelectorAll('*')) {
+      const own = (el.textContent || '').trim();
+      if (!/^to\s*win/i.test(own.replace(/[^\w\s]/gi, ''))) continue;
+      let node = el.nextElementSibling;
+      for (let i = 0; i < 8 && node; i++) {
+        const nt = (node.textContent || '').trim();
+        if (/¢|avg\.?\s*price/i.test(nt)) { node = node.nextElementSibling; continue; }
+        const v = parseMoneyOnly(nt);
+        if (v && isValidPayout(v, stake, nt)) values.push(v);
+        node = node.nextElementSibling;
+      }
+    }
+  }
+
+  return values.length ? Math.max(...values) : null;
+}
+
+const MIN_POLY_CENTS = 1;
+const MAX_POLY_CENTS = 99;
+
+function isValidPolyCents(c) {
+  return Number.isFinite(c) && c >= MIN_POLY_CENTS && c < MAX_POLY_CENTS;
+}
+
+function readListedPriceCents(panel) {
+  const t = (panel?.innerText || '').replace(/\s+/g, ' ');
+  const candidates = [];
+  const specs = [
+    { re: /avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /average\s*price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /평균\s*가격\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 120 },
+    { re: /price\s*(\d+(?:\.\d+)?)\s*¢/gi, score: 60 }
+  ];
+
+  for (const { re, score } of specs) {
+    let m;
+    while ((m = re.exec(t)) !== null) {
+      const c = parseFloat(m[1]);
+      const ctx = t.slice(Math.max(0, m.index - 16), m.index + m[0].length + 16);
+      if (/min|max|slippage|fee|spread|limit|impact/i.test(ctx)) continue;
+      if (!isValidPolyCents(c)) continue;
+      candidates.push({ cents: c, score });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function parseCentsFromText(txt) {
+  const t = String(txt || '').replace(/\s+/g, ' ').trim();
+  if (/^\+\s*\$/.test(t) || /^sell\s+/i.test(t)) return null;
+  if (/@\s*\d/.test(t) && /\+\s*\$/.test(t)) return null;
+
+  let m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (m) {
+    const c = parseFloat(m[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  m = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (m) {
+    const c = parseFloat(m[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  if (/^0\.\d{2,4}$/.test(t)) {
+    const c = parseFloat(t) * 100;
+    if (isValidPolyCents(c)) return c;
+  }
+
+  return null;
+}
+
+function isYesNoToken(s) {
+  return /^(yes|no)$/i.test(String(s || '').trim());
+}
+
+function teamMatchesButton(team, text) {
+  if (!team) return true;
+  const teamStr = String(team).trim();
+  const t = String(text || '');
+
+  if (isYesNoToken(teamStr)) {
+    return new RegExp(`\\b${teamStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(t);
+  }
+
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+  const nt = norm(teamStr);
+  const bt = norm(t);
+  if (!nt || !bt) return false;
+  if (bt.includes(nt) || nt.includes(bt)) return true;
+
+  const first = teamStr.split(/\s+/).filter((w) => w.length >= 2)[0];
+  if (first) {
+    const nf = norm(first);
+    if (nf.length >= 3 && (bt.includes(nf) || nf.includes(bt))) return true;
+  }
+
+  const words = teamStr.split(/\s+/).filter((w) => w.length >= 2);
+  if (words.length >= 2 && words.every((w) => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t))) return true;
+  return words.some((w) => w.length >= 3 && new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(t));
+}
+
+function readSelectedBoardCents(teamHint) {
+  const candidates = [];
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const sel = selectionScore(btn);
+    if (sel < 80) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 120) continue;
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+
+    let score = sel + 150;
+    if (teamHint && teamMatchesButton(teamHint, t)) score += 100;
+    if (/^yes\b|^no\b/i.test(t)) score += 40;
+    candidates.push({ cents, score, t });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function getOutcomeSearchRoots() {
+  const panel = findTradePanel();
+  const roots = [];
+  if (panel) {
+    let el = panel.parentElement;
+    for (let i = 0; i < 10 && el && el !== document.body; i++) {
+      const btns = el.querySelectorAll('button, [role="button"]');
+      const hasCents = Array.from(btns).some((b) => parseCentsFromText(b.textContent || ''));
+      if (hasCents && btns.length >= 2 && btns.length <= 40) {
+        roots.push(el);
+        break;
+      }
+      el = el.parentElement;
+    }
+    roots.push(panel);
+  }
+  return roots.length ? roots : [document.body];
+}
+
+function readCentsForBuyTeam(teamHint) {
+  if (!teamHint) return null;
+
+  const candidates = [];
+  const roots = getOutcomeSearchRoots();
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 140) continue;
+
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+
+      let matched = teamMatchesButton(teamHint, t);
+      if (!matched) {
+        const row = btn.closest('[class*="outcome"], [class*="Outcome"], li, div');
+        const ctx = (row?.textContent || btn.parentElement?.textContent || '').replace(/\s+/g, ' ').trim();
+        matched = teamMatchesButton(teamHint, ctx);
+      }
+      if (!matched) continue;
+
+      const sel = selectionScore(btn);
+      let score = 0;
+      if (teamMatchesButton(teamHint, t)) score += 120;
+      score += sel;
+      if (sel >= 80) score += 300;
+      if (/^buy\s+/i.test(t)) score += 40;
+      score += Math.max(0, 90 - t.length);
+      candidates.push({ cents, score, t });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+// Amount + To win(당첨금)만으로 배당 계산 — Polymarket ¢/Avg Price 표시는 사용하지 않음
+function calcOddsFromToWin(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || stake <= 0 || toWinDisplay <= 0) return null;
+  const totalPayout = toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
+  const odds = totalPayout / stake;
+  if (!Number.isFinite(odds) || odds <= 1.001 || odds > 100) return null;
+  return {
+    odds,
+    totalPayout,
+    profit: totalPayout - stake,
+    priceCents: Math.round((stake / totalPayout) * 1000) / 10
+  };
+}
+
+function resolveTotalPayout(stake, toWinDisplay) {
+  if (!stake || !toWinDisplay || toWinDisplay <= 0) return null;
+  return toWinDisplay >= stake ? toWinDisplay : stake + toWinDisplay;
+}
+
+function centsFromStakePayout(stake, toWinDisplay) {
+  const slip = calcOddsFromToWin(stake, toWinDisplay);
+  return slip?.priceCents ?? null;
+}
+
+function readPageOutcomeCents(teamHint) {
+  const candidates = [];
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+
+    let score = 0;
+    if (btn.getAttribute('aria-pressed') === 'true') score += 90;
+    if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 90;
+    if (btn.getAttribute('aria-selected') === 'true') score += 80;
+    const cls = String(btn.className || '');
+    if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) score += 60;
+    if (t.length < 80) score += 10;
+
+    candidates.push({ cents, score });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function readOutcomeButtonCents(teamHint) {
+  if (!teamHint) return null;
+
+  const candidates = [];
+  const roots = [findTradePanel(), document.body].filter(Boolean);
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"], [role="radio"]')) {
+      if (!visible(btn) || isBuySellTab(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!teamMatchesButton(teamHint, t)) continue;
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+
+      let score = selectionScore(btn);
+      if (/^buy\s+/i.test(t)) score += 20;
+
+      candidates.push({ cents, score, t });
+    }
+  }
+
+  if (!candidates.length) return readPageOutcomeCents(teamHint);
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function selectionScore(btn) {
+  let score = 0;
+  if (btn.getAttribute('aria-pressed') === 'true') score += 120;
+  if (btn.getAttribute('aria-selected') === 'true') score += 110;
+  if (btn.getAttribute('data-state') === 'on' || btn.getAttribute('data-state') === 'checked') score += 110;
+  const cls = String(btn.className || '');
+  if (/active|selected|checked|pressed|border-primary|ring-/i.test(cls)) score += 80;
+  return score;
+}
+
+function readSelectedOutcomeForTeam(teamHint) {
+  const candidates = [];
+  const minSel = teamHint ? 10 : 60;
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const cents = parseCentsFromText(t);
+    if (!cents) continue;
+    const sel = selectionScore(btn);
+    if (sel < minSel) continue;
+    if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+    candidates.push({ cents, score: sel + (teamHint && teamMatchesButton(teamHint, t) ? 50 : 0), t });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function readSelectedTeamFromBoard() {
+  for (const btn of document.querySelectorAll('button, [role="button"], [role="radio"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const pressed = btn.getAttribute('aria-pressed') === 'true'
+      || btn.getAttribute('aria-selected') === 'true'
+      || btn.getAttribute('data-state') === 'on'
+      || btn.getAttribute('data-state') === 'checked';
+    if (!pressed) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    const yesNo = t.match(/^(yes|no)\b/i);
+    if (yesNo) return yesNo[1];
+    const cleaned = t.replace(/\d+(?:\.\d+)?\s*¢/g, '').replace(/\d+(?:\.\d+)?\s*%/g, '').trim();
+    if (cleaned.length >= 2 && cleaned.length < 80) return cleaned;
+  }
+  return '';
+}
+
+function readEventBoardCents(teamHint) {
+  const candidates = [];
+  const roots = [findTradePanel(), document.body].filter(Boolean);
+
+  for (const root of roots) {
+    for (const el of root.querySelectorAll('button, [role="button"], [role="radio"], [class*="outcome"], [class*="Outcome"]')) {
+      if (!visible(el)) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 160) continue;
+      const cents = parseCentsFromText(t);
+      if (!cents) continue;
+      if (teamHint && !teamMatchesButton(teamHint, t)) continue;
+
+      let score = 40;
+      if (teamHint && teamMatchesButton(teamHint, t)) score += 120;
+      score += selectionScore(el);
+      if (/^buy\s+/i.test(t)) score += 30;
+      candidates.push({ cents, score });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].cents;
+}
+
+function readTeamLabel(panel) {
+  const scopes = [panel, findTradePanel(), document.body].filter(Boolean);
+  const seen = new Set();
+
+  for (const scope of scopes) {
+    if (!scope || seen.has(scope)) continue;
+    seen.add(scope);
+
+    for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+      if (!visible(btn)) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const m = t.match(/^(?:buy|구매)\s+(.+)$/i);
+      if (m) return m[1].trim();
+    }
+
+    const text = scope.innerText || '';
+    const buyM = text.match(/(?:Buy|매수|구매)\s+([^\n$¢@%]+?)(?:\s*$|\s+(?:Avg|평균)|\s+(?:To win|우승))/i);
+    if (buyM) return buyM[1].trim();
+  }
+
+  const selected = readSelectedTeamFromBoard();
+  if (selected) return selected;
+
+  return '';
+}
+
+function readBuyButtonCents(panel) {
+  const scope = panel || findTradePanel() || document.body;
+  for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn) || isBuySellTab(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!/^buy\s+/i.test(t)) continue;
+    const cents = parseCentsFromText(t);
+    if (cents) return cents;
+    const sibling = btn.parentElement;
+    if (sibling) {
+      const m = (sibling.textContent || '').match(/(?:avg\.?\s*)?price\s*(\d+(?:\.\d+)?)\s*¢/i);
+      if (m) {
+        const c = parseFloat(m[1]);
+        if (isValidPolyCents(c)) return c;
+      }
+    }
+  }
+  return null;
+}
+
+function pickListedCents(candidates, hasSlip) {
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  const order = hasSlip
+    ? ['implied', 'selected-board', 'avg', 'buy-btn', 'selected', 'buy-team', 'team-btn', 'implied-fallback', 'page', 'event-board']
+    : ['selected-board', 'avg', 'buy-btn', 'selected', 'buy-team', 'team-btn', 'implied-fallback', 'page', 'event-board'];
+  for (const src of order) {
+    const hit = candidates.find((c) => c.src === src);
+    if (hit) return hit.cents;
+  }
+  return candidates[0].cents;
+}
+
+function readLiveListedCents(panel, stake, toWinDisplay) {
+  const panelEl = panel || findTradePanel();
+  const team = readTeamLabel(panelEl);
+  const candidates = [];
+  const hasSlip = stake > 0 && toWinDisplay > 0;
+
+  function add(cents, score, src) {
+    if (!isValidPolyCents(cents)) return;
+    candidates.push({ cents, score, src });
+  }
+
+  const implied = centsFromStakePayout(stake, toWinDisplay);
+  if (implied && hasSlip) add(implied, 950, 'implied');
+
+  const selectedBoard = readSelectedBoardCents(team);
+  if (selectedBoard) add(selectedBoard, hasSlip ? 880 : 920, 'selected-board');
+
+  const avg = readListedPriceCents(panelEl);
+  if (avg) add(avg, hasSlip ? 860 : 800, 'avg');
+
+  if (team) {
+    const buyBtn = readBuyButtonCents(panelEl);
+    if (buyBtn) add(buyBtn, 500, 'buy-btn');
+
+    const selected = readSelectedOutcomeForTeam(team);
+    if (selected) add(selected, 480, 'selected');
+
+    const buyTeam = readCentsForBuyTeam(team);
+    if (buyTeam) add(buyTeam, 320, 'buy-team');
+
+    const teamBtn = readOutcomeButtonCents(team);
+    if (teamBtn) add(teamBtn, 280, 'team-btn');
+  }
+
+  if (!hasSlip && implied) add(implied, 260, 'implied-fallback');
+
+  if (!candidates.length) {
+    const page = readPageOutcomeCents(team);
+    if (page) add(page, 200, 'page');
+    const board = readEventBoardCents(team);
+    if (board) add(board, 180, 'event-board');
+  }
+
+  return pickListedCents(candidates, hasSlip);
+}
+
+function formatCentsLabel(cents) {
+  if (!cents) return '';
+  return Number.isInteger(cents) ? `${cents}¢` : `${cents.toFixed(1)}¢`;
+}
+
+function sanitizePolyOdds(odds, listedCents, stake, payout) {
+  if (odds && odds > 1 && odds <= 50) return odds;
+  if (isValidPolyCents(listedCents)) return oddsFromCents(listedCents);
+  if (stake && payout) {
+    const fromPay = calcOddsFromStakeAndPayout(stake, payout);
+    if (fromPay && fromPay > 1 && fromPay <= 50) return fromPay;
+  }
+  if (odds && odds > 50) return null;
+  return odds && odds > 1 ? odds : null;
+}
+
+function oddsFromCents(cents) {
+  if (!isValidPolyCents(cents)) return null;
+  const price = cents / 100;
+  return price > 0 && price < 1 ? 1 / price : null;
+}
+
+let _polyStakeTrack = { v: 0, at: 0 };
+
+function notePolyStakeChange(stake) {
+  if (!stake || stake <= 0) return;
+  if (Math.abs(stake - _polyStakeTrack.v) > 0.02) {
+    _polyStakeTrack = { v: stake, at: Date.now() };
+  }
+}
+
+function polyStakeRecentlyChanged(maxAgeMs = 1400) {
+  return _polyStakeTrack.at > 0 && Date.now() - _polyStakeTrack.at < maxAgeMs;
+}
+
+function readBoardRefCents(panel, team) {
+  const panelEl = panel || findTradePanel();
+  const teamLabel = team || readTeamLabel(panelEl);
+
+  const avg = readListedPriceCents(panelEl);
+  if (avg) return avg;
+
+  const buyBtn = readBuyButtonCents(panelEl);
+  if (buyBtn) return buyBtn;
+
+  const selected = readSelectedBoardCents(teamLabel);
+  if (selected) return selected;
+
+  const panelText = panelEl?.innerText || '';
+  const avgInline = panelText.match(/avg\.?\s*price\s*(\d+(?:\.\d+)?)\s*¢/i);
+  if (avgInline) {
+    const c = parseFloat(avgInline[1]);
+    if (isValidPolyCents(c)) return c;
+  }
+
+  if (teamLabel) {
+    const teamEsc = teamLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 24);
+    const nearTeam = panelText.match(new RegExp(`${teamEsc}[\\s\\S]{0,40}?(\\d+(?:\\.\\d+)?)\\s*¢`, 'i'));
+    if (nearTeam) {
+      const c = parseFloat(nearTeam[1]);
+      if (isValidPolyCents(c)) return c;
+    }
+  }
+
+  return readPageOutcomeCents(teamLabel) || readEventBoardCents(teamLabel);
+}
+
+function isPayoutOddsPlausible(slipPriceCents, boardCents) {
+  if (!isValidPolyCents(slipPriceCents) || !isValidPolyCents(boardCents)) return false;
+  return Math.abs(slipPriceCents - boardCents) <= 4;
+}
+
+function buildBoardSlip(team, stake, boardCents, boardOdds, opts = {}) {
+  const centsLabel = formatCentsLabel(boardCents);
+  const { toWinDisplay, fromPayoutOdds, pending } = opts;
+  let displayLabel = `${centsLabel} (${boardOdds.toFixed(3)})`;
+  if (fromPayoutOdds > 1 && toWinDisplay > 0 && stake > 0) {
+    displayLabel = `${fromPayoutOdds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`;
+  }
+  return {
+    source: predictionSiteId(),
+    odds: boardOdds,
+    priceCents: boardCents,
+    price: boardCents / 100,
+    teamLabel: team,
+    outcome: team,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel,
+    stake: stake || null,
+    payout: null,
+    toWin: null,
+    hint: pending ? '금액 동기화 중 — ¢ 배당' : `${centsLabel} 기준`,
+    marketKind: 'ml',
+    period: 'ft',
+    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    fromPayout: false,
+    liveCents: true,
+    pendingToWin: !!pending
+  };
+}
+
+function buildPendingPolySlip(team, stake, boardCents, hint) {
+  const fallbackOdds = oddsFromCents(boardCents);
+  if (!(fallbackOdds > 1.001)) {
+    return {
+      source: predictionSiteId(),
+      odds: null,
+      needsStake: true,
+      pendingToWin: true,
+      teamLabel: team,
+      stake,
+      hint: hint || 'To win 계산 중…',
+      marketKind: 'ml'
+    };
+  }
+  const priceCents = boardCents || decimalToCents(fallbackOdds);
+  const centsLabel = formatCentsLabel(priceCents);
+  return {
+    source: predictionSiteId(),
+    odds: fallbackOdds,
+    priceCents,
+    price: priceCents / 100,
+    teamLabel: team,
+    outcome: team,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel: `${centsLabel} (${fallbackOdds.toFixed(3)})`,
+    stake,
+    payout: null,
+    toWin: null,
+    hint: hint || '금액 변경 중 — ¢ 배당 유지',
+    marketKind: 'ml',
+    period: 'ft',
+    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    fromPayout: false,
+    liveCents: true,
+    pendingToWin: true
+  };
+}
+
+function readPolymarketSlip() {
+  if (isBcSportsPage() || /베팅\s*슬립|bet\s*slip|betslip/i.test(document.body?.innerText || '')) {
+    const sports = readSportsSlip();
+    if (sports?.odds > 1.01) return sports;
+  }
+
+  const panel = findTradePanel();
+  const stake = readPanelStake(panel);
+  notePolyStakeChange(stake);
+  const team = readTeamLabel(panel);
+  const boardCents = readBoardRefCents(panel, team);
+  const boardOdds = boardCents ? oddsFromCents(boardCents) : null;
+  const toWinDisplay = readPayoutAmount(panel, stake);
+  const slipOdds = calcOddsFromToWin(stake, toWinDisplay);
+  const stakeUnsettled = polyStakeRecentlyChanged() || (stake > 0 && !toWinDisplay);
+
+  // 보드/Avg ¢ 우선 — 당첨금÷금액은 To win 안정 후에만
+  if (boardOdds > 1.001) {
+    const payoutTrusted = slipOdds
+      && !stakeUnsettled
+      && isPayoutOddsPlausible(slipOdds.priceCents, boardCents);
+
+    if (!payoutTrusted) {
+      if (stakeUnsettled || stake > 0) {
+        return buildBoardSlip(team, stake, boardCents, boardOdds, {
+          toWinDisplay,
+          pending: stakeUnsettled || !!(slipOdds && !isPayoutOddsPlausible(slipOdds.priceCents, boardCents))
+        });
+      }
+      return buildBoardSlip(team, stake, boardCents, boardOdds, {});
+    }
+  }
+
+  // Amount + To win — 보드와 일치할 때만 당첨금 기준
+  if (slipOdds) {
+    const { odds, totalPayout, profit, priceCents } = slipOdds;
+    const payoutStale = stakeUnsettled
+      || !isPayoutOddsPlausible(priceCents, boardCents);
+
+    if (payoutStale) {
+      if (boardCents) {
+        return buildPendingPolySlip(team, stake, boardCents, 'To win 갱신 중 — ¢ 배당 유지');
+      }
+      return {
+        source: predictionSiteId(),
+        odds: null,
+        needsStake: true,
+        pendingToWin: true,
+        teamLabel: team,
+        stake,
+        hint: 'To win 계산 대기 중…',
+        marketKind: 'ml'
+      };
+    }
+
+    return {
+      source: predictionSiteId(),
+      odds,
+      priceCents,
+      price: priceCents / 100,
+      teamLabel: team,
+      outcome: team,
+      selectionText: team || '',
+      displayLabel: predictionSiteId() === 'bcgame'
+        ? `${odds.toFixed(3)} · 당첨 ${toWinDisplay.toFixed(2)} USDT`
+        : `${odds.toFixed(3)} · 당첨 $${toWinDisplay.toFixed(2)}`,
+      stake,
+      payout: totalPayout,
+      toWin: profit,
+      hint: predictionSiteId() === 'bcgame'
+        ? `우승 ${toWinDisplay.toLocaleString('en-US', { maximumFractionDigits: 2 })} USDT ÷ 금액 ${stake.toFixed(2)} USDT`
+        : `당첨금 $${toWinDisplay.toFixed(2)} ÷ 베팅 $${stake.toFixed(2)}`,
+      marketKind: 'ml',
+      period: 'ft',
+      marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+      fromPayout: true,
+      liveCents: false
+    };
+  }
+
+  // Amount 있으나 To win 없음 — ¢ 배당 유지
+  if (stake > 0 && !toWinDisplay) {
+    if (boardCents) {
+      return buildPendingPolySlip(team, stake, boardCents, 'Amount 입력됨 — To win 계산 중');
+    }
+    return {
+      source: predictionSiteId(),
+      odds: null,
+      needsStake: true,
+      pendingToWin: true,
+      teamLabel: team,
+      stake,
+      hint: predictionSiteId() === 'bcgame' ? '우승(당첨) 계산 대기 중...' : 'To win 계산 대기 중...',
+      marketKind: 'ml'
+    };
+  }
+
+  // 금액 없을 때만 보드 ¢ 참고
+  const listedCents = readLiveListedCents(panel, 0, 0);
+  const odds = oddsFromCents(listedCents);
+
+  if (!odds || odds <= 1.001) {
+    return {
+      source: predictionSiteId(),
+      odds: null,
+      needsStake: true,
+      teamLabel: team,
+      priceCents: isValidPolyCents(listedCents) ? listedCents : null,
+      hint: listedCents
+        ? `${formatCentsLabel(listedCents)} — Amount 입력 시 당첨금 기준 배당`
+        : 'Polymarket Amount 입력 후 To win 확인',
+      marketKind: 'ml'
+    };
+  }
+
+  const priceCents = listedCents || decimalToCents(odds);
+  const centsLabel = formatCentsLabel(priceCents);
+
+  return {
+    source: predictionSiteId(),
+    odds,
+    priceCents,
+    price: priceCents / 100,
+    teamLabel: team,
+    outcome: team,
+    selectionText: team ? `${team} @ ${centsLabel}` : centsLabel,
+    displayLabel: `${centsLabel} (${odds.toFixed(3)})`,
+    stake: stake || null,
+    payout: null,
+    toWin: null,
+    hint: 'Amount 입력 시 To win 기준 배당으로 전환',
+    marketKind: 'ml',
+    period: 'ft',
+    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    fromPayout: false,
+    liveCents: !!listedCents
+  };
+}
+
+function calcOddsFromStakeAndPayout(stake, totalPayout) {
+  if (!stake || !totalPayout || stake <= 0 || totalPayout <= 0) return null;
+  return totalPayout / stake;
+}
+
+function decimalToCents(decimal) {
+  if (!decimal || decimal <= 1) return null;
+  const c = Math.round(1000 / decimal) / 10;
+  return isValidPolyCents(c) ? c : null;
+}
+
+function robustClick(el) {
+  if (!el) return false;
+  try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+  try { el.focus({ preventScroll: true }); } catch (_) {}
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1 };
+  try { el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, pointerType: 'mouse' })); } catch (_) {}
+  try { el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, pointerType: 'mouse' })); } catch (_) {}
+  el.dispatchEvent(new MouseEvent('mousedown', base));
+  el.dispatchEvent(new MouseEvent('mouseup', base));
+  el.dispatchEvent(new MouseEvent('click', base));
+  if (typeof el.click === 'function') el.click();
+  return true;
+}
+
+async function typeIntoField(el, text) {
+  if (!el) return false;
+  const str = String(text);
+  el.focus();
+  try { el.click(); } catch (_) {}
+
+  if (el.isContentEditable) {
+    el.textContent = str;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(50);
+    return true;
+  }
+
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+  try {
+    el.select?.();
+    document.execCommand?.('selectAll', false, null);
+  } catch (_) {}
+
+  if (setter) setter.call(el, str);
+  else el.value = str;
+
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, data: str, inputType: 'insertFromPaste' }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+  await sleep(80);
+  return true;
+}
+
+function ensureBuyTabSelected(panel) {
+  const root = panel || findTradePanel() || document.body;
+  for (const btn of root.querySelectorAll('button, [role="button"], [role="tab"]')) {
+    if (!visible(btn)) continue;
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t !== 'Buy' && t !== '매수' && t !== '구매') continue;
+    const pressed = btn.getAttribute('aria-pressed') === 'true'
+      || btn.getAttribute('aria-selected') === 'true'
+      || btn.getAttribute('data-state') === 'active'
+      || /active|selected|bg-/i.test(String(btn.className || ''));
+    if (!pressed) robustClick(btn);
+    return true;
+  }
+  return false;
+}
+
+function isBuyTabButton(btn) {
+  const t = (btn?.textContent || '').replace(/\s+/g, ' ').trim();
+  if (t !== 'Buy' && t !== '매수' && t !== 'Sell' && t !== '매도' && t !== '구매' && t !== '판매') return false;
+  const parent = btn.parentElement;
+  const pt = (parent?.textContent || '').replace(/\s+/g, ' ');
+  return /\bBuy\b/.test(pt) && /\bSell\b/.test(pt) && pt.length < 50;
+}
+
+function findBuyTeamButton(panel) {
+  const scope = panel || findTradePanel() || document.body;
+  let best = null;
+  let bestScore = -1;
+
+  for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+    if (!visible(btn) || btn.disabled) continue;
+    if (isBuyTabButton(btn)) continue;
+
+    const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!/^(?:buy|구매)\s+/i.test(t) || t.length < 4) continue;
+    if (/combo|terms|sell/i.test(t)) continue;
+
+    const r = btn.getBoundingClientRect();
+    let score = 100 + t.length;
+    if (r.width >= 180 && r.height >= 38) score += 60;
+    if (panel && panel.contains(btn)) score += 40;
+    if (/gaming|yes|no/i.test(t)) score += 10;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = btn;
+    }
+  }
+  return best;
+}
+
+function findPlaceOrderButton(panel) {
+  const teamBtn = findBuyTeamButton(panel);
+  if (teamBtn) return teamBtn;
+  const input = findAmountInput(panel);
+  if (input) {
+    let box = input.parentElement;
+    for (let depth = 0; depth < 10 && box; depth++) {
+      const local = [];
+      for (const btn of box.querySelectorAll('button, [role="button"]')) {
+        if (!visible(btn) || btn.disabled) continue;
+        const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        const lower = t.toLowerCase();
+        if (!t || t.length > 120) continue;
+        if (lower === 'sell' || lower === 'buy' && box.textContent.includes('Sell') && t.length < 6) continue;
+        let score = 0;
+        if (/^buy\b/i.test(t) && t.length > 4) score += 100;
+        if (/\$\d/.test(t)) score += 90;
+        if (/place order|submit/i.test(lower)) score += 110;
+        if (/yes|no/i.test(t) && /buy/i.test(t)) score += 80;
+        const r = btn.getBoundingClientRect();
+        if (r.width >= 100 && r.height >= 36) score += 20;
+        if (score >= 70) local.push({ btn, score, t });
+      }
+      if (local.length) {
+        local.sort((a, b) => b.score - a.score);
+        return local[0].btn;
+      }
+      box = box.parentElement;
+    }
+  }
+
+  const roots = [panel, findTradePanel(), document.body].filter(Boolean);
+  const seen = new Set();
+  const candidates = [];
+
+  for (const root of roots) {
+    for (const btn of root.querySelectorAll('button, [role="button"]')) {
+      if (!btn || seen.has(btn) || !visible(btn) || btn.disabled) continue;
+      seen.add(btn);
+
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const aria = (btn.getAttribute('aria-label') || '').trim();
+      const lower = `${t} ${aria}`.toLowerCase();
+      const rect = btn.getBoundingClientRect();
+
+      let score = 0;
+      if (/place order|submit order|confirm purchase|confirm buy/i.test(lower)) score += 120;
+      if (/^buy\s+.+/i.test(t) && t.length > 6) score += 95;
+      if (/buy.*\$\d|^\$\d.*buy/i.test(t)) score += 90;
+      if (/buy.*(yes|no)\b/i.test(lower)) score += 85;
+      if (aria && /buy/i.test(aria) && !/tab/i.test(aria)) score += 70;
+      if (t === 'Buy' || t === '매수') {
+        const parentText = (btn.parentElement?.textContent || '').replace(/\s+/g, ' ');
+        score += (/\bSell\b/.test(parentText) && parentText.length < 40) ? 5 : 50;
+      }
+      if (rect.width >= 90 && rect.height >= 32) score += 15;
+      if (panel && panel.contains(btn)) score += 25;
+      if (/\d+¢|shares/i.test(t)) score += 10;
+
+      if (score >= 45) candidates.push({ btn, score, t: t.slice(0, 60) });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.btn || null;
+}
+
+function findBuyButton(panel) {
+  return findPlaceOrderButton(panel);
+}
+
+async function setInputValueRobust(input, value) {
+  return typeIntoField(input, value);
+}
+
+async function clickAmountChips(panel, target) {
+  const scope = panel || findTradePanel() || document.body;
+  const want = Math.max(1, Math.round(target));
+  const chips = [100, 10, 5, 1];
+  let left = want;
+  let clicked = 0;
+
+  for (const n of chips) {
+    while (left >= n) {
+      let btn = null;
+      for (const b of scope.querySelectorAll('button, [role="button"]')) {
+        if (!visible(b)) continue;
+        const t = (b.textContent || '').trim();
+        if (t === `+$${n}` || t === `$${n}`) { btn = b; break; }
+      }
+      if (!btn) break;
+      btn.click();
+      robustClick(btn);
+      clicked++;
+      left -= n;
+      await sleep(150);
+    }
+  }
+  return clicked;
+}
+
+function readAmountFromPanel(panel) {
+  return readPanelStake(panel);
+}
+
+async function setPolyTradeAmount(amountUsd, force = true) {
+  const panel = findTradePanel();
+  if (!panel) return { ok: false, reason: '주문 패널 없음 — outcome 클릭 후 Amount 표시' };
+
+  ensureBuyTabSelected(panel);
+  await sleep(120);
+
+  const rounded = Math.max(1, Math.round(amountUsd * 100) / 100);
+  notePolyStakeChange(rounded);
+  const existing = readAmountFromPanel(panel);
+  if (!force && existing && Math.abs(existing - rounded) < 0.05) {
+    return { ok: true, stake: existing, method: 'unchanged' };
+  }
+  if (existing && Math.abs(existing - rounded) < 0.02) {
+    return { ok: true, stake: existing, method: 'skip-same' };
+  }
+
+  const field = findAmountInput(panel);
+  if (field) {
+    await typeIntoField(field, String(rounded));
+    await sleep(180);
+    const stake = readAmountFromPanel(panel);
+    if (stake && stake >= 0.5) {
+      return { ok: true, stake, method: 'type', target: rounded };
+    }
+  }
+
+  return { ok: false, reason: `금액 입력 실패 — Amount에 $${rounded} 직접 입력`, stake: existing || 0 };
+}
+
+async function fillTradeAmount(panel, amount) {
+  const rounded = Math.max(1, Math.round(amount * 100) / 100);
+  const existing = readAmountFromPanel(panel);
+  if (existing && existing >= 0.5) return { ok: true, stake: existing, method: 'existing' };
+
+  const chipClicks = await clickAmountChips(panel, rounded);
+  await sleep(250);
+  let stake = readAmountFromPanel(panel);
+  if (stake && stake >= 0.5) return { ok: true, stake, method: 'chips', chipClicks };
+
+  const field = findAmountInput(panel);
+  if (field) {
+    await typeIntoField(field, String(Math.ceil(rounded)));
+    await sleep(200);
+    stake = readAmountFromPanel(panel);
+    if (stake && stake >= 0.5) return { ok: true, stake, method: 'type', chipClicks };
+  }
+
+  const buyBtn = findBuyTeamButton(panel);
+  if (chipClicks > 0 || buyBtn) {
+    return { ok: true, stake: stake || rounded, method: chipClicks ? 'chips-only' : 'buy-ready', chipClicks };
+  }
+
+  return { ok: false, reason: `금액 입력 실패 — +$칩 또는 Amount에 $${rounded} 직접 입력`, stake: stake || 0 };
+}
+
+function hasInPageDialog() {
+  return !!document.querySelector('[role="dialog"], [role="alertdialog"], [class*="modal" i], [class*="Modal"], [class*="dialog" i], [class*="Dialog"]');
+}
+
+function findModalActionButton() {
+  const patterns = [
+    /confirm/i,
+    /place order/i,
+    /submit order/i,
+    /complete purchase/i,
+    /approve/i,
+    /^(submit|continue|yes|확인|승인|주문)$/i
+  ];
+  const scopes = [];
+  for (const dlg of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) scopes.push(dlg);
+  if (!scopes.length) scopes.push(document.body);
+
+  for (const scope of scopes) {
+    for (const btn of scope.querySelectorAll('button, [role="button"]')) {
+      if (!visible(btn) || btn.disabled) continue;
+      const t = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 80) continue;
+      if (t === 'Buy' && !hasInPageDialog()) continue;
+      if (patterns.some((p) => p.test(t))) return btn;
+    }
+  }
+  return null;
+}
+
+function pageHasOrderSuccess() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /order submitted|purchase complete|shares purchased|bought|trade submitted|order placed|매수 완료|주문 완료|confirmed|successfully purchased/i.test(text);
+}
+
+function pageHasOrderError() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+  return /insufficient (balance|funds)|not enough|failed to (buy|place)|transaction failed|rejected|unable to place|거부|잔액 부족|주문 실패/i.test(text);
+}
+
+async function waitAfterBuyClick(panel, btn) {
+  for (let i = 0; i < 30; i++) {
+    await sleep(80);
+    if (pageHasOrderSuccess()) {
+      return { success: true, confirmed: true, btnText: (btn?.textContent || '').trim().slice(0, 50) };
+    }
+    if (pageHasOrderError()) {
+      return { success: false, reason: '주문 거부/잔액 부족' };
+    }
+    for (const inp of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
+      if (!visible(inp)) continue;
+      const ctx = (inp.closest('[role="dialog"], label, div')?.textContent || '').slice(0, 200);
+      if (/risk|understand|agree|accept|terms/i.test(ctx) && !inp.checked && inp.getAttribute('aria-checked') !== 'true') {
+        robustClick(inp);
+      }
+    }
+    const modalBtn = findModalActionButton();
+    if (modalBtn) robustClick(modalBtn);
+  }
+
+  // Polymarket 캐시 잔액: Buy 클릭만으로 주문됨 (지갑 서명 불필요)
+  if (!pageHasOrderError()) {
+    return {
+      success: true,
+      confirmed: true,
+      pendingWallet: false,
+      reason: '베팅 클릭 완료'
+    };
+  }
+  return { success: false, reason: '주문 거부됨' };
+}
+
+function probePolyBetUi() {
+  const panel = findTradePanel();
+  const btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
+  return {
+    hasPanel: !!panel,
+    hasInput: !!findAmountInput(panel),
+    stake: readAmountFromPanel(panel),
+    hasBtn: !!btn,
+    btnText: btn ? (btn.textContent || '').trim().slice(0, 60) : '',
+    btnDisabled: btn ? !!btn.disabled : null,
+    team: readTeamLabel(panel),
+    url: location.href
+  };
+}
+
+function clickBuyButton(btn) {
+  if (!btn) return false;
+  try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+  try { btn.focus({ preventScroll: true }); } catch (_) {}
+  if (typeof btn.click === 'function') btn.click();
+  robustClick(btn);
+  return true;
+}
+
+async function placePolymarketBet(amountUsd, opts = {}) {
+  const skipFill = !!opts.skipFill;
+  const panel = findTradePanel();
+  if (!panel) {
+    return { success: false, reason: '주문 패널 없음 — /event/ 페이지에서 outcome 클릭', probe: probePolyBetUi() };
+  }
+
+  ensureBuyTabSelected(panel);
+  if (!skipFill) await sleep(120);
+
+  const amount = Math.max(1, Math.round(amountUsd * 100) / 100);
+  let fill = { ok: true, method: 'presynced', stake: readAmountFromPanel(panel) };
+
+  if (!skipFill) {
+    fill = await fillTradeAmount(panel, amount);
+  } else {
+    const existing = readAmountFromPanel(panel);
+    if (!existing || Math.abs(existing - amount) > 0.2) {
+      fill = await setPolyTradeAmount(amount, true);
+    }
+  }
+
+  let btn = null;
+  let btnText = '';
+  const tries = skipFill ? 15 : 25;
+  for (let i = 0; i < tries; i++) {
+    await sleep(skipFill ? 50 : 100);
+    btn = findBuyTeamButton(panel) || findPlaceOrderButton(panel);
+    if (btn) {
+      btnText = (btn.textContent || '').trim();
+      if (!btn.disabled) break;
+    }
+    btn = null;
+  }
+
+  if (!btn) {
+    return {
+      success: false,
+      reason: 'Buy 팀명 버튼 없음 (예: Buy LGD Gaming)',
+      probe: probePolyBetUi(),
+      fillMethod: fill.method
+    };
+  }
+
+  if (!fill.ok && !fill.chipClicks) {
+    return { success: false, reason: fill.reason || '금액 입력 실패', probe: probePolyBetUi() };
+  }
+
+  clickBuyButton(btn);
+  await sleep(400);
+  const modalBtn = findModalActionButton();
+  if (modalBtn) clickBuyButton(modalBtn);
+
+  const result = await waitAfterBuyClick(panel, btn);
+  result.btnText = btnText.slice(0, 60);
+  result.fillMethod = fill.method;
+  result.chipClicks = fill.chipClicks || 0;
+  return result;
+}
+
+function centsToDecimal(cents) {
+  const c = parseFloat(cents);
+  if (!Number.isFinite(c) || c <= 0) return null;
+  if (c >= 100) return null;
+  if (c > 0 && c < 1) return 1 / c;
+  return 100 / c;
+}
+
+function parsePriceToken(text) {
+  const t = String(text || '').trim();
+  let m = t.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (m) return parseFloat(m[1]);
+  m = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (m) {
+    const p = parseFloat(m[1]);
+    if (p > 0 && p < 100) return p;
+  }
+  return null;
+}
+
+function extractVsTeams(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  const patterns = [
+    /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+vs\.?\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i,
+    /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)\s+대\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{1,48}?)/i
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (!m) continue;
+    const home = m[1].replace(/\s+\d+\s*-\s*\d+.*$/, '').trim();
+    const away = m[2].replace(/\s+\d+\s*-\s*\d+.*$/, '').trim();
+    if (home.length >= 2 && away.length >= 2) return { home, away };
+  }
+  return null;
+}
+
+function pushMatchup(matchups, seen, home, away, homeCents, awayCents) {
+  const key = `${home}|${away}`.toLowerCase();
+  if (seen.has(key)) return;
+  const homeDec = centsToDecimal(homeCents);
+  const awayDec = centsToDecimal(awayCents);
+  if (!homeDec || !awayDec) return;
+  seen.add(key);
+  matchups.push({
+    id: key,
+    home,
+    away,
+    title: `${home} vs ${away}`,
+    league: '',
+    ml: [
+      { team: home, side: 'home', price: homeCents / 100, decimal: homeDec },
+      { team: away, side: 'away', price: awayCents / 100, decimal: awayDec }
+    ]
+  });
+}
+
+function scanPredictionsBoard() {
+  const matchups = [];
+  const seen = new Set();
+  const raw = (document.body?.innerText || '').replace(/\r/g, '');
+
+  const rowRe = /([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+(\d+)\s*-\s*(\d+)\s+([A-Za-z0-9가-힣][A-Za-z0-9가-힣 .'\-]{2,48}?)\s+([A-Z]{2,8})\s+\d+\s*-\s*\d+\s+\2\s+([\d.]+)\s*(?:¢|%)[\s\S]{0,40}?\6\s+([\d.]+)\s*(?:¢|%)/g;
+  let m;
+  while ((m = rowRe.exec(raw)) !== null) {
+    pushMatchup(matchups, seen, m[1].trim(), m[5].trim(), parseFloat(m[7]), parseFloat(m[8]));
+  }
+
+  if (!matchups.length) {
+    for (const el of document.querySelectorAll('div, article, section, a, button, li')) {
+      if (!visible(el)) continue;
+      const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 20 || t.length > 600) continue;
+      if (!/(?:¢|%\s)/.test(t) && !/\d+\s*-\s*\d+/.test(t)) continue;
+
+      const teams = extractVsTeams(t);
+      if (teams) {
+        const cents = [...t.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)]
+          .map((x) => parseFloat(x[1]))
+          .filter((c) => c > 0 && c < 100);
+        if (cents.length >= 2) {
+          pushMatchup(matchups, seen, teams.home, teams.away, cents[0], cents[cents.length - 1]);
+          if (matchups.length >= 80) break;
+          continue;
+        }
+      }
+
+      const parts = t.split(/\s+\d+\s*-\s*\d+\s+/);
+      if (parts.length < 2) continue;
+      const homePart = parts[0].trim().split(/\s+/);
+      const awayPart = parts[1].trim().split(/\s+/);
+      const home = homePart.slice(0, -1).join(' ') || homePart[0];
+      const away = awayPart.slice(0, -1).join(' ') || awayPart[0];
+      if (!home || !away || home.length < 2) continue;
+      const cents = [...t.matchAll(/(\d+(?:\.\d+)?)\s*(?:¢|%)/g)]
+        .map((x) => parseFloat(x[1]))
+        .filter((c) => c > 0 && c < 100);
+      if (cents.length < 2) continue;
+      pushMatchup(matchups, seen, home, away, cents[0], cents[cents.length - 1]);
+      if (matchups.length >= 80) break;
+    }
+  }
+
+  const cartSlip = readPolymarketSlip();
+  if (cartSlip?.odds > 1.01 && cartSlip.teamLabel) {
+    const key = `${cartSlip.homeTeam || cartSlip.teamLabel}|${cartSlip.awayTeam || ''}`.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      matchups.push({
+        id: key || 'cart',
+        home: cartSlip.homeTeam || cartSlip.teamLabel,
+        away: cartSlip.awayTeam || '',
+        title: cartSlip.eventText || cartSlip.teamLabel,
+        league: '',
+        ml: [{ team: cartSlip.teamLabel, side: 'pick', price: 1 / cartSlip.odds, decimal: cartSlip.odds }]
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    site: predictionSiteId(),
+    url: location.href,
+    matchups,
+    hasCart: !!findTradePanel() || !!(cartSlip?.odds > 1.01),
+    cartSlip
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
+  if (msg.type === 'PING') {
+    sendResponse({ ok: true, site: predictionSiteId(), version: '5.3' });
+    return false;
+  }
+  if (msg.type === 'READ_SLIP') {
+    sendResponse({ slip: readPolymarketSlip() });
+    return false;
+  }
+  if (msg.type === 'SCAN_BOARD') {
+    sendResponse(scanPredictionsBoard());
+    return false;
+  }
+  if (msg.type === 'PROBE_POLY') {
+    sendResponse({ ok: true, probe: probePolyBetUi() });
+    return false;
+  }
+  if (msg.type === 'SET_POLY_AMOUNT') {
+    setPolyTradeAmount(msg.amount, msg.force !== false).then(sendResponse);
+    return true;
+  }
+  if (msg.type === 'PLACE_BET') {
+    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill }).then(sendResponse);
+    return true;
+  }
+});
+
+try {
+  window.__polyPlaceBet = placePolymarketBet;
+  window.__polySetAmount = setPolyTradeAmount;
+  window.__polyProbe = probePolyBetUi;
+  window.__polyReadSlip = readPolymarketSlip;
+} catch (_) {}
+
+(function observe() {
+  let last = '';
+  let pending = false;
+
+  function slipKey(slip) {
+    if (!slip) return '';
+    if (slip.pendingToWin) return `pending_${slip.stake || ''}_${slip.priceCents || 'c'}`;
+    const o = slip.odds > 1 ? slip.odds.toFixed(4) : 'x';
+    return `${slip.priceCents || 'c'}_${o}_${slip.stake || ''}_${slip.teamLabel || ''}`;
+  }
+
+  function tick() {
+    const slip = readPolymarketSlip();
+    if (!slip) return;
+    const key = slipKey(slip);
+    if (key === last) return;
+    last = key;
+    try { chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip }); } catch (_) {}
+  }
+
+  function notifyNow() {
+    last = ''; // 강제 갱신
+    tick();
+    requestAnimationFrame(() => {
+      tick();
+      requestAnimationFrame(tick);
+    });
+  }
+
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      tick();
+    });
+  }
+
+  if (document.body) {
+    document.addEventListener('click', (e) => {
+      const btn = e.target?.closest?.('button, [role="button"], [role="radio"], a');
+      if (!btn) return;
+      notifyNow();
+    }, true);
+
+    new MutationObserver(schedule).observe(document.body, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-state', 'aria-pressed', 'aria-selected', 'aria-label', 'value']
+    });
+    document.addEventListener('input', notifyNow, true);
+    document.addEventListener('change', notifyNow, true);
+    setInterval(tick, 16);
+    notifyNow();
+  }
+})();
+
+console.log(`[BC.Game v5.6.4] content script loaded (${isBcSportsPage() ? 'sports' : 'predictions'})`);
