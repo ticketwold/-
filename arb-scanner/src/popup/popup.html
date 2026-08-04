@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arb Scanner</title>
+  <link rel="stylesheet" href="./popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Arb Scanner</h1>
+    <span id="status" class="badge">—</span>
+  </header>
+  <section>
+    <h2>x10x10s</h2>
+    <ul id="x10-list"></ul>
+  </section>
+  <section>
+    <h2>BC.Game</h2>
+    <ul id="bc-list"></ul>
+  </section>
+  <section>
+    <h2>양방 기회</h2>
+    <ul id="opp-list"></ul>
+  </section>
+  <footer>
+    <button id="diag-btn" type="button">진단 (활성 탭)</button>
+    <a href="options.html" target="_blank">설정</a>
+  </footer>
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>

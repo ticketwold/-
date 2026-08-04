@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Arb Scanner 설정</title>
+  <link rel="stylesheet" href="./options.css" />
+</head>
+<body>
+  <h1>Arb Scanner 설정</h1>
+  <form id="form">
+    <label>
+      최소 수익률 (%)
+      <input type="number" id="minProfit" min="0" step="0.1" />
+    </label>
+    <label>
+      Debounce (ms)
+      <input type="number" id="debounceMs" min="100" step="50" />
+    </label>
+    <label class="check">
+      <input type="checkbox" id="notifications" /> 브라우저 알림
+    </label>
+    <label class="check">
+      <input type="checkbox" id="sound" /> 사운드 알림
+    </label>
+    <label class="check">
+      <input type="checkbox" id="diagnostic" /> 진단 모드 (콘솔 상세 로그)
+    </label>
+    <button type="submit">저장</button>
+  </form>
+  <p id="saved" hidden>저장됨</p>
+  <script type="module" src="./options.ts"></script>
+</body>
+</html>

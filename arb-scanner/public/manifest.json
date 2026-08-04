@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Arb Scanner",
+  "version": "1.0.0",
+  "description": "x10x10s · BC.Game 실시간 배당 수집 · 양방 탐지",
+  "permissions": ["storage", "notifications", "alarms", "tabs", "scripting"],
+  "host_permissions": [
+    "*://*.x10x10s.com/*",
+    "*://*.bti-sports.com/*",
+    "*://*.bti-sports.io/*",
+    "*://*.live8588.com/*",
+    "*://*.fxf774.com/*",
+    "*://*.pbc00.com/*",
+    "*://*.sptpub.com/*",
+    "*://*.betby.com/*",
+    "*://*.sptsportscdn.com/*",
+    "*://*.biahosted.com/*",
+    "*://*.cocoesports.com/*",
+    "*://bc.game/*",
+    "*://*.bc.game/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.x10x10s.com/*",
+        "*://*.bti-sports.com/*",
+        "*://*.bti-sports.io/*",
+        "*://*.live8588.com/*",
+        "*://*.fxf774.com/*",
+        "*://*.pbc00.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*", "*://*.betby.com/*", "*://*.sptpub.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Arb Scanner",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {}
+}

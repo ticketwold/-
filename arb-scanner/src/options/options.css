@@ -1,0 +1,7 @@
+body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 20px; background: #0f1419; color: #e7ecf3; }
+h1 { margin-bottom: 24px; }
+label { display: block; margin-bottom: 16px; }
+input[type="number"] { width: 100%; padding: 8px; margin-top: 4px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: inherit; }
+.check { display: flex; align-items: center; gap: 8px; }
+button { padding: 10px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+#saved { color: #4ade80; margin-top: 12px; }
