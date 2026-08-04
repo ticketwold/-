@@ -1340,6 +1340,50 @@ function readAmountFromPanel(panel) {
   return readPanelStake(panel);
 }
 
+async function setSportsStakeViaMain(amountUsd) {
+  const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+  return new Promise((resolve) => {
+    const attr = 'data-bc-stake-result';
+    const el = document.documentElement;
+    const done = (result) => {
+      el.removeAttribute(attr);
+      resolve(result || { ok: false, reason: 'stake-empty' });
+    };
+    const script = document.createElement('script');
+    script.textContent = `(function(){
+      var attr='${attr}';
+      var amount=${rounded};
+      function finish(r){document.documentElement.setAttribute(attr,JSON.stringify(r||{ok:false}));};
+      try{
+        if(typeof __bcSetStake==='function'){
+          var p=__bcSetStake(amount);
+          if(p&&typeof p.then==='function'){p.then(finish).catch(function(e){finish({ok:false,reason:String(e)});});return;}
+          finish(p);return;
+        }
+      }catch(e){finish({ok:false,reason:String(e)});return;}
+      finish({ok:false,reason:'no-stake-handler'});
+    })();`;
+    const timer = setTimeout(() => done({ ok: false, reason: 'stake-timeout' }), 4000);
+    const observer = new MutationObserver(() => {
+      const raw = el.getAttribute(attr);
+      if (!raw) return;
+      clearTimeout(timer);
+      observer.disconnect();
+      try { done(JSON.parse(raw)); } catch (_) { done({ ok: false, reason: 'parse-fail' }); }
+    });
+    observer.observe(el, { attributes: true, attributeFilter: [attr] });
+    (document.head || el).appendChild(script);
+    script.remove();
+  });
+}
+
+async function setBcStakeAmount(amountUsd, force = true) {
+  const sports = await setSportsStakeViaMain(amountUsd);
+  if (sports?.ok) return { ...sports, method: sports.method || 'sports-main' };
+  if (sports?.partial) return sports;
+  return setPolyTradeAmount(amountUsd, force);
+}
+
 async function setPolyTradeAmount(amountUsd, force = true) {
   const panel = findTradePanel();
   if (!panel) return { ok: false, reason: '주문 패널 없음 — outcome 클릭 후 Amount 표시' };
@@ -1697,7 +1741,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg.type === 'SET_POLY_AMOUNT') {
-    setPolyTradeAmount(msg.amount, msg.force !== false).then(sendResponse);
+    setBcStakeAmount(msg.amount, msg.force !== false).then(sendResponse);
     return true;
   }
   if (msg.type === 'PLACE_BET') {
@@ -1708,7 +1752,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 
 try {
   window.__polyPlaceBet = placePolymarketBet;
-  window.__polySetAmount = setPolyTradeAmount;
+  window.__polySetAmount = setBcStakeAmount;
   window.__polyProbe = probePolyBetUi;
   window.__polyReadSlip = readPolymarketSlip;
 } catch (_) {}

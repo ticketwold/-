@@ -26,7 +26,9 @@ let lastStatus = { bti: '', poly: '' };
 const HISTORY_KEY = 'calcHistory';
 const HISTORY_MAX = 100;
 let historyEntries = [];
-let lastHistoryKey = '';
+let cachedUsdtRate = 1400;
+let cachedUsdtSource = 'manual';
+let usdtRateTimer = null;
 
 function formatPolyOddsForHistory(slip) {
   if (!slip?.odds || slip.odds <= 1) return '-';
@@ -176,8 +178,50 @@ async function getBtiBetAmount(btiTab) {
 }
 
 function getUsdRate() {
-  const v = parseFloat($('usdRate')?.value || '1400');
-  return Number.isFinite(v) ? v : 1400;
+  const v = parseFloat($('usdRate')?.value || String(cachedUsdtRate) || '1400');
+  return Number.isFinite(v) ? v : cachedUsdtRate || 1400;
+}
+
+function formatRateSource(source) {
+  if (source === 'bithumb') return '빗썸';
+  if (source === 'cache') return '빗썸(캐시)';
+  return '수동';
+}
+
+function applyUsdtRate(rate) {
+  if (!rate?.krw) return;
+  cachedUsdtRate = rate.krw;
+  cachedUsdtSource = rate.source || 'bithumb';
+  const input = $('usdRate');
+  if (input) {
+    input.value = String(Math.round(rate.krw));
+    input.readOnly = true;
+  }
+  const hint = $('usdRateHint');
+  if (hint) {
+    const t = rate.updatedAt ? new Date(rate.updatedAt).toLocaleTimeString() : '';
+    hint.textContent = `${formatRateSource(cachedUsdtSource)} ${Math.round(rate.krw).toLocaleString()}원${t ? ` · ${t}` : ''}`;
+  }
+  updateSlipUI(cachedBti, cachedPoly);
+}
+
+async function refreshBithumbRate() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'REFRESH_USDT_RATE' });
+    if (res?.rate) {
+      applyUsdtRate(res.rate);
+      return res.rate;
+    }
+  } catch (_) {}
+  const rate = await getUsdtKrwRate(getUsdRate());
+  applyUsdtRate(rate);
+  return rate;
+}
+
+function startBithumbRateLoop() {
+  refreshBithumbRate();
+  if (usdtRateTimer) clearInterval(usdtRateTimer);
+  usdtRateTimer = setInterval(refreshBithumbRate, 60_000);
 }
 
 function formatOdds(slip) {
@@ -278,7 +322,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
       const polyUsdEl = $('payoutPolyUsd');
       if (polyUsdEl) {
         polyUsdEl.textContent = polyTotalUsd
-          ? `($${polyTotalUsd.toFixed(2)} USDT · 환율 ${rate.toLocaleString()}원)`
+          ? `($${polyTotalUsd.toFixed(2)} USDT · ${formatRateSource(cachedUsdtSource)} ${rate.toLocaleString()}원)`
           : '-';
       }
       const polyPctEl = $('payoutPolyPct');
@@ -1063,19 +1107,49 @@ async function placePolyBet(polyTab, amountUsd) {
   return res || { success: false, reason: '응답 없음' };
 }
 
+async function setBcStakeMain(tabId, frameId, amountUsd) {
+  try {
+    await ensurePolyScript(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: async (amount) => {
+        const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
+        if (typeof window.__bcSetStake === 'function') {
+          const res = await window.__bcSetStake(rounded);
+          if (res?.ok || res?.partial) return res;
+        }
+        return null;
+      },
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function setPolyAmount(polyTab, amountUsd) {
   if (!polyTab?.id) return { ok: false, reason: 'BC.Game 탭 없음' };
   await ensurePolyScript(polyTab.id);
   const frames = await getAllFrames(polyTab.id);
   const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
   const seen = new Set();
+  let lastRes = null;
+
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
     seen.add(frameId);
+
+    const mainRes = await setBcStakeMain(polyTab.id, frameId, amountUsd);
+    if (mainRes?.ok) return mainRes;
+    if (mainRes?.partial) lastRes = mainRes;
+
     const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true }, frameId);
     if (res?.ok) return res;
+    if (res) lastRes = res;
   }
-  return { ok: false, reason: '응답 없음' };
+  return lastRes || { ok: false, reason: '금액 입력 실패 — BC 슬립 확인' };
 }
 
 function scheduleSyncPolyAmount() {
@@ -1103,6 +1177,7 @@ async function syncPolyAmount() {
   const btiBet = await getBtiBetAmount(found.btiTab);
   if (!btiBet) return;
 
+  await refreshBithumbRate();
   const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
   if (Math.abs(lastSyncedPolyUsd - polyUsd) < 0.02 && Date.now() - lastSyncedPolyAt < 3000) {
     updateSlipUI(cachedBti, cachedPoly, btiArb);
@@ -1112,17 +1187,19 @@ async function syncPolyAmount() {
   syncPolyPending = true;
   try {
     const res = await setPolyAmount(found.polyTab, polyUsd);
-    if (res?.ok) {
+    if (res?.ok || res?.partial) {
       const changed = Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02;
       lastSyncedPolyUsd = polyUsd;
       lastSyncedPolyAt = Date.now();
-      updateSlipUI(cachedBti, cachedPoly, btiArb);
+      setTimeout(() => refreshSlips().then(() => {
+        updateSlipUI(cachedBti, cachedPoly, btiArb);
+      }), 300);
       if (changed) {
         const profit = calcProfit(btiOdds, polyO);
-        log(`배당 갱신 — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
+        log(`BC $${polyUsd.toFixed(2)} 동기화 — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${formatPolyOddsForHistory(cachedPoly)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
       }
     } else if (res?.reason) {
-      log(`BC 금액 입력: ${res.reason}`, 'err');
+      log(`BC 금액 동기화: ${res.reason}`, 'err');
     }
   } finally {
     syncPolyPending = false;
@@ -1157,8 +1234,8 @@ function startCalc() {
   lastHistoryKey = '';
   $('botStart').disabled = true;
   $('botStop').disabled = false;
-  log('계산 시작 — 배당 변경 시 히스토리에 기록', 'info');
-  refreshSlips().then(() => scheduleSyncPolyAmount());
+  log('계산 시작 — BC 금액 자동 동기화 + 빗썸 환율', 'info');
+  refreshBithumbRate().then(() => refreshSlips().then(() => scheduleSyncPolyAmount()));
   calcTimer = setInterval(calcPollLoop, 400);
 }
 
@@ -1236,7 +1313,7 @@ $('searchStop')?.addEventListener('click', stopSearch);
 $('openPanelBtn')?.addEventListener('click', openPanel);
 $('openPanelFromSearch')?.addEventListener('click', openPanel);
 $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로고침', 'info'); });
-['slipMinProfit', 'minProfit', 'btiBet', 'usdRate'].forEach((id) => {
+['slipMinProfit', 'minProfit', 'btiBet'].forEach((id) => {
   $(id)?.addEventListener('input', () => {
     updateSlipUI(cachedBti, cachedPoly);
     if (calcRunning) scheduleSyncPolyAmount();
@@ -1267,6 +1344,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'SEARCH_RESULT') renderSearchResults(msg);
   if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
+  if (msg.type === 'USDT_RATE_UPDATED' && msg.rate) applyUsdtRate(msg.rate);
 });
 
 setInterval(() => {
@@ -1275,5 +1353,6 @@ setInterval(() => {
   });
 }, FALLBACK_REFRESH_MS);
 loadHistory();
+startBithumbRateLoop();
 refreshSlips();
-log(`v5.6.4 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 + BC.Game`, 'info');
+log(`v5.6.5 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 + BC.Game`, 'info');

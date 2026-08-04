@@ -1,5 +1,5 @@
-// background.js v5.6.3 — 텐텐뱃 (x10x10s) + BC.Game 전용
-importScripts('sites_config.js', 'teams.js', 'odds.js');
+// background.js v5.6.5 — 텐텐뱃 (x10x10s) + BC.Game 전용
+importScripts('sites_config.js', 'teams.js', 'odds.js', 'bithumb.js');
 
 const BTI_MARKET_TYPES = 'ML0%2CHC0%2COU0';
 const BTI_HOST_HINTS = ['bti-sports.io', 'bti-sports.com', 'live8588.com', 'fxf774.com'];
@@ -477,6 +477,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     broadcast(msg);
     return false;
   }
+
+  if (msg.type === 'GET_USDT_RATE') {
+    getUsdtKrwRate(msg.fallback || 1400).then((rate) => sendResponse({ ok: true, rate }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'REFRESH_USDT_RATE') {
+    fetchBithumbUsdtKrw().then((rate) => {
+      sendResponse({ ok: !!rate, rate });
+      if (rate) broadcast({ type: 'USDT_RATE_UPDATED', rate });
+    }).catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
 });
 
 async function openPanelWindow() {
@@ -512,4 +526,12 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.6.4] background loaded — 텐텐뱃 + BC.Game');
+console.log('[양방봇 v5.6.5] background loaded — 텐텐뱃 + BC.Game');
+
+chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'bithumb-rate') fetchBithumbUsdtKrw().then((r) => {
+    if (r) broadcast({ type: 'USDT_RATE_UPDATED', rate: r });
+  });
+});
+fetchBithumbUsdtKrw();
