@@ -1340,6 +1340,62 @@ function readAmountFromPanel(panel) {
   return readPanelStake(panel);
 }
 
+async function placeSportsBetViaMain(amountUsd) {
+  const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+  return new Promise((resolve) => {
+    const attr = 'data-bc-place-result';
+    const el = document.documentElement;
+    const done = (result) => {
+      el.removeAttribute(attr);
+      resolve(result || { success: false, reason: 'place-empty' });
+    };
+    const script = document.createElement('script');
+    script.textContent = `(function(){
+      var attr='${attr}';
+      var amount=${rounded};
+      function finish(r){document.documentElement.setAttribute(attr,JSON.stringify(r||{success:false}));};
+      try{
+        if(typeof __bcPlaceSportsBet==='function'){
+          var p=__bcPlaceSportsBet(amount);
+          if(p&&typeof p.then==='function'){p.then(finish).catch(function(e){finish({success:false,reason:String(e)});});return;}
+          finish(p);return;
+        }
+      }catch(e){finish({success:false,reason:String(e)});return;}
+      finish({success:false,reason:'no-place-handler'});
+    })();`;
+    const timer = setTimeout(() => done({ success: false, reason: 'place-timeout' }), 6000);
+    const observer = new MutationObserver(() => {
+      const raw = el.getAttribute(attr);
+      if (!raw) return;
+      clearTimeout(timer);
+      observer.disconnect();
+      try { done(JSON.parse(raw)); } catch (_) { done({ success: false, reason: 'parse-fail' }); }
+    });
+    observer.observe(el, { attributes: true, attributeFilter: [attr] });
+    (document.head || el).appendChild(script);
+    script.remove();
+  });
+}
+
+async function placeBcBet(amountUsd, opts = {}) {
+  const skipFill = !!opts.skipFill;
+  const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+
+  if (!skipFill) {
+    const stake = await setBcStakeAmount(rounded, true);
+    if (!stake?.ok && !stake?.partial) {
+      const sportsOnly = await placeSportsBetViaMain(rounded);
+      if (sportsOnly?.success) return sportsOnly;
+      return { success: false, reason: stake?.reason || '금액 입력 실패' };
+    }
+  }
+
+  const sports = await placeSportsBetViaMain(rounded);
+  if (sports?.success) return sports;
+
+  return placePolymarketBet(rounded, { skipFill });
+}
+
 async function setSportsStakeViaMain(amountUsd) {
   const rounded = Math.max(0.01, Math.round(amountUsd * 100) / 100);
   return new Promise((resolve) => {
@@ -1745,13 +1801,13 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return true;
   }
   if (msg.type === 'PLACE_BET') {
-    placePolymarketBet(msg.amount, { skipFill: !!msg.skipFill }).then(sendResponse);
+    placeBcBet(msg.amount, { skipFill: !!msg.skipFill }).then(sendResponse);
     return true;
   }
 });
 
 try {
-  window.__polyPlaceBet = placePolymarketBet;
+  window.__polyPlaceBet = placeBcBet;
   window.__polySetAmount = setBcStakeAmount;
   window.__polyProbe = probePolyBetUi;
   window.__polyReadSlip = readPolymarketSlip;

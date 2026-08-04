@@ -526,7 +526,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.6.5] background loaded — 텐텐뱃 + BC.Game');
+console.log('[양방봇 v5.7.0] background loaded — 금액동기화 + 자동배팅');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

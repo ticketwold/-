@@ -784,6 +784,26 @@ function readBtiStake() {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+function setBtiAmount(amount) {
+  const input = findBtiBetInput();
+  if (!input) return { ok: false, reason: '금액 입력 필드 없음' };
+  const v = parseInt(String(amount), 10);
+  if (!Number.isFinite(v) || v <= 0) return { ok: false, reason: '잘못된 금액' };
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  nativeSetter.call(input, String(v));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+
+  const read = readBtiStake();
+  return {
+    ok: read > 0 && Math.abs(read - v) < Math.max(100, v * 0.01),
+    stake: read,
+    target: v
+  };
+}
+
 function hasVisibleBetslipCards() {
   return !!document.querySelector(
     '[class*="betslip_fe"] [class*="betInformation__title"], [class*="BetSecondary_bet"] [class*="betInformation__title"], [class*="betInformation__eventName"]'
@@ -1744,6 +1764,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'READ_BTI_STAKE') {
     sendResponse({ stake: readBtiStake() });
+    return false;
+  }
+  if (msg.type === 'SET_BTI_AMOUNT') {
+    sendResponse(setBtiAmount(msg.amount));
     return false;
   }
   if (msg.type === 'ENSURE_BTI_SLIP') {
