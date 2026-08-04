@@ -275,7 +275,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   $('polyMeta').textContent = formatPolyMeta(poly);
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = ((syncRunning || autoBetRunning) && arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = arbBti?.odds > 1 ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
   if (profitEl) {
@@ -1058,7 +1058,7 @@ function slipSourceRank(slip) {
 }
 
 function mergeSlipCached(cached, fresh) {
-  if (!fresh || !slipOdds(fresh)) return cached?.fromPayout ? cached : null;
+  if (!fresh || !slipOdds(fresh)) return cached || null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
   if (slipSourceRank(fresh) > slipSourceRank(cached)) return { ...fresh, odds: freshOdds };
@@ -1620,4 +1620,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.4 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 슬립 금액동기화`, 'info');
+log(`v5.7.5 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 배당 복구`, 'info');

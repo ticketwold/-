@@ -596,8 +596,6 @@ function readActiveSlipDisplayOdds() {
       const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
       const eventText = eventEl?.textContent?.trim() || '';
       const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
-
-      const allText = `${selectionText} ${marketTitleText} ${eventText} ${txt}`;
       const mktType = detectMarketType(allText);
       if (!selectionText && !/W[12]/i.test(txt) && mktType === 'ml') continue;
 
