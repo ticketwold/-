@@ -1901,7 +1901,15 @@ try {
 
   function tick() {
     const slip = readPolymarketSlip();
-    if (!slip) return;
+    if (!slip || !slip.odds || slip.odds <= 1) {
+      if (last !== '') {
+        last = '';
+        try {
+          chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip: null, cartEmpty: true });
+        } catch (_) {}
+      }
+      return;
+    }
     const key = slipKey(slip);
     if (key === last) return;
     last = key;

@@ -45,7 +45,7 @@ function formatPolyOddsForHistory(slip) {
 
 function formatHistoryLine(bti, poly, arbBti, profit) {
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = bti?.odds > 1 ? bti.odds : null;
   const team = poly?.teamLabel || formatBtiMeta(bti) || '경기';
   const profitText = profit != null ? `${profit.toFixed(2)}%` : '-';
   return `${team} · 텐텐뱃 ${btiO?.toFixed(3) || '-'} · BC ${formatPolyOddsForHistory(poly)} · 수익률 ${profitText}`;
@@ -96,7 +96,7 @@ async function saveHistory() {
 function maybeRecordHistory(bti, poly, arbBti) {
   if (!syncRunning && !autoBetRunning) return;
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = (arbBti?.odds > 1) ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = bti?.odds > 1 ? bti.odds : null;
   if (!polyO || !btiO) return;
 
   const profit = calcProfit(btiO, polyO);
@@ -275,9 +275,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   $('polyMeta').textContent = formatPolyMeta(poly);
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = ((syncRunning || autoBetRunning) && arbBti?.odds > 1)
-    ? arbBti.odds
-    : (bti?.odds > 1 ? bti.odds : (arbBti?.odds > 1 ? arbBti.odds : null));
+  const btiO = bti?.odds > 1 ? bti.odds : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
   if (profitEl) {
@@ -515,6 +513,26 @@ async function injectReadBcSports(tabId, frameId = 0) {
   }
 }
 
+function isCartSlip(slip) {
+  if (!slip?.odds || slip.odds <= 1) return false;
+  if (slip.fromSlip) return true;
+  const src = slip.source || '';
+  const kind = slip.sourceKind || '';
+  if (kind === 'sports-board-selected') return false;
+  if (src === 'board' || src === 'main-scrape' || src === 'board-emergency') return false;
+  if (src === 'slip-display' || src === 'board-live' || src === 'merged' || src === 'slip') return true;
+  if (kind === 'bc-native-slip' || kind === 'sports-slip') return true;
+  if (slip.fromPayout) return true;
+  return false;
+}
+
+function normalizeCartSlip(slip) {
+  if (!isCartSlip(slip)) return null;
+  const odds = slipOdds(slip);
+  if (!odds) return null;
+  return { ...slip, odds };
+}
+
 function scorePolySlip(slip) {
   if (!slip?.odds || slip.odds <= 1) return -1;
   let s = slip.odds;
@@ -545,6 +563,7 @@ async function readPolySlipAllFrames(bcTab) {
       if (injected?.odds > 1) slip = injected;
     }
     if (!slip?.odds && !slip?.fromPayout && !slip?.needsStake) continue;
+    if (slip && !isCartSlip(slip) && !slip.fromPayout) continue;
     const sc = scorePolySlip(slip);
     if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) return slip;
     if (sc > bestScore) {
@@ -794,34 +813,43 @@ function scoreBtiProbe(ping, slip) {
   return score;
 }
 
-async function probeBtiFrame(tabId, frameId, hint = {}) {
+async function probeBtiFrame(tabId, frameId, hint = {}, cartOnly = false) {
   let ping = await sendBti(tabId, frameId, { type: 'PING' });
   if (!ping?.ok) {
     await ensureBtiScript(tabId, frameId);
     ping = await sendBti(tabId, frameId, { type: 'PING' });
   }
 
-  const contentPromise = ping?.ok
-    ? sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint }).then((res) => res?.slip || null)
-    : Promise.resolve(null);
-  const scrapePromise = injectReadBtiFrame(tabId, frameId);
+  let slip = null;
+  let cartEmpty = false;
+  if (ping?.ok) {
+    const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', cartOnly, hint });
+    slip = res?.slip || null;
+    cartEmpty = !!res?.cartEmpty;
+  }
 
-  let [contentSlip, scraped] = await Promise.all([contentPromise, scrapePromise]);
-  let slip = (contentSlip?.odds > 1.01) ? contentSlip : scraped;
-
-  if (!(slip?.odds > 1.01) && contentSlip?.odds > 1.01) slip = contentSlip;
-  if (!(slip?.odds > 1.01) && scraped?.odds > 1.01) slip = scraped;
-
-  if (!(slip?.odds > 1.01) && ping?.ok && (hint.excludeTeam || hint.polyTeam)) {
-    const res2 = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: {} });
-    if (res2?.slip?.odds > 1.01) slip = res2.slip;
-    else {
-      const scraped2 = await injectReadBtiFrame(tabId, frameId);
-      if (scraped2?.odds > 1.01) slip = scraped2;
+  if (!cartOnly) {
+    const scraped = await injectReadBtiFrame(tabId, frameId);
+    if (!(slip?.odds > 1.01) && scraped?.odds > 1.01) slip = scraped;
+    if (!(slip?.odds > 1.01) && ping?.ok && (hint.excludeTeam || hint.polyTeam)) {
+      const res2 = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', hint: {} });
+      if (res2?.slip?.odds > 1.01) slip = res2.slip;
+      else {
+        const scraped2 = await injectReadBtiFrame(tabId, frameId);
+        if (scraped2?.odds > 1.01) slip = scraped2;
+      }
     }
   }
 
-  return { frameId, ping, slip, score: scoreBtiProbe(ping, slip), hasInput: !!(ping?.hasInput || slip?.hasInput), hasBoard: !!((ping?.buttonCount || 0) > 0 || (slip?.buttonCount || 0) > 0) };
+  return {
+    frameId,
+    ping,
+    slip,
+    cartEmpty,
+    score: scoreBtiProbe(ping, slip),
+    hasInput: !!(ping?.hasInput || slip?.hasInput),
+    hasBoard: !!((ping?.buttonCount || 0) > 0 || (slip?.buttonCount || 0) > 0)
+  };
 }
 
 function updateBtiFrameRoles(tabId, results) {
@@ -905,7 +933,7 @@ function mergeBtiFrameResults(results) {
   return { slip: pick?.slip || null, frameId: pick?.frameId ?? 0 };
 }
 
-async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
+async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false, cartOnly = false) {
   const frames = await getAllFrames(tabId);
   const order = [];
   if (lastBtiFrame?.tabId === tabId) order.push(lastBtiFrame.frameId);
@@ -914,14 +942,18 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false) {
   }
 
   if (!forceFull && lastBtiFrame?.tabId === tabId) {
-    const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint);
+    const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint, cartOnly);
+    if (cartOnly && fast.cartEmpty) return { slip: null, frameId: fast.frameId, cartEmpty: true };
     if (fast.slip?.odds > 1.01) {
       lastBtiFrame = { tabId, frameId: fast.frameId };
       return { slip: fast.slip, frameId: fast.frameId };
     }
   }
 
-  const results = await Promise.all(order.map((frameId) => probeBtiFrame(tabId, frameId, hint)));
+  const results = await Promise.all(order.map((frameId) => probeBtiFrame(tabId, frameId, hint, cartOnly)));
+  if (cartOnly && results.some((r) => r.cartEmpty)) {
+    return { slip: null, frameId: results[0]?.frameId || 0, cartEmpty: true };
+  }
   updateBtiFrameRoles(tabId, results);
   const merged = mergeBtiFrameResults(results);
   lastBtiFullScanAt = Date.now();
@@ -988,8 +1020,11 @@ async function readBtiSlip(btiTab) {
     return null;
   }
 
-  // 슬립 비교 UI: hint 없이 현재 슬립/배당판 배당 표시
-  const merged = await readBtiFromAllFrames(btiTab.id, {});
+  const merged = await readBtiFromAllFrames(btiTab.id, {}, false, true);
+  if (merged.cartEmpty) {
+    lastStatus.bti = '텐텐뱃: 배팅카트 비어있음';
+    return null;
+  }
   if (merged.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: merged.frameId };
     btiTab.frameId = merged.frameId;
@@ -997,14 +1032,18 @@ async function readBtiSlip(btiTab) {
     return merged.slip;
   }
 
-  const forced = await readBtiFromAllFrames(btiTab.id, {}, true);
+  const forced = await readBtiFromAllFrames(btiTab.id, {}, true, true);
+  if (forced.cartEmpty) {
+    lastStatus.bti = '텐텐뱃: 배팅카트 비어있음';
+    return null;
+  }
   if (forced.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: forced.frameId };
     lastStatus.bti = '';
     return forced.slip;
   }
 
-  lastStatus.bti = '텐텐뱃: 배당판 배당 없음 — 슬립에 담고 ↻';
+  lastStatus.bti = '텐텐뱃: 배팅카트에 담기 후 확인';
   return null;
 }
 
@@ -1072,12 +1111,20 @@ function mergeSlipCached(cached, fresh) {
   return { ...cached, ...fresh, odds: freshOdds };
 }
 
-function applySlipUpdate(source, slip) {
+function applySlipUpdate(source, slip, opts = {}) {
   if (source === 'bti') {
-    if (slipOdds(slip)) cachedBti = mergeSlipCached(cachedBti, slip);
+    if (opts.cartEmpty || !slip) cachedBti = null;
+    else {
+      const normalized = normalizeCartSlip(slip);
+      if (normalized) cachedBti = normalized;
+    }
   }
   if (source === 'polymarket' || source === 'bcgame') {
-    if (slipOdds(slip)) cachedPoly = mergeSlipCached(cachedPoly, slip);
+    if (opts.cartEmpty || !slip) cachedPoly = null;
+    else {
+      const normalized = normalizeCartSlip(slip);
+      if (normalized) cachedPoly = normalized;
+    }
   }
   updateSlipUI(cachedBti, cachedPoly);
 }
@@ -1095,15 +1142,10 @@ async function refreshSlips() {
       readBtiSlip(found.btiTab)
     ]);
 
-    cachedPoly = mergeSlipCached(cachedPoly, poly);
-    cachedBti = mergeSlipCached(cachedBti, bti);
+    cachedPoly = normalizeCartSlip(poly);
+    cachedBti = normalizeCartSlip(bti);
 
-    let arbBti = null;
-    if ((syncRunning || autoBetRunning) && cachedPoly?.teamLabel && found.btiTab) {
-      arbBti = await readBtiArbOdds(found.btiTab, cachedPoly);
-    }
-
-    updateSlipUI(cachedBti, cachedPoly, arbBti);
+    updateSlipUI(cachedBti, cachedPoly);
     return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
   } finally {
     refreshPending = false;
@@ -1312,11 +1354,8 @@ async function syncAmounts(force = false) {
   if (!found.polyTab?.id || !found.btiTab?.id) return;
 
   const polyO = cachedPoly?.odds > 1 ? cachedPoly.odds : null;
-  if (!polyO) return;
-
-  const btiArb = cachedPoly?.teamLabel ? await readBtiArbOdds(found.btiTab, cachedPoly) : null;
-  const btiOdds = btiArb?.odds > 1 ? btiArb.odds : cachedBti?.odds;
-  if (!btiOdds || btiOdds <= 1) return;
+  const btiOdds = cachedBti?.odds > 1 ? cachedBti.odds : null;
+  if (!polyO || !btiOdds || btiOdds <= 1) return;
 
   const btiBet = getBtiBet();
   if (!btiBet) return;
@@ -1326,7 +1365,7 @@ async function syncAmounts(force = false) {
   const btiChanged = Math.abs(lastSyncedBtiKrw - btiBet) >= 100;
   const polyChanged = Math.abs(lastSyncedPolyUsd - polyUsd) >= 0.02;
   if (!force && !btiChanged && !polyChanged && Date.now() - lastSyncedAt < 2500) {
-    updateSlipUI(cachedBti, cachedPoly, btiArb);
+    updateSlipUI(cachedBti, cachedPoly);
     return;
   }
 
@@ -1344,7 +1383,7 @@ async function syncAmounts(force = false) {
       if (polyOk) lastSyncedPolyUsd = polyUsd;
       lastSyncedAt = Date.now();
       setTimeout(() => refreshSlips().then(() => {
-        updateSlipUI(cachedBti, cachedPoly, btiArb);
+        updateSlipUI(cachedBti, cachedPoly);
       }), 250);
       if (changed && syncRunning) {
         const profit = calcProfit(btiOdds, polyO);
@@ -1379,17 +1418,14 @@ async function tryAutoBet() {
   if (Date.now() - lastStrikeAt < AUTO_BET_COOLDOWN_MS) return;
 
   const polyO = cachedPoly?.odds > 1 ? cachedPoly.odds : null;
-  if (!polyO) return;
-
-  const found = await findTabs();
-  if (!found.polyTab?.id || !found.btiTab?.id) return;
-
-  const btiArb = cachedPoly?.teamLabel ? await readBtiArbOdds(found.btiTab, cachedPoly) : null;
-  const btiOdds = btiArb?.odds > 1 ? btiArb.odds : cachedBti?.odds;
-  if (!btiOdds || btiOdds <= 1) return;
+  const btiOdds = cachedBti?.odds > 1 ? cachedBti.odds : null;
+  if (!polyO || !btiOdds || btiOdds <= 1) return;
 
   const profit = calcProfit(btiOdds, polyO);
   if (profit == null || profit < getMinProfit()) return;
+
+  const found = await findTabs();
+  if (!found.polyTab?.id || !found.btiTab?.id) return;
 
   const btiBet = getBtiBet();
   const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
@@ -1398,7 +1434,7 @@ async function tryAutoBet() {
     return;
   }
 
-  await strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb);
+  await strikeBothBets(found, btiBet, polyUsd, btiOdds, null);
 }
 
 async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb) {
@@ -1441,8 +1477,9 @@ async function pollLoop() {
 }
 
 function onOddsChanged(msg) {
-  if (msg.source === 'bti') applySlipUpdate('bti', msg.slip);
-  if (msg.source === 'polymarket' || msg.source === 'bcgame') applySlipUpdate('polymarket', msg.slip);
+  const opts = { cartEmpty: !!msg.cartEmpty };
+  if (msg.source === 'bti') applySlipUpdate('bti', msg.slip, opts);
+  if (msg.source === 'polymarket' || msg.source === 'bcgame') applySlipUpdate('polymarket', msg.slip, opts);
   if (!syncRunning && !autoBetRunning) return;
   scheduleSyncAmounts();
   scheduleAutoBetCheck();
@@ -1621,4 +1658,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.7 ${IS_PANEL ? '패널' : '팝업'} 로드`, 'info');
+log(`v5.7.8 ${IS_PANEL ? '패널' : '팝업'} 로드 — 배팅카트 전용`, 'info');

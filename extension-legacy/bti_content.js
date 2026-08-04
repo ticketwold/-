@@ -1623,6 +1623,32 @@ function readEmergencyBoardOdds(hint = {}) {
   });
 }
 
+function readBtiCartOdds(hint) {
+  if (getRealSlipCards().length === 0) {
+    return { cartEmpty: true, slip: null };
+  }
+  const hintObj = hint || {};
+  const slipFromCard = readBtiSlip(hintObj);
+  if (slipFromCard?.odds > 1.01) {
+    return {
+      cartEmpty: false,
+      slip: enrichBtiSlip({ ...slipFromCard, fromSlip: true, source: slipFromCard.source || 'slip' })
+    };
+  }
+  const slipDisplay = readActiveSlipDisplayOdds();
+  if (slipDisplay?.odds > 1.01) {
+    return { cartEmpty: false, slip: enrichBtiSlip({ ...slipDisplay, fromSlip: true }) };
+  }
+  const slip = readBtiSlip({ ...hintObj, excludeTeam: null, polyTeam: null });
+  if (slip?.selectionText) {
+    const live = readLiveBoardOddsForSlip(slip);
+    if (live?.odds > 1.01) {
+      return { cartEmpty: false, slip: enrichBtiSlip({ ...live, fromSlip: true }) };
+    }
+  }
+  return { cartEmpty: false, slip: null };
+}
+
 function readBtiOdds(hint) {
   const hintObj = hint || {};
 
@@ -1757,6 +1783,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'READ_BTI_ODDS') {
+    if (msg.cartOnly) {
+      const r = readBtiCartOdds(msg.hint || {});
+      sendResponse({ slip: r.slip, cartEmpty: !!r.cartEmpty });
+      return false;
+    }
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;
   }
@@ -1858,7 +1889,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   function checkAndNotify() {
-    const slip = readBtiOdds();
+    if (getRealSlipCards().length === 0) {
+      if (lastOddsKey !== '') {
+        lastOddsKey = '';
+        try {
+          chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, cartEmpty: true });
+        } catch (e) {}
+      }
+      return;
+    }
+    const slip = readBtiCartOdds().slip;
     if (!slip || !slip.odds || slip.odds <= 1) return;
     const key = oddsKey(slip);
     if (key === lastOddsKey) return;
