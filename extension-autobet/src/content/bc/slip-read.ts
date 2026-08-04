@@ -1,8 +1,8 @@
 import './slip-read.legacy';
-import type { OddsPayload } from '@scanner/types';
 import { startScanner } from '@scanner/bootstrap';
 import { startAutoDiagnostic } from '@scanner/auto-diagnostic';
 import { runDomProbe } from '@scanner/dom-probe';
+import { NOOP_ODDS_CHANGE } from '@scanner/slip-read-bridge';
 import { setOddsDebug } from '@scanner/odds-parser';
 
 declare global {
@@ -25,35 +25,10 @@ try {
   /* ignore */
 }
 
-function notifyOdds(slip: Record<string, unknown> | null, cartChange?: boolean) {
-  if (slip?.odds) {
-    console.log(
-      '[DOM Scanner / BC slip-read]',
-      slip.odds,
-      'source:',
-      slip.source || slip.sourceKind,
-      'frame:',
-      slip.frameLabel || location.href.slice(0, 80)
-    );
-  }
-  try {
-    chrome.runtime.sendMessage({
-      type: 'ODDS_CHANGED',
-      source: 'bcgame',
-      slip: slip || null,
-      suspended: !slip,
-      cartChange: !!cartChange,
-      frameKind: slip?.frameLabel || (isBetbyCdn ? 'betby-widget' : 'bc-slip-read'),
-    });
-  } catch {
-    /* extension context invalidated */
-  }
-}
-
+/** bc_slip_read.js — Betby CDN + bc.game all_frames. 유일한 BC scanner 인스턴스 */
 const scanner = startScanner({
   source: 'bcgame',
-  onOddsChange: (slip: OddsPayload | null, cartChange?: boolean) =>
-    notifyOdds(slip as Record<string, unknown> | null, cartChange),
+  onOddsChange: NOOP_ODDS_CHANGE,
 });
 
 window.__domScannerActive = true;
@@ -83,7 +58,7 @@ function installBcReadWrapper(): void {
     return legacy();
   };
   window.__domScannerWrapped = true;
-  console.log('[DOM Scanner / BC slip-read] read wrapper installed');
+  console.log('[BC slip-read] scanner→legacy wrapper installed');
 }
 
 const wrapObserver = new MutationObserver(() => installBcReadWrapper());
@@ -94,7 +69,7 @@ installBcReadWrapper();
 requestAnimationFrame(installBcReadWrapper);
 
 console.log(
-  '[DOM Scanner / BC slip-read] boot',
+  '[BC slip-read] boot',
   isBetbyCdn ? 'betby-cdn' : 'bc-game-frame',
   window === window.top ? 'top' : 'iframe',
   (location.href || '').slice(0, 100)
@@ -103,5 +78,5 @@ console.log(
 startAutoDiagnostic({
   scriptEntry: 'bc_slip_read.js',
   scanner,
-  label: isBetbyCdn ? 'BC / betby-cdn (bc_slip_read)' : 'BC / bc_slip_read',
+  label: isBetbyCdn ? 'BC / betby-cdn' : 'BC / bc_slip_read',
 });

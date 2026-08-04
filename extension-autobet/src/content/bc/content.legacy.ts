@@ -527,6 +527,22 @@ function readBcSportsSlip() {
     bcContentOddsLatch = { odds: 0, source: '', at: 0, key: '' };
     return null;
   }
+  if (typeof window.__bcReadNativeSlip === 'function') {
+    try {
+      const native = window.__bcReadNativeSlip();
+      if (native?.odds > 1.01) {
+        return finalizeBcContentOdds({
+          odds: native.odds,
+          teamLabel: native.teamLabel || native.selectionText || native.outcome || '',
+          selectionText: native.selectionText || native.teamLabel || native.outcome || '',
+          sourceKind: native.sourceKind || 'bc-native-slip',
+          source: native.method || native.sourceKind || 'bc-native-slip',
+          fromSlip: native.fromSlip !== false,
+          fromPayout: !!native.fromPayout
+        });
+      }
+    } catch (_) {}
+  }
   const panelSlip = readBcSportsSlipFromPanel();
   if (panelSlip?.odds > 1.01) return finalizeBcContentOdds(panelSlip);
   const native = readNativeBcGameSlip();

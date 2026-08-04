@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-03T19:46:08.592Z",
+  "bcgame": {
+    "finalUrl": "https://bc.game/ko/sports",
+    "title": "Sports | Crypto Betting & Live Sportsbook - BC.GAME",
+    "navError": "",
+    "frameCount": 3,
+    "winnerCoefTotal": 0,
+    "counterTotal": 0,
+    "betslipIframes": [],
+    "oddsElements": [],
+    "shadowHosts": [],
+    "scannerFailures": [
+      "NO_SLIP_MARKERS_IN_THIS_FRAME",
+      "TOP_FRAME_SHELL_ODDS_LIKELY_IN_CHILD_IFRAME",
+      "RUNNING_INSIDE_IFRAME"
+    ],
+    "slipFrames": []
+  },
+  "x10x10s": {
+    "finalUrl": "https://www.x10x10s.com/",
+    "title": "Attention Required! | Cloudflare",
+    "navError": "",
+    "frameCount": 1,
+    "winnerCoefTotal": 0,
+    "counterTotal": 0,
+    "betslipIframes": [],
+    "oddsElements": [],
+    "shadowHosts": [],
+    "scannerFailures": [
+      "NO_SLIP_MARKERS_IN_THIS_FRAME"
+    ],
+    "slipFrames": []
+  },
+  "x10inplay": {
+    "finalUrl": "https://www.x10x10s.com/in-play/1",
+    "title": "Attention Required! | Cloudflare",
+    "navError": "",
+    "frameCount": 1,
+    "winnerCoefTotal": 0,
+    "counterTotal": 0,
+    "betslipIframes": [],
+    "oddsElements": [],
+    "shadowHosts": [],
+    "scannerFailures": [
+      "NO_SLIP_MARKERS_IN_THIS_FRAME"
+    ],
+    "slipFrames": []
+  }
+}

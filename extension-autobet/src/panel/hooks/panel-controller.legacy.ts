@@ -25,6 +25,7 @@ function isBcSlipUiSource(slip) {
   if (slip.source === 'stake') return true;
   const kind = slip.sourceKind || '';
   return kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-api'
+    || kind === 'bc-winner-coef' || kind === 'dom-scanner'
     || kind === 'stake-native-slip' || kind === 'stake-api-slip' || kind === 'stake-api';
 }
 
@@ -674,8 +675,11 @@ function applyInstantOdds(msg) {
       beginOddsTransition('bti');
     }
     const slipSource = msg.slip?.source || '';
-    const fromSlipUi = slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
-      || slipSource === 'in-play-at' || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at';
+    const fromSlipUi = msg.slip?.fromSlip === true
+      || slipSource === 'slip-display' || slipSource === 'slip-card' || slipSource === 'slip-latched'
+      || slipSource === 'in-play-at' || slipSource === 'widgets-x-slip' || slipSource === 'widgets-x-at'
+      || slipSource === 'sportscenter-slip' || slipSource === 'sportscenter-slip-card'
+      || slipSource === 'sportscenter-at' || slipSource === 'dom-scanner' || slipSource === 'shadow-query-probe';
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && oddsDelta(lastKnownOdds.btiO, o) >= 0.5) return false;
     if (!fromSlipUi && lastKnownOdds.btiO > 1 && !oddsChangedSignificantly(lastKnownOdds.btiO, o, ODDS_STABLE_EPS)) return false;
     cartOpen.bti = true;
