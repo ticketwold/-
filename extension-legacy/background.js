@@ -668,7 +668,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.7.3] background loaded — BC 네이티브 슬립 금액동기화');
+console.log('[양방봇 v5.7.4] background loaded — BC 네이티브 슬립 금액동기화');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

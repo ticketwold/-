@@ -517,8 +517,11 @@ function scorePolySlip(slip) {
   if (!slip?.odds || slip.odds <= 1) return -1;
   let s = slip.odds;
   if (slip.fromSlip) s += 1000;
-  if (slip.sourceKind === 'bc-native-slip' || slip.sourceKind === 'sports-slip') s += 500;
+  if (slip.sourceKind === 'bc-native-slip') s += 900;
+  else if (slip.sourceKind === 'sports-slip') s += 500;
+  else if (slip.sourceKind === 'sports-board-selected') s -= 600;
   if (slip.fromPayout) s += 200;
+  if (slip.teamLabel) s += 150;
   if (slip.stake > 0) s += 50;
   return s;
 }
@@ -542,6 +545,7 @@ async function readPolySlipAllFrames(bcTab) {
     if (!slip?.odds && !slip?.fromPayout) continue;
     const sc = scorePolySlip(slip);
     if (slip.fromPayout && slip.odds > 1 && sc >= bestScore) return slip;
+    if (slip.sourceKind === 'bc-native-slip' && slip.odds > 1.01) return slip;
     if (sc > bestScore) {
       bestScore = sc;
       best = slip;
@@ -1044,10 +1048,21 @@ function slipOdds(slip) {
   return null;
 }
 
+function slipSourceRank(slip) {
+  if (!slip) return 0;
+  if (slip.sourceKind === 'bc-native-slip') return 4;
+  if (slip.sourceKind === 'sports-slip') return 3;
+  if (slip.fromPayout) return 2;
+  if (slip.sourceKind === 'sports-board-selected') return 1;
+  return 0;
+}
+
 function mergeSlipCached(cached, fresh) {
   if (!fresh || !slipOdds(fresh)) return cached?.fromPayout ? cached : null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
+  if (slipSourceRank(fresh) > slipSourceRank(cached)) return { ...fresh, odds: freshOdds };
+  if (slipSourceRank(cached) > slipSourceRank(fresh)) return { ...cached, odds: slipOdds(cached) };
   if (fresh.fromPayout && !cached.fromPayout) return { ...fresh, odds: freshOdds };
   if (cached.fromPayout && !fresh.fromPayout) return { ...cached, odds: slipOdds(cached) };
   if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
@@ -1178,7 +1193,7 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
 }
 
 async function probeBcFrame(tabId, frameId, url) {
-  let score = scoreBcFrameUrl(url);
+  let score = scoreBcFrameUrl(url, frameId);
   try {
     await ensurePolyScript(tabId, frameId);
     const results = await chrome.scripting.executeScript({
@@ -1191,7 +1206,8 @@ async function probeBcFrame(tabId, frameId, url) {
         if (typeof window.__bcProbeStakeFrame === 'function') {
           const p = window.__bcProbeStakeFrame();
           score += p.score || 0;
-          if (p.hasSlip && p.hasInput) score += 200;
+          if (p.hasSlip && p.hasInput) score += 300;
+          if (p.isTop && p.isBcHost) score += 100;
         } else {
           const body = document.body?.innerText || '';
           if (/베팅\s*슬립|bet\s*slip/i.test(body)) score += 50;
@@ -1230,10 +1246,10 @@ async function orderBcFrames(tabId) {
   return [...new Set(order)];
 }
 
-function scoreBcFrameUrl(url) {
-  if (!url) return 0;
-  if (/betby\.com|sptpub\.com|sptsportscdn|biahosted|cocoesports/i.test(url)) return 100;
-  if (/bc\.game/i.test(url) && /sports/i.test(url)) return 80;
+function scoreBcFrameUrl(url, frameId = 0) {
+  if (!url) return frameId === 0 ? 40 : 0;
+  if (/bc\.game/i.test(url) && /sports/i.test(url)) return frameId === 0 ? 220 : 100;
+  if (/betby\.com|sptpub\.com|sptsportscdn|biahosted|cocoesports/i.test(url)) return 50;
   return 5;
 }
 
@@ -1247,7 +1263,7 @@ async function setBcStakeMain(tabId, frameId, amountUsd) {
         const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
         if (typeof window.__bcSetStake === 'function') {
           const res = await window.__bcSetStake(rounded);
-          if (res?.ok || res?.partial) return res;
+          if (res?.ok || res?.partial || (res?.stake > 0 && Math.abs(res.stake - rounded) < 1)) return res;
         }
         return null;
       },
@@ -1265,14 +1281,8 @@ async function setPolyAmount(polyTab, amountUsd) {
   const order = await orderBcFrames(polyTab.id);
   let lastRes = null;
 
-  const mainTries = await Promise.all(
-    order.map(async (frameId) => {
-      const res = await setBcStakeMain(polyTab.id, frameId, amountUsd);
-      return { frameId, res };
-    })
-  );
-  mainTries.sort((a, b) => (b.res?.ok ? 1 : 0) - (a.res?.ok ? 1 : 0) || (b.res?.stake || 0) - (a.res?.stake || 0));
-  for (const { res } of mainTries) {
+  for (const frameId of order) {
+    const res = await setBcStakeMain(polyTab.id, frameId, amountUsd);
     if (res?.ok) return res;
     if (res?.stake > 0) lastRes = res;
   }
@@ -1610,4 +1620,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.3 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 슬립 금액동기화`, 'info');
+log(`v5.7.4 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 슬립 금액동기화`, 'info');
