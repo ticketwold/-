@@ -426,7 +426,7 @@ async function ensureBtiScript(tabId, frameId) {
 async function ensurePolyScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
   if (polyScriptReady.has(key)) return;
-  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js'];
+  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null
@@ -514,8 +514,7 @@ async function injectReadBcSports(tabId, frameId = 0) {
 }
 
 async function readPolySlipAllFrames(bcTab) {
-  const frames = await getAllFrames(bcTab.id);
-  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
+  const order = await orderBcFrames(bcTab.id);
   const seen = new Set();
   let best = null;
 
@@ -1164,6 +1163,21 @@ async function placePolyBet(polyTab, amountUsd, opts = {}) {
   return res || { success: false, reason: '응답 없음' };
 }
 
+async function orderBcFrames(tabId) {
+  const frames = await getAllFrames(tabId);
+  const sorted = [...frames].sort((a, b) => scoreBcFrameUrl(b.url) - scoreBcFrameUrl(a.url));
+  const order = sorted.map((f) => f.frameId);
+  if (!order.includes(0)) order.unshift(0);
+  return [...new Set(order)];
+}
+
+function scoreBcFrameUrl(url) {
+  if (!url) return 0;
+  if (/betby\.com|sptpub\.com|sptsportscdn|biahosted|cocoesports/i.test(url)) return 100;
+  if (/bc\.game/i.test(url) && /sports/i.test(url)) return 80;
+  return 5;
+}
+
 async function setBcStakeMain(tabId, frameId, amountUsd) {
   try {
     await ensurePolyScript(tabId, frameId);
@@ -1189,24 +1203,26 @@ async function setBcStakeMain(tabId, frameId, amountUsd) {
 async function setPolyAmount(polyTab, amountUsd) {
   if (!polyTab?.id) return { ok: false, reason: 'BC.Game 탭 없음' };
   await ensurePolyScript(polyTab.id);
-  const frames = await getAllFrames(polyTab.id);
-  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
-  const seen = new Set();
+  const order = await orderBcFrames(polyTab.id);
   let lastRes = null;
 
+  const mainTries = await Promise.all(
+    order.slice(0, 10).map(async (frameId) => {
+      const res = await setBcStakeMain(polyTab.id, frameId, amountUsd);
+      return { frameId, res };
+    })
+  );
+  for (const { res } of mainTries) {
+    if (res?.ok) return res;
+    if (res?.stake > 0) lastRes = res;
+  }
+
   for (const frameId of order) {
-    if (seen.has(frameId)) continue;
-    seen.add(frameId);
-
-    const mainRes = await setBcStakeMain(polyTab.id, frameId, amountUsd);
-    if (mainRes?.ok) return mainRes;
-    if (mainRes?.partial) lastRes = mainRes;
-
     const res = await sendPoly(polyTab.id, { type: 'SET_POLY_AMOUNT', amount: amountUsd, force: true }, frameId);
     if (res?.ok) return res;
-    if (res) lastRes = res;
+    if (res?.stake > 0 || res?.partial) lastRes = res;
   }
-  return lastRes || { ok: false, reason: '금액 입력 실패 — BC 슬립 확인' };
+  return lastRes || { ok: false, reason: '금액 입력 실패 — BC 슬립 선택 후 재시도' };
 }
 
 function scheduleSyncAmounts() {
@@ -1534,4 +1550,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.0 ${IS_PANEL ? '패널' : '팝업'} 로드 — 금액동기화 + 자동배팅`, 'info');
+log(`v5.7.2 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 스포츠 서치/금액동기화`, 'info');

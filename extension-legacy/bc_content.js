@@ -1707,6 +1707,74 @@ function pushMatchup(matchups, seen, home, away, homeCents, awayCents) {
   });
 }
 
+async function readMainWorldBoard() {
+  return new Promise((resolve) => {
+    const attr = 'data-bc-board-scan';
+    const el = document.documentElement;
+    const done = (result) => {
+      el.removeAttribute(attr);
+      resolve(result);
+    };
+    const script = document.createElement('script');
+    script.textContent = `(function(){
+      var attr='${attr}';
+      function finish(r){document.documentElement.setAttribute(attr,JSON.stringify(r||null));};
+      try{
+        if(typeof __bcScrapeBoard==='function'){finish(__bcScrapeBoard());return;}
+      }catch(e){}
+      finish(null);
+    })();`;
+    const timer = setTimeout(() => done(null), 4000);
+    const observer = new MutationObserver(() => {
+      const raw = el.getAttribute(attr);
+      if (!raw) return;
+      clearTimeout(timer);
+      observer.disconnect();
+      try { done(JSON.parse(raw)); } catch (_) { done(null); }
+    });
+    observer.observe(el, { attributes: true, attributeFilter: [attr] });
+    (document.head || el).appendChild(script);
+    script.remove();
+  });
+}
+
+async function scanSportsBoard() {
+  const main = await readMainWorldBoard();
+  const cartSlip = readSportsSlip();
+  if (main?.matchups?.length) {
+    return {
+      ...main,
+      hasCart: !!cartSlip?.odds,
+      cartSlip: cartSlip || null
+    };
+  }
+  const matchups = [];
+  if (cartSlip?.odds > 1.01) {
+    matchups.push({
+      id: 'cart',
+      home: cartSlip.homeTeam || cartSlip.teamLabel || '',
+      away: cartSlip.awayTeam || '',
+      title: cartSlip.eventText || cartSlip.teamLabel || '',
+      league: '',
+      ml: [{
+        team: cartSlip.teamLabel || cartSlip.homeTeam || '',
+        side: 'pick',
+        decimal: cartSlip.odds,
+        price: cartSlip.odds
+      }]
+    });
+  }
+  return {
+    ok: matchups.length > 0,
+    site: 'bcgame',
+    url: location.href,
+    matchups,
+    hasCart: !!cartSlip?.odds,
+    cartSlip,
+    source: 'sports-cart'
+  };
+}
+
 function scanPredictionsBoard() {
   const matchups = [];
   const seen = new Set();
@@ -1789,6 +1857,13 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg.type === 'SCAN_BOARD') {
+    const sports = isBcSportsPage()
+      || /\/sports\//i.test(location.href || '')
+      || /베팅\s*슬립|bet\s*slip|betslip/i.test(document.body?.innerText || '');
+    if (sports) {
+      scanSportsBoard().then(sendResponse);
+      return true;
+    }
     sendResponse(scanPredictionsBoard());
     return false;
   }

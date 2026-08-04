@@ -210,7 +210,7 @@ async function findBcTab() {
 }
 
 async function ensureBcMainScripts(tabId, frameId = null) {
-  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js'];
+  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null
@@ -254,7 +254,8 @@ async function scanBcTabBoard(tab) {
   await ensureBcScript(tab.id);
 
   const frames = await getAllTabFrames(tab.id);
-  let best = { matchups: [], cartFound: false, cartSlip: null };
+  frames.sort((a, b) => scoreBcFrameUrl(b.url) - scoreBcFrameUrl(a.url));
+  let best = { matchups: [], cartFound: false, cartSlip: null, score: -1 };
 
   for (const frame of frames) {
     try {
@@ -262,11 +263,14 @@ async function scanBcTabBoard(tab) {
       if (!res) continue;
       const count = res.matchups?.length || 0;
       const hasCart = !!res.hasCart || !!res.cartSlip?.odds;
-      if (count > best.matchups.length || (hasCart && !best.cartFound)) {
+      const isSports = res.source === 'sports-board' || res.source === 'sports-cart';
+      const frameScore = count * 100 + (hasCart ? 50 : 0) + scoreBcFrameUrl(frame.url) + (isSports ? 40 : 0);
+      if (frameScore > best.score) {
         best = {
-          matchups: res.matchups || best.matchups,
-          cartFound: hasCart || best.cartFound,
-          cartSlip: res.cartSlip?.odds ? res.cartSlip : best.cartSlip
+          matchups: res.matchups || [],
+          cartFound: hasCart,
+          cartSlip: res.cartSlip?.odds ? res.cartSlip : best.cartSlip,
+          score: frameScore
         };
       }
       if (hasCart && res.cartSlip?.odds) {
@@ -277,6 +281,13 @@ async function scanBcTabBoard(tab) {
   }
 
   return best;
+}
+
+function scoreBcFrameUrl(url) {
+  if (!url) return 0;
+  if (/betby\.com|sptpub\.com|sptsportscdn|biahosted|cocoesports/i.test(url)) return 100;
+  if (/bc\.game/i.test(url) && /sports/i.test(url)) return 80;
+  return 5;
 }
 
 function parseBtiSelectionPrice(s) {
@@ -411,6 +422,9 @@ function btiMatchupsFromDom(events) {
     })).filter((s) => parseBtiSelectionPrice(s) > 1);
 
     if (!selections.length) continue;
+    const homeOdds = selections.find((s) => isBtiHomeSide(s.Side));
+    const awayOdds = selections.find((s) => isBtiAwaySide(s.Side));
+    if (!homeOdds || !awayOdds) continue;
     result.push({
       id: ev.eventId || ev.eventText || `${home}_${away}`,
       home,
@@ -654,7 +668,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.7.1] background loaded — BTI DOM 서치 폴백');
+console.log('[양방봇 v5.7.2] background loaded — BC 스포츠 서치/금액동기화');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
