@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Arb Scanner",
-  "version": "1.0.0",
-  "description": "x10x10s · BC.Game 실시간 배당 수집 · 양방 탐지",
-  "permissions": ["storage", "notifications", "alarms", "tabs", "scripting"],
+  "version": "2.0.0",
+  "description": "x10x10s · BC.Game 실시간 배당 · 양방 · 자동베팅",
+  "permissions": ["storage", "notifications", "alarms", "tabs", "scripting", "webNavigation"],
   "host_permissions": [
     "*://*.x10x10s.com/*",
     "*://*.bti-sports.com/*",
@@ -17,7 +17,9 @@
     "*://*.biahosted.com/*",
     "*://*.cocoesports.com/*",
     "*://bc.game/*",
-    "*://*.bc.game/*"
+    "*://*.bc.game/*",
+    "https://api.bithumb.com/*",
+    "https://api.telegram.org/*"
   ],
   "background": {
     "service_worker": "service_worker.js",

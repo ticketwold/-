@@ -1,7 +1,12 @@
-body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 20px; background: #0f1419; color: #e7ecf3; }
-h1 { margin-bottom: 24px; }
-label { display: block; margin-bottom: 16px; }
-input[type="number"] { width: 100%; padding: 8px; margin-top: 4px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: inherit; }
+body { font-family: system-ui, sans-serif; max-width: 520px; margin: 40px auto; padding: 20px; background: #0f1419; color: #e7ecf3; }
+h1 { margin-bottom: 20px; }
+fieldset { border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+legend { padding: 0 8px; color: #8b9cb3; }
+label { display: block; margin-bottom: 12px; font-size: 13px; }
+input[type="number"], input[type="text"], input[type="url"], input[type="password"] {
+  width: 100%; margin-top: 4px; padding: 8px;
+  background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: inherit;
+}
 .check { display: flex; align-items: center; gap: 8px; }
-button { padding: 10px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+button { padding: 10px 24px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 #saved { color: #4ade80; margin-top: 12px; }

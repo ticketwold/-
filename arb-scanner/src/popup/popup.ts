@@ -1,64 +1,87 @@
-import type { ArbitrageOpportunity, OddsQuote } from '@core/types';
+import type { RuntimeState } from '@core/types';
+import { loadSettings, saveSettings } from '@core/storage';
 
-type StorageState = {
-  lastQuotes?: { x10: OddsQuote[]; bcgame: OddsQuote[] };
-  lastOpportunities?: ArbitrageOpportunity[];
+type LocalState = {
+  runtime?: RuntimeState;
+  usdtKrw?: number;
   updatedAt?: number;
 };
 
-function renderQuotes(list: OddsQuote[]): string {
-  if (!list?.length) return '<li>데이터 없음 — 사이트 탭을 열고 슬립/보드를 확인하세요</li>';
-  return list
-    .slice(0, 8)
-    .map(
-      (q) =>
-        `<li><strong>${q.odds.toFixed(2)}</strong> ${q.selection} — ${q.eventName.slice(0, 40)} <em>(${q.source})</em></li>`
-    )
-    .join('');
-}
-
-function renderOpps(opps: ArbitrageOpportunity[]): string {
-  if (!opps?.length) return '<li>양방 없음</li>';
-  return opps
-    .map(
-      (o) =>
-        `<li class="positive">${o.profitPercent.toFixed(2)}% — ${o.eventName.slice(0, 36)} (x10 ${o.legX10.odds} / BC ${o.legBc.odds})</li>`
-    )
-    .join('');
+function renderSlip(
+  el: HTMLElement,
+  slip: RuntimeState['x10Slip'],
+  label: string
+): void {
+  if (!slip?.odds) {
+    el.textContent = `${label} — 슬립 없음`;
+    return;
+  }
+  el.textContent = `${slip.selection} @ ${slip.odds.toFixed(2)} | ${slip.eventName.slice(0, 40)}`;
 }
 
 async function refresh(): Promise<void> {
   const data = (await chrome.storage.local.get([
-    'lastQuotes',
-    'lastOpportunities',
+    'runtime',
+    'usdtKrw',
     'updatedAt',
-  ])) as StorageState;
+  ])) as LocalState;
+  const rt = data.runtime;
+  const settings = await loadSettings();
 
-  const x10 = data.lastQuotes?.x10 ?? [];
-  const bc = data.lastQuotes?.bcgame ?? [];
-  const opps = data.lastOpportunities ?? [];
+  document.getElementById('profit')!.textContent =
+    rt?.profitPercent != null ? `${rt.profitPercent.toFixed(2)}%` : '—';
+  document.getElementById('rate')!.textContent = String(data.usdtKrw ?? rt?.usdtKrw ?? '—');
+  document.getElementById('bc-usdt')!.textContent =
+    rt?.leg2Usdt != null ? rt.leg2Usdt.toFixed(2) : '—';
 
-  document.getElementById('x10-list')!.innerHTML = renderQuotes(x10);
-  document.getElementById('bc-list')!.innerHTML = renderQuotes(bc);
-  document.getElementById('opp-list')!.innerHTML = renderOpps(opps);
+  const x10Input = document.getElementById('x10-krw') as HTMLInputElement;
+  if (document.activeElement !== x10Input) {
+    x10Input.value = String(settings.x10BetKrw);
+  }
+
+  renderSlip(document.getElementById('x10-slip')!, rt?.x10Slip ?? null, 'x10');
+  renderSlip(document.getElementById('bc-slip')!, rt?.bcSlip ?? null, 'BC');
+
+  const armBtn = document.getElementById('arm-btn')!;
+  const armed = !!rt?.armed;
+  armBtn.textContent = armed ? '자동배팅 ON' : '자동배팅 OFF';
+  armBtn.className = armed ? 'arm-on' : 'arm-off';
 
   const age = data.updatedAt ? Math.round((Date.now() - data.updatedAt) / 1000) : -1;
-  document.getElementById('status')!.textContent =
-    age >= 0 ? `${age}s 전 갱신` : '대기 중';
+  document.getElementById('status')!.textContent = age >= 0 ? `${age}s` : '대기';
 }
 
+document.getElementById('x10-krw')?.addEventListener('change', async () => {
+  const settings = await loadSettings();
+  settings.x10BetKrw = parseInt((document.getElementById('x10-krw') as HTMLInputElement).value, 10) || 100000;
+  await saveSettings(settings);
+  chrome.runtime.sendMessage({ type: 'SYNC_STAKE' });
+});
+
+document.getElementById('sync-btn')?.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'SYNC_STAKE' });
+});
+
+document.getElementById('arm-btn')?.addEventListener('click', async () => {
+  const data = (await chrome.storage.local.get('runtime')) as LocalState;
+  const armed = !data.runtime?.armed;
+  chrome.runtime.sendMessage({ type: 'ARM', armed });
+  setTimeout(refresh, 200);
+});
+
+document.getElementById('strike-btn')?.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'MANUAL_STRIKE' });
+});
+
 document.getElementById('diag-btn')?.addEventListener('click', async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs[0];
   if (!tab?.id) return;
-  chrome.tabs.sendMessage(tab.id, { type: 'PING' }, () => {
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id!, allFrames: true },
-      func: () => {
-        (globalThis as { __arbScannerDiag?: () => void }).__arbScannerDiag?.();
-      },
-    });
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    func: () => (globalThis as { __arbScannerDiag?: () => void }).__arbScannerDiag?.(),
   });
 });
 
 refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, 1000);
