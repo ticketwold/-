@@ -6,6 +6,7 @@ import { fetchBithumbUsdtKrw, getUsdtKrwRate } from '@core/bithumb';
 import { notifyOpportunity } from '@core/notifier';
 import type { ContentMessage, PopupMessage, RuntimeState } from '@core/types';
 import { createRuntimeState, processSlipUpdate } from './auto-bet';
+import { ensureSiteScripts, probeAllSiteTabs } from './injector';
 
 const log = createLogger('sw');
 
@@ -19,6 +20,8 @@ const ctx = { quotesBySite, slips, runtime };
 let panelWindowId: number | null = null;
 
 async function openPanel(): Promise<void> {
+  await ensureSiteScripts();
+  await probeAllSiteTabs();
   if (panelWindowId != null) {
     try {
       await chrome.windows.get(panelWindowId);
@@ -65,6 +68,10 @@ async function restoreState(): Promise<void> {
 }
 
 restoreState();
+
+chrome.runtime.onInstalled.addListener(() => {
+  ensureSiteScripts().catch((e) => log.catch('install', e));
+});
 
 async function refreshRate(): Promise<void> {
   const settings = await loadSettings();
@@ -168,6 +175,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           runtime = await processSlipUpdate(ctx, 'x10', runtime.x10Slip);
         }
         await persist();
+        sendResponse({ ok: true, runtime });
+        return;
+      }
+
+      if (msg.type === 'REFRESH') {
+        await ensureSiteScripts();
+        await probeAllSiteTabs();
         sendResponse({ ok: true, runtime });
         return;
       }

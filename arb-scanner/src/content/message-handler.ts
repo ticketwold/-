@@ -13,8 +13,15 @@ import { detectSiteId } from '@scanner/adapters';
 
 const log = createLogger('actions');
 
-export function installActionHandler(): void {
-  chrome.runtime.onMessage.addListener((msg: BgToContentMessage, _sender, sendResponse) => {
+export function installActionHandler(onProbe?: () => void): void {
+  chrome.runtime.onMessage.addListener((msg: BgToContentMessage | { type: 'PROBE' }, _sender, sendResponse) => {
+    if (msg.type === 'PROBE') {
+      onProbe?.();
+      const siteId = detectSiteId(location.href);
+      sendResponse({ ok: !!siteId, slip: siteId ? readSlipForSite(siteId) : null });
+      return false;
+    }
+
     const siteId = detectSiteId(location.href);
     if (!siteId) return false;
 

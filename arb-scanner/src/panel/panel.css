@@ -124,4 +124,12 @@ h2 {
 .opp-event { grid-column: 2; font-size: 12px; }
 .opp-odds { grid-column: 2; font-size: 11px; color: var(--muted); }
 
-.footer { display: flex; gap: 8px; padding-top: 4px; }
+.footer { display: flex; gap: 8px; padding-top: 4px; flex-wrap: wrap; }
+.tab-status { font-size: 11px; color: var(--muted); text-align: center; }
+.toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  padding: 10px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: #1e3a5f; color: #fff; z-index: 99; max-width: 90%;
+}
+.toast.ok { background: #166534; }
+.toast.err { background: #991b1b; }

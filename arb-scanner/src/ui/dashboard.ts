@@ -1,5 +1,6 @@
 import type { ArbitrageOpportunity, RuntimeState } from '@core/types';
 import { loadSettings, saveSettings } from '@core/storage';
+import { BC_TAB_PATTERNS, X10_TAB_PATTERNS } from '@core/site-patterns';
 
 type LocalState = {
   runtime?: RuntimeState;
@@ -8,9 +9,29 @@ type LocalState = {
   lastOpportunities?: ArbitrageOpportunity[];
 };
 
+function toast(msg: string, ok = true): void {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = ok ? 'toast ok' : 'toast err';
+  el.hidden = false;
+  setTimeout(() => {
+    el.hidden = true;
+  }, 3500);
+}
+
+function sendBg<T>(msg: object): Promise<T> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(msg, (res) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(res as T);
+    });
+  });
+}
+
 function renderSlip(el: HTMLElement, slip: RuntimeState['x10Slip'], label: string): void {
   if (!slip?.odds) {
-    el.innerHTML = `<span class="muted">${label} — 슬립 없음</span><small>사이트 탭에서 배팅카트를 열어주세요</small>`;
+    el.innerHTML = `<span class="muted">${label} — 슬립 없음</span><small>배팅카트에 선택 후 [새로고침] 클릭</small>`;
     return;
   }
   el.innerHTML = `
@@ -40,6 +61,14 @@ function renderOpportunities(list: ArbitrageOpportunity[]): void {
     .join('');
 }
 
+async function renderTabStatus(): Promise<void> {
+  const el = document.getElementById('tab-status');
+  if (!el) return;
+  const x10 = await chrome.tabs.query({ url: X10_TAB_PATTERNS });
+  const bc = await chrome.tabs.query({ url: BC_TAB_PATTERNS });
+  el.textContent = `x10 ${x10.length}탭 · BC ${bc.length}탭`;
+}
+
 export async function refreshDashboard(): Promise<void> {
   const data = (await chrome.storage.local.get([
     'runtime',
@@ -53,7 +82,8 @@ export async function refreshDashboard(): Promise<void> {
   const profitEl = document.getElementById('profit');
   if (profitEl) {
     profitEl.textContent = rt?.profitPercent != null ? `${rt.profitPercent.toFixed(2)}%` : '—';
-    profitEl.className = rt?.profitPercent != null && rt.profitPercent >= settings.minProfitPercent ? 'good' : '';
+    profitEl.className =
+      rt?.profitPercent != null && rt.profitPercent >= settings.minProfitPercent ? 'value good' : 'value';
   }
   document.getElementById('rate')!.textContent = String(data.usdtKrw ?? rt?.usdtKrw ?? '—');
   document.getElementById('bc-usdt')!.textContent =
@@ -76,49 +106,108 @@ export async function refreshDashboard(): Promise<void> {
 
   const age = data.updatedAt ? Math.round((Date.now() - data.updatedAt) / 1000) : -1;
   document.getElementById('status')!.textContent = age >= 0 ? `${age}s 전` : '대기';
+  await renderTabStatus();
 }
 
 export function wireDashboard(): void {
+  document.getElementById('refresh-btn')?.addEventListener('click', async () => {
+    toast('배당 스캔 중…');
+    try {
+      await sendBg<{ ok: boolean }>({ type: 'REFRESH' });
+      await refreshDashboard();
+      toast('스캔 완료');
+    } catch (e) {
+      toast(String(e), false);
+    }
+  });
+
   document.getElementById('x10-krw')?.addEventListener('change', async () => {
     const settings = await loadSettings();
     settings.x10BetKrw =
       parseInt((document.getElementById('x10-krw') as HTMLInputElement).value, 10) || 100000;
     await saveSettings(settings);
-    chrome.runtime.sendMessage({ type: 'SYNC_STAKE' });
+    try {
+      await sendBg({ type: 'SYNC_STAKE' });
+      toast('금액 동기화 요청');
+      await refreshDashboard();
+    } catch (e) {
+      toast(String(e), false);
+    }
   });
 
-  document.getElementById('sync-btn')?.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ type: 'SYNC_STAKE' });
+  document.getElementById('sync-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await sendBg<{ ok: boolean; runtime?: RuntimeState }>({ type: 'SYNC_STAKE' });
+      if (!res?.runtime?.x10Slip || !res?.runtime?.bcSlip) {
+        toast('양쪽 슬립이 모두 필요합니다', false);
+      } else if (res.runtime.leg2Usdt) {
+        toast(`BC ${res.runtime.leg2Usdt.toFixed(2)} USDT 동기화`);
+      } else {
+        toast('동기화 실패 — BC 탭 확인', false);
+      }
+      await refreshDashboard();
+    } catch (e) {
+      toast(String(e), false);
+    }
   });
 
   document.getElementById('arm-btn')?.addEventListener('click', async () => {
     const data = (await chrome.storage.local.get('runtime')) as LocalState;
     const armed = !data.runtime?.armed;
-    chrome.runtime.sendMessage({ type: 'ARM', armed });
-    setTimeout(refreshDashboard, 200);
+    try {
+      await sendBg({ type: 'ARM', armed });
+      toast(armed ? '자동배팅 ON' : '자동배팅 OFF');
+      await refreshDashboard();
+    } catch (e) {
+      toast(String(e), false);
+    }
   });
 
-  document.getElementById('strike-btn')?.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ type: 'MANUAL_STRIKE' });
+  document.getElementById('strike-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await sendBg<{ ok: boolean; reason?: string; result?: unknown }>({
+        type: 'MANUAL_STRIKE',
+      });
+      if (res?.ok) toast('베팅 명령 전송');
+      else toast(res?.reason === 'no-leg2-amount' ? '슬립·금액 먼저 확인' : '베팅 실패', false);
+    } catch (e) {
+      toast(String(e), false);
+    }
   });
 
   document.getElementById('diag-btn')?.addEventListener('click', async () => {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tab = tabs[0];
-    if (!tab?.id) return;
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        const w = globalThis as {
-          __arbScannerDiag?: () => void;
-          __arbScannerSlip?: () => unknown;
-        };
-        w.__arbScannerDiag?.();
-        console.log('[ArbScanner slip]', w.__arbScannerSlip?.());
-      },
-    });
+    const tabs = [
+      ...(await chrome.tabs.query({ url: X10_TAB_PATTERNS })),
+      ...(await chrome.tabs.query({ url: BC_TAB_PATTERNS })),
+    ];
+    if (!tabs.length) {
+      toast('x10/BC 탭을 먼저 열어주세요', false);
+      return;
+    }
+    for (const tab of tabs.slice(0, 4)) {
+      if (!tab.id) continue;
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => {
+          const w = globalThis as {
+            __arbScannerDiag?: () => void;
+            __arbScannerSlip?: () => unknown;
+          };
+          w.__arbScannerDiag?.();
+          console.log('[ArbScanner slip]', w.__arbScannerSlip?.());
+        },
+      });
+    }
+    toast(`진단 실행 (${tabs.length}탭) — F12 콘솔 확인`);
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && (changes.runtime || changes.updatedAt)) {
+      refreshDashboard();
+    }
   });
 
   refreshDashboard();
+  sendBg({ type: 'REFRESH' }).catch(() => {});
   setInterval(refreshDashboard, 1000);
 }

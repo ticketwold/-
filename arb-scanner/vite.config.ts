@@ -4,7 +4,18 @@ import { defineConfig } from 'vite';
 
 const root = resolve(__dirname);
 
+function fixExtensionHtml(html: string, page: string): string {
+  return html
+    .replace(/\.\.\/\.\.\//g, './')
+    .replace(`./${page}.ts`, `./assets/${page}.js`)
+    .replace(`./${page}.css`, `./assets/${page}.css`)
+    .replace(/src="\/assets\//g, 'src="./assets/')
+    .replace(/href="\/assets\//g, 'href="./assets/')
+    .replace(/href="\/chunks\//g, 'href="./chunks/');
+}
+
 export default defineConfig({
+  base: './',
   resolve: {
     alias: {
       '@core': resolve(root, 'src/core'),
@@ -46,11 +57,18 @@ export default defineConfig({
           const flat = resolve(dist, `${page}.html`);
           try {
             let html = readFileSync(nested, 'utf8');
-            html = html.replace(/\.\.\/\.\.\//g, './').replace(`./${page}.ts`, `./assets/${page}.js`);
-            html = html.replace(`./${page}.css`, `./assets/${page}.css`);
+            html = fixExtensionHtml(html, page);
             writeFileSync(flat, html);
           } catch {
             /* vite may emit at root */
+          }
+          try {
+            const rootHtml = resolve(dist, `${page}.html`);
+            let html = readFileSync(rootHtml, 'utf8');
+            html = fixExtensionHtml(html, page);
+            writeFileSync(rootHtml, html);
+          } catch {
+            /* ignore */
           }
         }
       },

@@ -119,7 +119,8 @@ export type ContentMessage =
 export type PopupMessage =
   | { type: 'ARM'; armed: boolean }
   | { type: 'MANUAL_STRIKE' }
-  | { type: 'SYNC_STAKE' };
+  | { type: 'SYNC_STAKE' }
+  | { type: 'REFRESH' };
 
 export type BgToContentMessage =
   | { type: 'SET_X10_STAKE'; amountKrw: number }

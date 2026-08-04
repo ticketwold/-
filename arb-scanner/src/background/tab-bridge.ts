@@ -1,6 +1,7 @@
 import type { UserSettings } from '@core/types';
 import { calcLeg2Usdt } from '@core/calculator';
 import { createLogger } from '@core/logger';
+import { BC_TAB_PATTERNS, X10_TAB_PATTERNS } from '@core/site-patterns';
 
 const log = createLogger('tabs');
 
@@ -15,10 +16,7 @@ export async function findSiteTab(
       /* tab gone */
     }
   }
-  const patterns =
-    site === 'x10'
-      ? ['*://*.x10x10s.com/*', '*://*.bti-sports.com/*']
-      : ['*://bc.game/*', '*://*.bc.game/*'];
+  const patterns = site === 'x10' ? X10_TAB_PATTERNS : BC_TAB_PATTERNS;
   for (const p of patterns) {
     const tabs = await chrome.tabs.query({ url: p });
     if (tabs[0]?.id) return tabs[0];
@@ -38,29 +36,21 @@ export async function sendToSiteTab<T extends { ok?: boolean }>(
     return null;
   }
 
-  const tryFrame = async (frameId?: number): Promise<T | null> => {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
+  const frameIds = frames?.length ? frames.map((f) => f.frameId) : [0];
+  let last: T | null = null;
+
+  for (const frameId of frameIds) {
     try {
-      const res = (frameId != null
-        ? await chrome.tabs.sendMessage(tab.id!, message, { frameId })
-        : await chrome.tabs.sendMessage(tab.id!, message)) as T;
+      const res = (await chrome.tabs.sendMessage(tab.id, message, { frameId })) as T;
+      last = res;
       if (res?.ok) return res;
     } catch {
       /* frame has no handler */
     }
-    return null;
-  };
-
-  const direct = await tryFrame();
-  if (direct?.ok) return direct;
-
-  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-  for (const frame of frames || []) {
-    if (frame.frameId === 0) continue;
-    const res = await tryFrame(frame.frameId);
-    if (res?.ok) return res;
   }
 
-  return direct;
+  return last;
 }
 
 export async function syncLeg2Stake(

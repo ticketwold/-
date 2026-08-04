@@ -57,6 +57,35 @@ function findX10SlipCards(doc: Document): Element[] {
   });
 }
 
+function slipFromInnerText(doc: Document, siteId: SiteId): SlipState | null {
+  const text = doc.body?.innerText || '';
+  if (!/bet\s*slip|betslip|베팅\s*슬립|배팅카트|bet\s*cart/i.test(text)) return null;
+  const matches = [...text.matchAll(/@\s*(\d{1,2}\.\d{2,4})/g)]
+    .map((m) => parseOddsText(m[1] || ''))
+    .filter((n): n is number => n != null && n > 1.01);
+  if (!matches.length) {
+    const dec = [...text.matchAll(/\b(\d{1,2}\.\d{2,3})\b/g)]
+      .map((m) => parseOddsText(m[1] || ''))
+      .filter((n): n is number => n != null && n > 1.01 && n < 20);
+    if (!dec.length) return null;
+    matches.push(dec[dec.length - 1]!);
+  }
+  const odds = matches[matches.length - 1]!;
+  const stakeEl = siteId === 'x10' ? findX10Stake(doc) : findBcStake(doc);
+  return {
+    odds,
+    selection: 'slip',
+    eventName: text.split('\n').find((l) => l.trim().length > 8)?.trim().slice(0, 80) || 'text-slip',
+    stake: stakeEl
+      ? siteId === 'x10'
+        ? parseInt(stakeEl.value || '0', 10) || 0
+        : parseFloat(stakeEl.value || '0') || 0
+      : 0,
+    source: 'slip',
+    updatedAt: Date.now(),
+  };
+}
+
 function readOddsFromContainer(container: Element): number | null {
   for (const sel of SEL.x10.oddsHints.split(', ')) {
     for (const el of queryAllDeep(container, sel.trim())) {
@@ -106,18 +135,21 @@ export function readX10SlipFromDoc(doc: Document = document): SlipState | null {
   }
 
   const root = findX10SlipRoot(doc);
-  if (!root) return null;
-  const odds = readOddsFromContainer(root);
-  if (!odds) return null;
+  if (root) {
+    const odds = readOddsFromContainer(root);
+    if (odds) {
+      return {
+        odds,
+        selection: root.querySelector(SEL.x10.slipTitle)?.textContent?.trim() || 'slip',
+        eventName: root.querySelector(SEL.x10.slipEvent)?.textContent?.trim() || '',
+        stake: stakeEl ? parseInt(stakeEl.value || '0', 10) || 0 : 0,
+        source: 'slip',
+        updatedAt: Date.now(),
+      };
+    }
+  }
 
-  return {
-    odds,
-    selection: root.querySelector(SEL.x10.slipTitle)?.textContent?.trim() || 'slip',
-    eventName: root.querySelector(SEL.x10.slipEvent)?.textContent?.trim() || '',
-    stake: stakeEl ? parseInt(stakeEl.value || '0', 10) || 0 : 0,
-    source: 'slip',
-    updatedAt: Date.now(),
-  };
+  return slipFromInnerText(doc, 'x10');
 }
 
 function findBcCoefElements(doc: Document): Element[] {
@@ -151,20 +183,24 @@ export function readBcSlipFromDoc(doc: Document = document): SlipState | null {
   }
 
   const slipRoot = queryAllDeep(doc, SEL.bc.slipRoot).find(isVisible);
-  if (!slipRoot) return null;
-  const text = slipRoot.textContent || '';
-  const labeled = text.match(/(?:total\s*odds?|combined\s*odds?|@)\s*(\d+\.\d{2,3})/i);
-  const odds = labeled ? parseOddsText(labeled[1]) : parseOddsText(text);
-  if (!odds) return null;
-  const stakeEl = findBcStake(doc);
-  return {
-    odds,
-    selection: slipRoot.querySelector(SEL.bc.selection)?.textContent?.trim() || 'slip',
-    eventName: slipRoot.querySelector(SEL.bc.event)?.textContent?.trim() || 'bc-slip',
-    stake: stakeEl ? parseFloat(stakeEl.value || '0') || 0 : 0,
-    source: 'slip',
-    updatedAt: Date.now(),
-  };
+  if (slipRoot) {
+    const text = slipRoot.textContent || '';
+    const labeled = text.match(/(?:total\s*odds?|combined\s*odds?|@)\s*(\d+\.\d{2,3})/i);
+    const odds = labeled ? parseOddsText(labeled[1]) : parseOddsText(text);
+    if (odds) {
+      const stakeEl = findBcStake(doc);
+      return {
+        odds,
+        selection: slipRoot.querySelector(SEL.bc.selection)?.textContent?.trim() || 'slip',
+        eventName: slipRoot.querySelector(SEL.bc.event)?.textContent?.trim() || 'bc-slip',
+        stake: stakeEl ? parseFloat(stakeEl.value || '0') || 0 : 0,
+        source: 'slip',
+        updatedAt: Date.now(),
+      };
+    }
+  }
+
+  return slipFromInnerText(doc, 'bcgame');
 }
 
 export function readSlipFromDoc(siteId: SiteId, doc: Document = document): SlipState | null {

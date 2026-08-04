@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Arb Scanner",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "x10x10s · BC.Game 실시간 배당 · 양방 · 자동베팅",
   "permissions": ["storage", "notifications", "alarms", "tabs", "scripting", "webNavigation", "windows", "dom"],
   "host_permissions": [
