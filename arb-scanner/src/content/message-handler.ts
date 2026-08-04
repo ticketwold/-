@@ -33,8 +33,8 @@ export function installActionHandler(onProbe?: () => void): void {
       }
       if (msg.type === 'SET_BC_STAKE' && siteId === 'bcgame') {
         if (!findBcStakeInput()) return false;
-        sendResponse(setBcStake(msg.amountUsdt));
-        return false;
+        setBcStake(msg.amountUsdt).then(sendResponse);
+        return true;
       }
       if (msg.type === 'PLACE_X10_BET' && siteId === 'x10') {
         if (!findX10StakeInput()) return false;

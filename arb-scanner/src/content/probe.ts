@@ -9,6 +9,8 @@ export function bestSlipQuote(quotes: OddsQuote[]): OddsQuote | null {
 
 export function resolveSlip(siteId: SiteId, quotes: OddsQuote[]): SlipState | null {
   const fromDom = readSlipForSite(siteId);
+  if (fromDom?.odds && fromDom.odds > 1.01) return fromDom;
+
   const best = bestSlipQuote(quotes);
   if (best) {
     return {

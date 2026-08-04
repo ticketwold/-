@@ -137,13 +137,15 @@ export function wireDashboard(): void {
 
   document.getElementById('sync-btn')?.addEventListener('click', async () => {
     try {
-      const res = await sendBg<{ ok: boolean; runtime?: RuntimeState }>({ type: 'SYNC_STAKE' });
-      if (!res?.runtime?.x10Slip || !res?.runtime?.bcSlip) {
-        toast('양쪽 슬립이 모두 필요합니다', false);
+      const res = await sendBg<{ ok: boolean; runtime?: RuntimeState; collected?: { x10?: unknown; bc?: unknown } }>({ type: 'SYNC_STAKE' });
+      if (!res?.runtime?.x10Slip?.odds) {
+        toast('x10 슬립 없음 — 배팅카트 확인', false);
+      } else if (!res?.runtime?.bcSlip?.odds) {
+        toast('BC 슬립 없음 — 배팅카트 확인', false);
       } else if (res.runtime.leg2Usdt) {
-        toast(`BC ${res.runtime.leg2Usdt.toFixed(2)} USDT 동기화`);
+        toast(`BC ${res.runtime.leg2Usdt.toFixed(2)} USDT 설정 완료`);
       } else {
-        toast('동기화 실패 — BC 탭 확인', false);
+        toast('BC 금액 입력 실패 — BC 탭 확인', false);
       }
       await refreshDashboard();
     } catch (e) {

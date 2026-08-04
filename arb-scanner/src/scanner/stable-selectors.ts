@@ -4,14 +4,14 @@ export const SEL = {
     stake:
       '#counter, input[class*="CounterSecondary_input"], input[class*="CounterSecondary"], input[class*="counter__input"], input[placeholder="베팅금"], input[placeholder*="베팅"], input[id="counter"]',
     slipCard:
-      '[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="betInformation"], [data-testid*="bet-slip"], [data-testid*="betslip"]',
+      '[class*="betslip_fe_BetSecondary_bet"], [class*="BetSecondary_bet"], [class*="BetslipBet"], [class*="betInformation"], [data-testid*="bet-slip"], [data-testid*="betslip"]',
     slipTitle: '[class*="betInformation__title"]',
     slipEvent: '[class*="betInformation__eventName"], [class*="eventName"]',
     slipLeague: '[class*="betInformation__league"], [class*="leagueName"]',
     slipTime: '[class*="betInformation__time"], time, [datetime]',
     oddsHints:
       '[class*="UpdateNotification"], [class*="Selections_odds"], [class*="odds"], [class*="Odds"], [class*="coefficient"], [class*="Coefficient"]',
-    boardBtn: 'button[class*="Selections_selection"]',
+    boardBtn: 'button[class*="Selections_selection"], button[class*="master_fe_Selections_selection"]',
     boardOdds: '[class*="Selections_odds"]',
   },
   bc: {

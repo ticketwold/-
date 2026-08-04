@@ -164,6 +164,17 @@ function findBcCoefElements(doc: Document): Element[] {
   return fromWalk;
 }
 
+function readBcPayoutOdds(doc: Document): number | null {
+  const text = doc.body?.innerText || '';
+  const stakeM = text.match(/(?:총\s*베팅|total\s*stake|stake)\s*[:=]?\s*([\d,.]+)/i);
+  const payoutM = text.match(/(?:예상\s*당첨|potential|payout|return)\s*[:=]?\s*([\d,.]+)/i);
+  if (!stakeM?.[1] || !payoutM?.[1]) return null;
+  const stake = parseFloat(stakeM[1].replace(/,/g, ''));
+  const payout = parseFloat(payoutM[1].replace(/,/g, ''));
+  if (!stake || !payout || stake <= 0) return null;
+  return parseOddsText(String(Math.round((payout / stake) * 1000) / 1000));
+}
+
 export function readBcSlipFromDoc(doc: Document = document): SlipState | null {
   const coefs = findBcCoefElements(doc);
   const el = coefs[coefs.length - 1];
@@ -200,7 +211,19 @@ export function readBcSlipFromDoc(doc: Document = document): SlipState | null {
     }
   }
 
-  return slipFromInnerText(doc, 'bcgame');
+  return slipFromInnerText(doc, 'bcgame') ?? (() => {
+    const odds = readBcPayoutOdds(doc);
+    if (!odds) return null;
+    const stakeEl = findBcStake(doc);
+    return {
+      odds,
+      selection: 'slip',
+      eventName: 'bc-payout',
+      stake: stakeEl ? parseFloat(stakeEl.value || '0') || 0 : 0,
+      source: 'slip' as const,
+      updatedAt: Date.now(),
+    };
+  })();
 }
 
 export function readSlipFromDoc(siteId: SiteId, doc: Document = document): SlipState | null {

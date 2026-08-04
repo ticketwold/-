@@ -7,6 +7,7 @@ import { notifyOpportunity } from '@core/notifier';
 import type { ContentMessage, PopupMessage, RuntimeState } from '@core/types';
 import { createRuntimeState, processSlipUpdate } from './auto-bet';
 import { ensureSiteScripts, probeAllSiteTabs } from './injector';
+import { collectAllSlips } from './slip-collector';
 
 const log = createLogger('sw');
 
@@ -169,20 +170,39 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return;
       }
 
-      if (msg.type === 'SYNC_STAKE') {
-        const settings = await loadSettings();
-        if (runtime.x10Slip && runtime.bcSlip) {
-          runtime = await processSlipUpdate(ctx, 'x10', runtime.x10Slip);
-        }
-        await persist();
-        sendResponse({ ok: true, runtime });
-        return;
-      }
-
       if (msg.type === 'REFRESH') {
         await ensureSiteScripts();
         await probeAllSiteTabs();
-        sendResponse({ ok: true, runtime });
+        const collected = await collectAllSlips();
+        if (collected.x10) {
+          runtime = await processSlipUpdate(ctx, 'x10', collected.x10);
+          ctx.runtime = runtime;
+        }
+        if (collected.bc) {
+          runtime = await processSlipUpdate(ctx, 'bcgame', collected.bc);
+          ctx.runtime = runtime;
+        }
+        await persist();
+        sendResponse({ ok: true, runtime, collected });
+        return;
+      }
+
+      if (msg.type === 'SYNC_STAKE') {
+        const collected = await collectAllSlips();
+        if (collected.x10) {
+          runtime = await processSlipUpdate(ctx, 'x10', collected.x10);
+          ctx.runtime = runtime;
+        }
+        if (collected.bc) {
+          runtime = await processSlipUpdate(ctx, 'bcgame', collected.bc);
+          ctx.runtime = runtime;
+        }
+        if (runtime.x10Slip && runtime.bcSlip) {
+          runtime = await processSlipUpdate(ctx, 'x10', runtime.x10Slip);
+          ctx.runtime = runtime;
+        }
+        await persist();
+        sendResponse({ ok: true, runtime, collected });
         return;
       }
 

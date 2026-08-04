@@ -73,6 +73,14 @@ async function main(): Promise<void> {
   const slipPoll = setInterval(() => emitSlipOnly(siteId, engine.getLastQuotes()), 400);
 
   document.addEventListener(
+    'click',
+    () => {
+      setTimeout(() => runProbe(), 80);
+    },
+    true
+  );
+
+  document.addEventListener(
     'input',
     (e) => {
       const t = e.target as HTMLElement;
@@ -87,7 +95,7 @@ async function main(): Promise<void> {
   );
 
   try {
-    document.documentElement.setAttribute('data-arb-scanner', '2.2.0');
+    document.documentElement.setAttribute('data-arb-scanner', '2.3.0');
   } catch {
     /* ignore */
   }
