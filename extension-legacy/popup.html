@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <div class="header-row">
+    <div>
+      <h1>⚡ 양방 베팅 봇</h1>
+      <div class="sub">텐텐뱃 + BC.Game · v5.6.3</div>
+    </div>
+    <button id="openPanelBtn" class="btn-icon" title="별도 창으로 열기">⬜</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="search">🔍 라이브 서치</button>
+  <button class="tab" data-tab="slip">📋 슬립 비교</button>
+</nav>
+
+<section id="tab-search" class="panel active">
+  <div class="row">
+    <label>최소 수익률 (%)</label>
+    <input type="number" id="minProfit" value="1" min="0" step="0.1">
+  </div>
+  <div class="btn-row">
+    <button id="searchStart" class="btn primary">서치 시작</button>
+    <button id="searchStop" class="btn" disabled>정지</button>
+  </div>
+  <div id="searchStats" class="hint">x10x10s + BC.Game 탭을 열고 서치를 시작하세요</div>
+  <div id="searchResults" class="results"></div>
+  <button id="openPanelFromSearch" class="btn link-btn">↗ 큰 창으로 서치 보기</button>
+</section>
+
+<section id="tab-slip" class="panel">
+  <div class="slip-grid">
+    <div>
+      <label>텐텐뱃</label>
+      <div class="slip-box">
+        <div class="odds" id="btiOdds">-</div>
+        <div class="meta" id="btiMeta">-</div>
+      </div>
+    </div>
+    <div>
+      <label>BC.Game</label>
+      <div class="slip-box">
+        <div class="odds" id="polyOdds">-</div>
+        <div class="meta" id="polyMeta">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="profit-box">
+    <div class="label">예상 수익률</div>
+    <div class="profit" id="profit">-</div>
+    <div class="hint" id="profitHint">텐텐뱃 금액 입력 후 계산 시작 — BC 금액 자동 입력</div>
+  </div>
+
+  <div class="row">
+    <label>최소 수익률 (%)</label>
+    <input type="number" id="slipMinProfit" value="1" min="0" step="0.1">
+  </div>
+  <div class="row">
+    <label>텐텐뱃 베팅금 (원) — 슬립에 직접 입력</label>
+    <input type="number" id="btiBet" value="10000" min="1000" step="1000">
+  </div>
+  <div class="row">
+    <label>USDT 환율 (원)</label>
+    <input type="number" id="usdRate" value="1400" min="1000" step="10">
+  </div>
+
+  <div class="calc-box">
+    <div class="calc-title">베팅 금액</div>
+    <div><span>텐텐뱃</span> <strong id="calcBti">-</strong></div>
+    <div><span>BC.Game</span> <strong id="calcPoly">-</strong></div>
+  </div>
+
+  <div class="payout-box">
+    <div class="payout-row">
+      <span class="payout-label">텐텐뱃 당첨금</span>
+      <div class="payout-main">
+        <strong id="payoutBti">-</strong>
+        <span id="payoutBtiPct" class="payout-pct">-</span>
+      </div>
+    </div>
+    <div class="payout-row">
+      <span class="payout-label">BC.Game 당첨금</span>
+      <div class="payout-main">
+        <strong id="payoutPoly">-</strong>
+        <span id="payoutPolyUsd" class="payout-usd">-</span>
+        <span id="payoutPolyPct" class="payout-pct">-</span>
+      </div>
+    </div>
+    <div class="payout-compare" id="payoutCompare">-</div>
+  </div>
+
+  <div class="btn-row">
+    <button id="botStart" class="btn primary">계산 시작</button>
+    <button id="botStop" class="btn" disabled>계산 정지</button>
+    <button id="diagBtn" class="btn small">진단</button>
+  </div>
+
+  <div class="history-box">
+    <div class="history-head">
+      <span class="history-title">히스토리</span>
+      <button id="clearHistoryBtn" class="btn tiny" type="button">지우기</button>
+    </div>
+    <div id="historyList" class="history-list">
+      <div class="hint">계산 시작 후 배당·수익률이 기록됩니다</div>
+    </div>
+  </div>
+</section>
+
+<div id="log" class="log"></div>
+
+<script src="sites_config.js"></script>
+<script src="odds.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
