@@ -672,6 +672,13 @@ function readActiveSlipDisplayOdds() {
   return null;
 }
 
+function hasBtiChildIframe() {
+  return !!(
+    document.getElementById('bti-iframe') ||
+    document.querySelector('iframe#bti-iframe, iframe[src*="bti"], iframe[src*="sportsbook"]')
+  );
+}
+
 function getRealSlipCards() {
   if (!isActiveBetslipOpen()) return [];
   const selectors = [
@@ -1625,6 +1632,9 @@ function readEmergencyBoardOdds(hint = {}) {
 
 function readBtiCartOdds(hint) {
   if (getRealSlipCards().length === 0) {
+    if (hasBtiChildIframe()) {
+      return { cartEmpty: false, slip: null, deferToChild: true };
+    }
     return { cartEmpty: true, slip: null };
   }
   const hintObj = hint || {};
@@ -1785,7 +1795,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'READ_BTI_ODDS') {
     if (msg.cartOnly) {
       const r = readBtiCartOdds(msg.hint || {});
-      sendResponse({ slip: r.slip, cartEmpty: !!r.cartEmpty });
+      sendResponse({
+        slip: r.slip,
+        cartEmpty: !!r.cartEmpty,
+        deferToChild: !!r.deferToChild
+      });
       return false;
     }
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
@@ -1890,6 +1904,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function checkAndNotify() {
     if (getRealSlipCards().length === 0) {
+      if (hasBtiChildIframe()) return;
       if (lastOddsKey !== '') {
         lastOddsKey = '';
         try {

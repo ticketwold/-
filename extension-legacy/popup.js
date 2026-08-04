@@ -823,10 +823,12 @@ async function probeBtiFrame(tabId, frameId, hint = {}, cartOnly = false) {
 
   let slip = null;
   let cartEmpty = false;
+  let deferToChild = false;
   if (ping?.ok) {
     const res = await sendBti(tabId, frameId, { type: 'READ_BTI_ODDS', cartOnly, hint });
     slip = res?.slip || null;
     cartEmpty = !!res?.cartEmpty;
+    deferToChild = !!res?.deferToChild;
   }
 
   if (!cartOnly) {
@@ -847,6 +849,7 @@ async function probeBtiFrame(tabId, frameId, hint = {}, cartOnly = false) {
     ping,
     slip,
     cartEmpty,
+    deferToChild,
     score: scoreBtiProbe(ping, slip),
     hasInput: !!(ping?.hasInput || slip?.hasInput),
     hasBoard: !!((ping?.buttonCount || 0) > 0 || (slip?.buttonCount || 0) > 0)
@@ -911,6 +914,31 @@ async function sendBtiToFrames(tabId, frameIds, msg) {
   return { res: lastRes, frameId: lastFrameId };
 }
 
+function pickBestCartSlip(results) {
+  if (!results.length) return { slip: null, frameId: 0 };
+
+  const withSlip = results
+    .map((r) => ({ ...r, slip: normalizeCartSlip(r.slip) }))
+    .filter((r) => r.slip?.odds > 1.01);
+  if (withSlip.length) {
+    withSlip.sort((a, b) => scoreBtiProbe(b.ping, b.slip) - scoreBtiProbe(a.ping, a.slip));
+    const best = withSlip[0];
+    return { slip: best.slip, frameId: best.frameId };
+  }
+
+  const slipFrames = results.filter((r) => r.hasInput || r.ping?.hasInput);
+  if (slipFrames.length && slipFrames.every((r) => r.cartEmpty)) {
+    return { slip: null, frameId: slipFrames[0].frameId, cartEmpty: true };
+  }
+
+  const decisive = results.filter((r) => !r.deferToChild);
+  if (decisive.length && decisive.every((r) => r.cartEmpty && !(r.slip?.odds > 1.01))) {
+    return { slip: null, frameId: decisive[0]?.frameId || 0, cartEmpty: true };
+  }
+
+  return { slip: null, frameId: results[0]?.frameId || 0 };
+}
+
 function mergeBtiFrameResults(results) {
   if (!results.length) return { slip: null, frameId: 0 };
 
@@ -944,16 +972,26 @@ async function readBtiFromAllFrames(tabId, hint = {}, forceFull = false, cartOnl
 
   if (!forceFull && lastBtiFrame?.tabId === tabId) {
     const fast = await probeBtiFrame(tabId, lastBtiFrame.frameId, hint, cartOnly);
-    if (cartOnly && fast.cartEmpty) return { slip: null, frameId: fast.frameId, cartEmpty: true };
-    if (fast.slip?.odds > 1.01) {
+    if (cartOnly) {
+      const cartSlip = normalizeCartSlip(fast.slip);
+      if (cartSlip?.odds > 1.01) {
+        lastBtiFrame = { tabId, frameId: fast.frameId };
+        return { slip: cartSlip, frameId: fast.frameId };
+      }
+    } else if (fast.slip?.odds > 1.01) {
       lastBtiFrame = { tabId, frameId: fast.frameId };
       return { slip: fast.slip, frameId: fast.frameId };
     }
   }
 
   const results = await Promise.all(order.map((frameId) => probeBtiFrame(tabId, frameId, hint, cartOnly)));
-  if (cartOnly && results.some((r) => r.cartEmpty)) {
-    return { slip: null, frameId: results[0]?.frameId || 0, cartEmpty: true };
+  if (cartOnly) {
+    updateBtiFrameRoles(tabId, results);
+    const picked = pickBestCartSlip(results);
+    if (picked.slip?.odds > 1.01) {
+      lastBtiFrame = { tabId, frameId: picked.frameId };
+    }
+    return picked;
   }
   updateBtiFrameRoles(tabId, results);
   const merged = mergeBtiFrameResults(results);
@@ -1026,11 +1064,12 @@ async function readBtiSlip(btiTab) {
     lastStatus.bti = '텐텐뱃: 배팅카트 비어있음';
     return null;
   }
-  if (merged.slip?.odds > 1) {
+  const cartSlip = normalizeCartSlip(merged.slip);
+  if (cartSlip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: merged.frameId };
     btiTab.frameId = merged.frameId;
     lastStatus.bti = '';
-    return merged.slip;
+    return cartSlip;
   }
 
   const forced = await readBtiFromAllFrames(btiTab.id, {}, true, true);
@@ -1038,10 +1077,11 @@ async function readBtiSlip(btiTab) {
     lastStatus.bti = '텐텐뱃: 배팅카트 비어있음';
     return null;
   }
-  if (forced.slip?.odds > 1) {
+  const forcedCartSlip = normalizeCartSlip(forced.slip);
+  if (forcedCartSlip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: forced.frameId };
     lastStatus.bti = '';
-    return forced.slip;
+    return forcedCartSlip;
   }
 
   lastStatus.bti = '텐텐뱃: 배팅카트에 담기 후 확인';
@@ -1664,4 +1704,4 @@ loadHistory();
 startBithumbRateLoop();
 enableAutoSync();
 refreshSlips();
-log(`v5.7.9 ${IS_PANEL ? '패널' : '팝업'} 로드 — 카트 자동 동기화`, 'info');
+log(`v5.8.0 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 카트 배당 읽기 수정`, 'info');
