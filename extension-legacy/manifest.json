@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "5.7.8",
+  "version": "5.7.9",
   "description": "텐텐뱃 (x10x10s) + BC.Game 양방 서치 및 슬립 비교 베팅",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom", "alarms"],
   "host_permissions": [

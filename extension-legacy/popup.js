@@ -7,6 +7,7 @@ const FALLBACK_REFRESH_MS = 800;
 const BTI_FULL_SCAN_MS = 2500;
 const AUTO_BET_COOLDOWN_MS = 6000;
 const IS_PANEL = document.body.classList.contains('panel-mode');
+let autoSyncEnabled = true;
 let syncRunning = false;
 let autoBetRunning = false;
 let calcTimer = null;
@@ -94,7 +95,7 @@ async function saveHistory() {
 }
 
 function maybeRecordHistory(bti, poly, arbBti) {
-  if (!syncRunning && !autoBetRunning) return;
+  if (!shouldSyncAmounts()) return;
   const polyO = poly?.odds > 1 ? poly.odds : null;
   const btiO = bti?.odds > 1 ? bti.odds : null;
   if (!polyO || !btiO) return;
@@ -172,7 +173,7 @@ async function readBtiStakeFromPage(btiTab) {
 }
 
 async function getBtiBetAmount(btiTab) {
-  if ((syncRunning || autoBetRunning) && btiTab?.id) {
+  if ((shouldSyncAmounts()) && btiTab?.id) {
     const fromPage = await readBtiStakeFromPage(btiTab);
     if (fromPage > 0) {
       const input = $('btiBet');
@@ -289,7 +290,7 @@ function updateSlipUI(bti, poly, arbBti = null) {
   const hint = $('profitHint');
   if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
   else if (!poly?.odds) hint.textContent = lastStatus.poly || 'BC.Game: 슬립/배당 확인';
-  else if (poly?.needsStake) hint.textContent = (syncRunning || autoBetRunning) ? '금액 동기화 중...' : '금액 입력 시 당첨금 기준 배당';
+  else if (poly?.needsStake) hint.textContent = shouldSyncAmounts() ? '금액 자동 입력 중...' : '금액 입력 시 당첨금 기준 배당';
   else if (profit !== null && profit >= getMinProfit()) {
     if (autoBetRunning) hint.textContent = `자동 배팅 대기 — 수익 ${profit.toFixed(2)}% (최소 ${getMinProfit()}%)`;
     else if (syncRunning) hint.textContent = `수익 구간 — 금액 동기화 중 (${profit.toFixed(2)}%)`;
@@ -1127,6 +1128,7 @@ function applySlipUpdate(source, slip, opts = {}) {
     }
   }
   updateSlipUI(cachedBti, cachedPoly);
+  if (shouldSyncAmounts()) scheduleSyncAmounts();
 }
 
 async function refreshSlips() {
@@ -1146,6 +1148,7 @@ async function refreshSlips() {
     cachedBti = normalizeCartSlip(bti);
 
     updateSlipUI(cachedBti, cachedPoly);
+    if (shouldSyncAmounts()) scheduleSyncAmounts();
     return { bti: cachedBti, poly: cachedPoly, btiTab: found.btiTab, polyTab: found.polyTab };
   } finally {
     refreshPending = false;
@@ -1338,8 +1341,12 @@ async function setPolyAmount(polyTab, amountUsd) {
   return lastRes || { ok: false, reason: '금액 입력 실패 — BC 슬립 선택 후 재시도' };
 }
 
+function shouldSyncAmounts() {
+  return autoSyncEnabled || syncRunning || autoBetRunning;
+}
+
 function scheduleSyncAmounts() {
-  if (!syncRunning && !autoBetRunning) return;
+  if (!shouldSyncAmounts()) return;
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => {
     syncTimer = null;
@@ -1348,7 +1355,7 @@ function scheduleSyncAmounts() {
 }
 
 async function syncAmounts(force = false) {
-  if ((!syncRunning && !autoBetRunning) || syncPending) return;
+  if (!shouldSyncAmounts() || syncPending) return;
 
   const found = await findTabs();
   if (!found.polyTab?.id || !found.btiTab?.id) return;
@@ -1385,7 +1392,7 @@ async function syncAmounts(force = false) {
       setTimeout(() => refreshSlips().then(() => {
         updateSlipUI(cachedBti, cachedPoly);
       }), 250);
-      if (changed && syncRunning) {
+      if (changed && shouldSyncAmounts()) {
         const profit = calcProfit(btiOdds, polyO);
         log(`금액 동기화 — 텐텐뱃 ${btiBet.toLocaleString()}원 · BC $${polyUsd.toFixed(2)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
       }
@@ -1470,7 +1477,7 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb) {
 }
 
 async function pollLoop() {
-  if (!syncRunning && !autoBetRunning) return;
+  if (!shouldSyncAmounts()) return;
   await refreshSlips();
   scheduleSyncAmounts();
   scheduleAutoBetCheck();
@@ -1480,41 +1487,40 @@ function onOddsChanged(msg) {
   const opts = { cartEmpty: !!msg.cartEmpty };
   if (msg.source === 'bti') applySlipUpdate('bti', msg.slip, opts);
   if (msg.source === 'polymarket' || msg.source === 'bcgame') applySlipUpdate('polymarket', msg.slip, opts);
-  if (!syncRunning && !autoBetRunning) return;
+  if (!shouldSyncAmounts()) return;
   scheduleSyncAmounts();
   scheduleAutoBetCheck();
 }
 
 function onBtiStakeChanged(msg) {
-  if ((!syncRunning && !autoBetRunning) || !msg?.stake) return;
+  if (!shouldSyncAmounts() || !msg?.stake) return;
   const input = $('btiBet');
   if (input) input.value = String(msg.stake);
   scheduleSyncAmounts();
 }
 
-function startSync() {
-  if (syncRunning) return;
-  syncRunning = true;
-  lastSyncedBtiKrw = 0;
-  lastSyncedPolyUsd = 0;
-  lastSyncedAt = 0;
-  $('syncStart').disabled = true;
-  $('syncStop').disabled = false;
-  log('금액 동기화 시작 — 텐텐뱃·BC 슬립 실시간 입력', 'info');
-  refreshBithumbRate().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
+function enableAutoSync() {
+  autoSyncEnabled = true;
   if (!calcTimer) calcTimer = setInterval(pollLoop, 400);
 }
 
+function startSync() {
+  enableAutoSync();
+  lastSyncedBtiKrw = 0;
+  lastSyncedPolyUsd = 0;
+  lastSyncedAt = 0;
+  refreshBithumbRate().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
+}
+
 function stopSync() {
+  autoSyncEnabled = false;
   syncRunning = false;
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
-  $('syncStart').disabled = false;
-  $('syncStop').disabled = true;
   if (!autoBetRunning && calcTimer) {
     clearInterval(calcTimer);
     calcTimer = null;
   }
-  log('금액 동기화 정지', 'info');
+  log('자동 동기화 정지', 'info');
 }
 
 function startAutoBet() {
@@ -1525,9 +1531,8 @@ function startAutoBet() {
   $('autoBetStart').disabled = true;
   $('autoBetStop').disabled = false;
   log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
-  if (!syncRunning) startSync();
-  else refreshSlips().then(() => scheduleAutoBetCheck());
-  if (!calcTimer) calcTimer = setInterval(pollLoop, 400);
+  enableAutoSync();
+  refreshSlips().then(() => scheduleAutoBetCheck());
 }
 
 function stopAutoBet() {
@@ -1535,7 +1540,7 @@ function stopAutoBet() {
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
   $('autoBetStart').disabled = false;
   $('autoBetStop').disabled = true;
-  if (!syncRunning && calcTimer) {
+  if (!autoBetRunning && !autoSyncEnabled && calcTimer) {
     clearInterval(calcTimer);
     calcTimer = null;
   }
@@ -1616,7 +1621,7 @@ $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로�
 ['slipMinProfit', 'minProfit', 'btiBet'].forEach((id) => {
   $(id)?.addEventListener('input', () => {
     updateSlipUI(cachedBti, cachedPoly);
-    if (syncRunning || autoBetRunning) scheduleSyncAmounts();
+    if (shouldSyncAmounts()) scheduleSyncAmounts();
   });
 });
 
@@ -1649,7 +1654,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => {
   refreshSlips().then(() => {
-    if (syncRunning || autoBetRunning) {
+    if (shouldSyncAmounts()) {
       scheduleSyncAmounts();
       scheduleAutoBetCheck();
     }
@@ -1657,5 +1662,6 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 startBithumbRateLoop();
+enableAutoSync();
 refreshSlips();
-log(`v5.7.8 ${IS_PANEL ? '패널' : '팝업'} 로드 — 배팅카트 전용`, 'info');
+log(`v5.7.9 ${IS_PANEL ? '패널' : '팝업'} 로드 — 카트 자동 동기화`, 'info');

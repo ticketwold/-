@@ -668,7 +668,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.7.8] background loaded — 배팅카트 전용');
+console.log('[양방봇 v5.7.9] background loaded — 카트 자동 동기화');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
