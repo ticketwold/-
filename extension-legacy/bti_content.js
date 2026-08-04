@@ -1859,15 +1859,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function checkAndNotify() {
     const slip = readBtiOdds();
-    if (!slip || !slip.odds || slip.odds <= 1) {
-      if (lastOddsKey !== '') {
-        lastOddsKey = '';
-        try {
-          chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, suspended: true });
-        } catch (e) {}
-      }
-      return;
-    }
+    if (!slip || !slip.odds || slip.odds <= 1) return;
     const key = oddsKey(slip);
     if (key === lastOddsKey) return;
     lastOddsKey = key;

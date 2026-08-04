@@ -275,7 +275,9 @@ function updateSlipUI(bti, poly, arbBti = null) {
   $('polyMeta').textContent = formatPolyMeta(poly);
 
   const polyO = poly?.odds > 1 ? poly.odds : null;
-  const btiO = arbBti?.odds > 1 ? arbBti.odds : (bti?.odds > 1 ? bti.odds : null);
+  const btiO = ((syncRunning || autoBetRunning) && arbBti?.odds > 1)
+    ? arbBti.odds
+    : (bti?.odds > 1 ? bti.odds : (arbBti?.odds > 1 ? arbBti.odds : null));
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
   if (profitEl) {
@@ -542,10 +544,9 @@ async function readPolySlipAllFrames(bcTab) {
       const injected = await injectReadBcSports(bcTab.id, frameId);
       if (injected?.odds > 1) slip = injected;
     }
-    if (!slip?.odds && !slip?.fromPayout) continue;
+    if (!slip?.odds && !slip?.fromPayout && !slip?.needsStake) continue;
     const sc = scorePolySlip(slip);
-    if (slip.fromPayout && slip.odds > 1 && sc >= bestScore) return slip;
-    if (slip.sourceKind === 'bc-native-slip' && slip.odds > 1.01) return slip;
+    if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) return slip;
     if (sc > bestScore) {
       bestScore = sc;
       best = slip;
@@ -1073,10 +1074,10 @@ function mergeSlipCached(cached, fresh) {
 
 function applySlipUpdate(source, slip) {
   if (source === 'bti') {
-    cachedBti = slipOdds(slip) ? mergeSlipCached(cachedBti, slip) : null;
+    if (slipOdds(slip)) cachedBti = mergeSlipCached(cachedBti, slip);
   }
   if (source === 'polymarket' || source === 'bcgame') {
-    cachedPoly = slipOdds(slip) ? mergeSlipCached(cachedPoly, slip) : null;
+    if (slipOdds(slip)) cachedPoly = mergeSlipCached(cachedPoly, slip);
   }
   updateSlipUI(cachedBti, cachedPoly);
 }
@@ -1620,4 +1621,4 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 refreshSlips();
-log(`v5.7.5 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 배당 복구`, 'info');
+log(`v5.7.6 ${IS_PANEL ? '패널' : '팝업'} 로드 — 텐텐뱃 배당 캐시 유지`, 'info');
