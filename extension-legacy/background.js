@@ -668,7 +668,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.8.0] background loaded — 텐텐뱃 카트 배당 읽기 수정');
+console.log('[양방봇 v5.8.1] background loaded — 5.7.2 배당 읽기 복원');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

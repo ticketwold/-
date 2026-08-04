@@ -1903,18 +1903,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   function checkAndNotify() {
-    if (getRealSlipCards().length === 0) {
-      if (hasBtiChildIframe()) return;
-      if (lastOddsKey !== '') {
-        lastOddsKey = '';
-        try {
-          chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, cartEmpty: true });
-        } catch (e) {}
+    const slip = readBtiOdds();
+    if (!slip || !slip.odds || slip.odds <= 1) {
+      if (getRealSlipCards().length === 0 && !hasBtiChildIframe()) {
+        if (lastOddsKey !== '') {
+          lastOddsKey = '';
+          try {
+            chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, cartEmpty: true });
+          } catch (e) {}
+        }
       }
       return;
     }
-    const slip = readBtiCartOdds().slip;
-    if (!slip || !slip.odds || slip.odds <= 1) return;
     const key = oddsKey(slip);
     if (key === lastOddsKey) return;
     lastOddsKey = key;
