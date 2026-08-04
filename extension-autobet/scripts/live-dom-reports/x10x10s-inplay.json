@@ -1,0 +1,44 @@
+{
+  "site": "x10x10s-inplay",
+  "url": "https://www.x10x10s.com/in-play/1",
+  "finalUrl": "https://www.x10x10s.com/in-play/1",
+  "title": "Attention Required! | Cloudflare",
+  "navError": "",
+  "mainReport": {
+    "label": "x10x10s-inplay-top",
+    "href": "https://www.x10x10s.com/in-play/1",
+    "isTop": true,
+    "bodyLen": 3347,
+    "bodyPreview": "\n  <div id=\"cf-wrapper\">\n    <div class=\"cf-alert cf-alert-error cf-cookie-error\" id=\"cookie-alert\" data-translate=\"enable_cookies\">Please enable cookies.</div>\n    <div id=\"cf-error-details\" class=\"cf-error-details-wrapper\">\n      <div class=\"cf-wrapper cf-header cf-error-overview\">\n        <h1 data-translate=\"block_headline\">Sorry, you have been blocked</h1>\n        <h2 class=\"cf-subheadline\"><span data-translate=\"unable_to_access\">You are unable to access</span> x10x10s.com</h2>\n      </div><!-- /.header -->\n\n      <div class=\"cf-section cf-highlight\">\n        <div class=\"cf-wrapper\">\n          <div class=\"cf-screenshot-container cf-screenshot-full\">\n            \n              <span class=\"cf-no-screenshot error\"></span>\n            \n          </div>\n        </div>\n      </div><!-- /.captcha-container -->\n\n      <div class=\"cf-section cf-wrapper\">\n        <div class=\"cf-columns two\">\n          <div class=\"cf-column\">\n            <h2 data-translate=\"blocked_why_headline\">Why have I been blocked?</h2>\n\n            <p data-translate=\"blocked_why_detail\">This website is using a security service to protect itself from online attacks. The action you just performed triggered the security solution. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data.</p>\n          </div>\n\n          <div class=\"cf-column\">\n            <h2 data-translate=\"blocked_resolve_headline\">What can I do to resolve this?</h2>\n\n",
+    "winnerCoefCount": 0,
+    "winnerCoef": [],
+    "counterInput": [],
+    "slipMarkers": [],
+    "oddsElements": [],
+    "shadowHosts": [],
+    "iframes": [],
+    "scannerWouldFail": [
+      "NO_SLIP_MARKERS_IN_THIS_FRAME"
+    ]
+  },
+  "frameReports": [
+    {
+      "label": "x10x10s-inplay-f",
+      "href": "https://www.x10x10s.com/in-play/1",
+      "isTop": true,
+      "bodyLen": 3347,
+      "bodyPreview": "\n  <div id=\"cf-wrapper\">\n    <div class=\"cf-alert cf-alert-error cf-cookie-error\" id=\"cookie-alert\" data-translate=\"enable_cookies\">Please enable cookies.</div>\n    <div id=\"cf-error-details\" class=\"cf-error-details-wrapper\">\n      <div class=\"cf-wrapper cf-header cf-error-overview\">\n        <h1 data-translate=\"block_headline\">Sorry, you have been blocked</h1>\n        <h2 class=\"cf-subheadline\"><span data-translate=\"unable_to_access\">You are unable to access</span> x10x10s.com</h2>\n      </div><!-- /.header -->\n\n      <div class=\"cf-section cf-highlight\">\n        <div class=\"cf-wrapper\">\n          <div class=\"cf-screenshot-container cf-screenshot-full\">\n            \n              <span class=\"cf-no-screenshot error\"></span>\n            \n          </div>\n        </div>\n      </div><!-- /.captcha-container -->\n\n      <div class=\"cf-section cf-wrapper\">\n        <div class=\"cf-columns two\">\n          <div class=\"cf-column\">\n            <h2 data-translate=\"blocked_why_headline\">Why have I been blocked?</h2>\n\n            <p data-translate=\"blocked_why_detail\">This website is using a security service to protect itself from online attacks. The action you just performed triggered the security solution. There are several actions that could trigger this block including submitting a certain word or phrase, a SQL command or malformed data.</p>\n          </div>\n\n          <div class=\"cf-column\">\n            <h2 data-translate=\"blocked_resolve_headline\">What can I do to resolve this?</h2>\n\n",
+      "winnerCoefCount": 0,
+      "winnerCoef": [],
+      "counterInput": [],
+      "slipMarkers": [],
+      "oddsElements": [],
+      "shadowHosts": [],
+      "iframes": [],
+      "scannerWouldFail": [
+        "NO_SLIP_MARKERS_IN_THIS_FRAME"
+      ]
+    }
+  ],
+  "frameCount": 1
+}

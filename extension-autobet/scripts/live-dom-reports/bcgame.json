@@ -1,0 +1,124 @@
+{
+  "site": "bcgame",
+  "url": "https://bc.game/sports",
+  "finalUrl": "https://bc.game/ko/sports",
+  "title": "Sports | Crypto Betting & Live Sportsbook - BC.GAME",
+  "navError": "",
+  "mainReport": {
+    "label": "bcgame-top",
+    "href": "https://bc.game/ko/sports",
+    "isTop": true,
+    "bodyLen": 148707,
+    "bodyPreview": "\n    <noscript>You need to enable JavaScript to run BC app.</noscript>\n\n    <!-- Google Tag Manager (noscript) -->\n    <noscript>\n      <iframe\n        src=\"https://www.googletagmanager.com/ns.html?id=GTM-TR7QDQDP\"\n        height=\"0\"\n        width=\"0\"\n        style=\"display: none; visibility: hidden\"\n      >\n      </iframe>\n    </noscript>\n\n    <div id=\"root\"><div id=\"page-content\" dir=\"ltr\" class=\"relative z-10 w-full px-4 sm:px-0\"><div id=\"betby\" class=\"!my-0 -mx-4 min-h-[70vh] sm:mx-0\">\n<div class=\"bt-403-error\">\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"73\" height=\"72\" viewBox=\"0 0 73 72\"><circle opacity=\"0.3\" cx=\"36.5\" cy=\"36\" r=\"36\" fill=\"#21A8F7\"></circle><g opacity=\"0.7\"><path d=\"M43.1066 0.604849C40.965 0.207639 38.7569 0 36.5002 0C19.5262 0 5.29592 11.7474 1.49609 27.5556C5.93394 32.8407 11.6346 38.8271 14.7599 39.5065C15.3054 40.0519 15.882 41.4234 15.695 42.5455C15.6206 42.9919 15.4041 43.5093 15.1737 44.0601C14.6801 45.2399 14.1225 46.5728 14.7599 47.6883C15.1927 48.4457 16.3266 49.5035 17.5589 50.6532C18.9891 51.9875 20.552 53.4456 21.3054 54.7013C22.154 56.1156 21.5408 62.8774 20.8208 68.4153C22.7425 69.3465 24.7594 70.1119 26.8531 70.6928C27.5146 70.1069 28.1781 69.5136 28.7859 68.961C30.0414 67.8197 30.851 66.5112 31.5958 65.3076C32.3765 64.046 33.0858 62.8996 34.1625 62.1818C34.7498 61.7903 35.5738 61.3624 36.4973 60.8828C38.8825 59.6442 41.9313 58.0608 43.2794 55.8701C45.1496 52.8312 43.9807 50.026 42.1106 47.6883C41.0142 46.3178 39.9177 46.3132 38.774",
+    "winnerCoefCount": 0,
+    "winnerCoef": [],
+    "counterInput": [],
+    "slipMarkers": [],
+    "oddsElements": [],
+    "shadowHosts": [],
+    "iframes": [
+      {
+        "src": "",
+        "accessible": true,
+        "childBodyLen": 0,
+        "childBodyPreview": "",
+        "childCoefCount": 0,
+        "childCounter": 0,
+        "childOdds": [],
+        "isBetslip": false
+      },
+      {
+        "src": "",
+        "accessible": true,
+        "childBodyLen": 12,
+        "childBodyPreview": "\n      \n    ",
+        "childCoefCount": 0,
+        "childCounter": 0,
+        "childOdds": [],
+        "isBetslip": false
+      }
+    ],
+    "scannerWouldFail": [
+      "NO_SLIP_MARKERS_IN_THIS_FRAME",
+      "TOP_FRAME_SHELL_ODDS_LIKELY_IN_CHILD_IFRAME"
+    ]
+  },
+  "frameReports": [
+    {
+      "label": "bcgame-f",
+      "href": "https://bc.game/ko/sports",
+      "isTop": true,
+      "bodyLen": 148707,
+      "bodyPreview": "\n    <noscript>You need to enable JavaScript to run BC app.</noscript>\n\n    <!-- Google Tag Manager (noscript) -->\n    <noscript>\n      <iframe\n        src=\"https://www.googletagmanager.com/ns.html?id=GTM-TR7QDQDP\"\n        height=\"0\"\n        width=\"0\"\n        style=\"display: none; visibility: hidden\"\n      >\n      </iframe>\n    </noscript>\n\n    <div id=\"root\"><div id=\"page-content\" dir=\"ltr\" class=\"relative z-10 w-full px-4 sm:px-0\"><div id=\"betby\" class=\"!my-0 -mx-4 min-h-[70vh] sm:mx-0\">\n<div class=\"bt-403-error\">\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"73\" height=\"72\" viewBox=\"0 0 73 72\"><circle opacity=\"0.3\" cx=\"36.5\" cy=\"36\" r=\"36\" fill=\"#21A8F7\"></circle><g opacity=\"0.7\"><path d=\"M43.1066 0.604849C40.965 0.207639 38.7569 0 36.5002 0C19.5262 0 5.29592 11.7474 1.49609 27.5556C5.93394 32.8407 11.6346 38.8271 14.7599 39.5065C15.3054 40.0519 15.882 41.4234 15.695 42.5455C15.6206 42.9919 15.4041 43.5093 15.1737 44.0601C14.6801 45.2399 14.1225 46.5728 14.7599 47.6883C15.1927 48.4457 16.3266 49.5035 17.5589 50.6532C18.9891 51.9875 20.552 53.4456 21.3054 54.7013C22.154 56.1156 21.5408 62.8774 20.8208 68.4153C22.7425 69.3465 24.7594 70.1119 26.8531 70.6928C27.5146 70.1069 28.1781 69.5136 28.7859 68.961C30.0414 67.8197 30.851 66.5112 31.5958 65.3076C32.3765 64.046 33.0858 62.8996 34.1625 62.1818C34.7498 61.7903 35.5738 61.3624 36.4973 60.8828C38.8825 59.6442 41.9313 58.0608 43.2794 55.8701C45.1496 52.8312 43.9807 50.026 42.1106 47.6883C41.0142 46.3178 39.9177 46.3132 38.774",
+      "winnerCoefCount": 0,
+      "winnerCoef": [],
+      "counterInput": [],
+      "slipMarkers": [],
+      "oddsElements": [],
+      "shadowHosts": [],
+      "iframes": [
+        {
+          "src": "",
+          "accessible": true,
+          "childBodyLen": 0,
+          "childBodyPreview": "",
+          "childCoefCount": 0,
+          "childCounter": 0,
+          "childOdds": [],
+          "isBetslip": false
+        },
+        {
+          "src": "",
+          "accessible": true,
+          "childBodyLen": 12,
+          "childBodyPreview": "\n      \n    ",
+          "childCoefCount": 0,
+          "childCounter": 0,
+          "childOdds": [],
+          "isBetslip": false
+        }
+      ],
+      "scannerWouldFail": [
+        "NO_SLIP_MARKERS_IN_THIS_FRAME",
+        "TOP_FRAME_SHELL_ODDS_LIKELY_IN_CHILD_IFRAME"
+      ]
+    },
+    {
+      "label": "bcgame-f",
+      "href": "about:blank",
+      "isTop": false,
+      "bodyLen": 0,
+      "bodyPreview": "",
+      "winnerCoefCount": 0,
+      "winnerCoef": [],
+      "counterInput": [],
+      "slipMarkers": [],
+      "oddsElements": [],
+      "shadowHosts": [],
+      "iframes": [],
+      "scannerWouldFail": [
+        "NO_SLIP_MARKERS_IN_THIS_FRAME",
+        "RUNNING_INSIDE_IFRAME"
+      ]
+    },
+    {
+      "label": "bcgame-f",
+      "href": "about:blank",
+      "isTop": false,
+      "bodyLen": 12,
+      "bodyPreview": "\n      \n    ",
+      "winnerCoefCount": 0,
+      "winnerCoef": [],
+      "counterInput": [],
+      "slipMarkers": [],
+      "oddsElements": [],
+      "shadowHosts": [],
+      "iframes": [],
+      "scannerWouldFail": [
+        "NO_SLIP_MARKERS_IN_THIS_FRAME",
+        "RUNNING_INSIDE_IFRAME"
+      ]
+    }
+  ],
+  "frameCount": 3
+}

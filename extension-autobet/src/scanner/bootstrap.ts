@@ -4,6 +4,7 @@ import type { ScannerBootstrapOptions } from './types';
 export type ScannerHandle = {
   probe: () => ReturnType<ScannerEngine['probe']>;
   readOdds: () => ReturnType<ScannerEngine['readOdds']>;
+  getDiagnostics: () => ReturnType<ScannerEngine['getDiagnostics']>;
   stop: () => void;
 };
 
@@ -26,6 +27,7 @@ export function startScanner(opts: ScannerBootstrapOptions): ScannerHandle {
   return {
     probe: () => engine.probe(),
     readOdds: () => engine.readOdds(),
+    getDiagnostics: () => engine.getDiagnostics(),
     stop,
   };
 }

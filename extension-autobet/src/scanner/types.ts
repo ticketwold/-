@@ -42,6 +42,9 @@ export interface ScanProbeResult {
   shadowHostCount: number;
   iframeCount: number;
   confidence: number;
+  winnerCoefCount?: number;
+  sessionCount?: number;
+  zeroReasons?: string[];
 }
 
 export type OddsPayload = OddsResult & {

@@ -1,4 +1,5 @@
 import { walkElements } from './dom-tree';
+import { deepQueryAll } from '../content/bti/shadow-query';
 import {
   clampOdds,
   isSuspendedOddsElement,
@@ -64,7 +65,7 @@ export function findStakeInputs(root: ParentNode): HTMLInputElement[] {
 
   if (!out.length) {
     try {
-      root.querySelectorAll(X10_STAKE_INPUT).forEach((el) => {
+      deepQueryAll(root, X10_STAKE_INPUT).forEach((el) => {
         if (el instanceof HTMLInputElement && !seen.has(el)) out.push(el);
       });
     } catch {
@@ -88,6 +89,9 @@ export function findX10SlipCards(root: ParentNode): Element[] {
   };
 
   try {
+    deepQueryAll(root, X10_SLIP_CARD).forEach((el) => {
+      if (el instanceof Element) addCard(el);
+    });
     root.querySelectorAll(X10_SLIP_CARD).forEach((el) => {
       if (el instanceof Element) addCard(el);
     });
