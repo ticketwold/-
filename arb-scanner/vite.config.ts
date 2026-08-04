@@ -20,6 +20,7 @@ export default defineConfig({
         service_worker: resolve(root, 'src/background/service-worker.ts'),
         content: resolve(root, 'src/content/bootstrap.ts'),
         popup: resolve(root, 'src/popup/popup.html'),
+        panel: resolve(root, 'src/panel/panel.html'),
         options: resolve(root, 'src/options/options.html'),
       },
       output: {
@@ -40,7 +41,7 @@ export default defineConfig({
         mkdirSync(dist, { recursive: true });
         copyFileSync(resolve(root, 'public/manifest.json'), resolve(dist, 'manifest.json'));
 
-        for (const page of ['popup', 'options'] as const) {
+        for (const page of ['popup', 'panel', 'options'] as const) {
           const nested = resolve(dist, `src/${page}/${page}.html`);
           const flat = resolve(dist, `${page}.html`);
           try {

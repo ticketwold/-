@@ -44,22 +44,28 @@ export function walkElements(
 }
 
 export function queryAllDeep(root: ParentNode, selector: string): Element[] {
+  const selectors = selector
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const out: Element[] = [];
   const seen = new Set<Element>();
   walkElements(root, (el) => {
-    if (el.matches?.(selector) && !seen.has(el)) {
-      seen.add(el);
-      out.push(el);
-    }
-    try {
-      el.querySelectorAll(selector).forEach((m) => {
-        if (!seen.has(m)) {
-          seen.add(m);
-          out.push(m);
-        }
-      });
-    } catch {
-      /* invalid selector */
+    for (const sel of selectors) {
+      if (el.matches?.(sel) && !seen.has(el)) {
+        seen.add(el);
+        out.push(el);
+      }
+      try {
+        el.querySelectorAll(sel).forEach((m) => {
+          if (!seen.has(m)) {
+            seen.add(m);
+            out.push(m);
+          }
+        });
+      } catch {
+        /* invalid selector */
+      }
     }
   });
   return out;

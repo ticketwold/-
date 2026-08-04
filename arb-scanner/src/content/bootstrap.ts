@@ -1,7 +1,7 @@
 import { detectSiteId } from '@scanner/adapters';
 import { ScannerEngine } from '@scanner/engine';
 import { createLogger } from '@core/logger';
-import type { ContentMessage, SlipState } from '@core/types';
+import type { ContentMessage, OddsQuote, SlipState } from '@core/types';
 import { getSetting } from '@core/storage';
 import { readSlipForSite } from './actions';
 import { installActionHandler } from './message-handler';
@@ -12,15 +12,36 @@ declare global {
   interface Window {
     __arbScannerDiag?: () => ReturnType<ScannerEngine['runDiagnostic']>;
     __arbScannerQuotes?: () => ReturnType<ScannerEngine['getLastQuotes']>;
+    __arbScannerSlip?: () => SlipState | null;
   }
 }
 
-function slipFromQuotes(siteId: 'x10' | 'bcgame'): SlipState | null {
-  return readSlipForSite(siteId);
+let engineRef: ScannerEngine | null = null;
+
+function bestSlipQuote(quotes: OddsQuote[]): OddsQuote | null {
+  const slips = quotes.filter((q) => q.source === 'slip' && q.odds > 1.01);
+  if (!slips.length) return null;
+  return slips.reduce((a, b) => (b.confidence >= a.confidence ? b : a));
 }
 
-function emitSlip(siteId: 'x10' | 'bcgame'): void {
-  const slip = slipFromQuotes(siteId);
+function resolveSlip(siteId: 'x10' | 'bcgame', quotes: OddsQuote[]): SlipState | null {
+  const fromDom = readSlipForSite(siteId);
+  const best = bestSlipQuote(quotes);
+  if (best && (!fromDom || best.confidence >= 0.85)) {
+    return {
+      odds: best.odds,
+      selection: best.selection,
+      eventName: best.eventName,
+      stake: fromDom?.stake ?? 0,
+      source: 'slip',
+      updatedAt: Date.now(),
+    };
+  }
+  return fromDom;
+}
+
+function emitSlip(siteId: 'x10' | 'bcgame', quotes: OddsQuote[] = []): void {
+  const slip = resolveSlip(siteId, quotes.length ? quotes : engineRef?.getLastQuotes() ?? []);
   if (!slip?.odds || slip.odds <= 1.01) return;
   const msg: ContentMessage = { type: 'SLIP_UPDATE', siteId, slip };
   try {
@@ -43,12 +64,14 @@ async function main(): Promise<void> {
     siteId,
     debounceMs,
     diagnostic,
-    onScan: () => emitSlip(siteId),
+    onScan: ({ quotes }) => emitSlip(siteId, quotes),
   });
 
+  engineRef = engine;
   const stop = engine.start();
   window.__arbScannerDiag = () => engine.logDiagnostic();
   window.__arbScannerQuotes = () => engine.getLastQuotes();
+  window.__arbScannerSlip = () => resolveSlip(siteId, engine.getLastQuotes());
 
   emitSlip(siteId);
   const slipPoll = setInterval(() => emitSlip(siteId), 500);
@@ -73,6 +96,7 @@ async function main(): Promise<void> {
   window.addEventListener('unload', () => {
     clearInterval(slipPoll);
     stop();
+    engineRef = null;
   });
 }
 

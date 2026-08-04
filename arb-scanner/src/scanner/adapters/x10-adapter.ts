@@ -55,7 +55,7 @@ export class X10Adapter implements SiteAdapter {
         card.querySelector(SEL.x10.slipTime)?.textContent?.trim();
 
       let odds: number | null = null;
-      for (const el of queryAllDeep(card, '[class*="odds"], [class*="Odds"], [class*="coefficient"]')) {
+      for (const el of queryAllDeep(card, SEL.x10.oddsHints)) {
         odds = readOddsFromElement(el);
         if (odds) break;
       }

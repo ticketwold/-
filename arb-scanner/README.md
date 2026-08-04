@@ -41,6 +41,8 @@ npm run build
 
 Chrome → `chrome://extensions` → 개발자 모드 → **dist** 폴더 로드
 
+확장 아이콘 클릭 → **460×780 분리 패널 창** 열림 (이전 버전과 동일)
+
 ## 사용법
 
 1. x10x10s, BC.Game 탭을 각각 열고 배팅카트에 선택

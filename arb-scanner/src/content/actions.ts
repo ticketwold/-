@@ -1,6 +1,6 @@
 import type { SiteId } from '@core/types';
 import { queryAllDeep } from '@scanner/dom-walker';
-import { parseOddsText, readOddsFromElement } from '@scanner/odds-parser';
+import { readBcSlipFromDoc, readSlipFromDoc, readX10SlipFromDoc } from '@scanner/slip-reader';
 import { SEL } from '@scanner/stable-selectors';
 import type { ActionResult, SlipState } from '@core/types';
 
@@ -43,57 +43,11 @@ function findBcBetButton(): HTMLButtonElement | null {
 }
 
 export function readX10Slip(): SlipState | null {
-  const cards = queryAllDeep(document, SEL.x10.slipCard);
-  const card = cards[cards.length - 1];
-  if (!card) {
-    const stake = findX10StakeInput();
-    if (!stake) return null;
-    const root = stake.closest('[class*="betslip"], aside') || document.body;
-    const at = parseOddsText(root.textContent || '');
-    if (!at) return null;
-    return {
-      odds: at,
-      selection: 'slip',
-      eventName: root.querySelector(SEL.x10.slipEvent)?.textContent?.trim() || '',
-      stake: parseInt(stake.value || '0', 10) || 0,
-      source: 'slip',
-      updatedAt: Date.now(),
-    };
-  }
-  let odds: number | null = null;
-  for (const el of queryAllDeep(card, '[class*="odds"], [class*="Odds"]')) {
-    odds = readOddsFromElement(el);
-    if (odds) break;
-  }
-  if (!odds) odds = parseOddsText(card.textContent || '');
-  if (!odds) return null;
-  const stakeEl = findX10StakeInput();
-  return {
-    odds,
-    selection: card.querySelector(SEL.x10.slipTitle)?.textContent?.trim() || 'slip',
-    eventName: card.querySelector(SEL.x10.slipEvent)?.textContent?.trim() || '',
-    stake: stakeEl ? parseInt(stakeEl.value || '0', 10) || 0 : 0,
-    source: 'slip',
-    updatedAt: Date.now(),
-  };
+  return readX10SlipFromDoc(document);
 }
 
 export function readBcSlip(): SlipState | null {
-  const coefs = queryAllDeep(document, SEL.bc.winnerCoef);
-  const el = coefs[coefs.length - 1];
-  if (!el) return null;
-  const odds = readOddsFromElement(el);
-  if (!odds) return null;
-  const root = el.closest(SEL.bc.slipRoot) || el.parentElement;
-  const stakeEl = findBcStakeInput();
-  return {
-    odds,
-    selection: root?.querySelector(SEL.bc.selection)?.textContent?.trim() || 'slip',
-    eventName: root?.querySelector(SEL.bc.event)?.textContent?.trim() || 'bc-slip',
-    stake: stakeEl ? parseFloat(stakeEl.value || '0') || 0 : 0,
-    source: 'slip',
-    updatedAt: Date.now(),
-  };
+  return readBcSlipFromDoc(document);
 }
 
 export function setX10Stake(amountKrw: number): ActionResult {
@@ -136,5 +90,5 @@ export async function placeBcBet(amountUsdt: number): Promise<ActionResult> {
 }
 
 export function readSlipForSite(siteId: SiteId): SlipState | null {
-  return siteId === 'x10' ? readX10Slip() : readBcSlip();
+  return readSlipFromDoc(siteId, document);
 }

@@ -16,6 +16,56 @@ let lastNotifyAt = 0;
 
 const ctx = { quotesBySite, slips, runtime };
 
+let panelWindowId: number | null = null;
+
+async function openPanel(): Promise<void> {
+  if (panelWindowId != null) {
+    try {
+      await chrome.windows.get(panelWindowId);
+      await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+      const tabs = await chrome.tabs.query({ windowId: panelWindowId });
+      if (tabs[0]?.id) await chrome.tabs.update(tabs[0].id, { active: true });
+      return;
+    } catch {
+      panelWindowId = null;
+    }
+  }
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL('panel.html'),
+    type: 'popup',
+    width: 460,
+    height: 780,
+    focused: true,
+  });
+  if (!win?.id) throw new Error('panel window create failed');
+  panelWindowId = win.id;
+}
+
+chrome.action.onClicked.addListener(() => {
+  openPanel().catch((e) => log.catch('panel', e));
+});
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === panelWindowId) panelWindowId = null;
+});
+
+async function restoreState(): Promise<void> {
+  const data = await chrome.storage.local.get(['runtime', 'lastQuotes']);
+  if (data.runtime) {
+    runtime = data.runtime as RuntimeState;
+    ctx.runtime = runtime;
+    slips.x10 = runtime.x10Slip;
+    slips.bcgame = runtime.bcSlip;
+  }
+  if (data.lastQuotes) {
+    const q = data.lastQuotes as typeof quotesBySite;
+    quotesBySite.x10 = q.x10 ?? [];
+    quotesBySite.bcgame = q.bcgame ?? [];
+  }
+}
+
+restoreState();
+
 async function refreshRate(): Promise<void> {
   const settings = await loadSettings();
   if (settings.autoBithumbRate) {
