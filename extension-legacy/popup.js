@@ -1424,7 +1424,11 @@ function renderSearchResults(data) {
   if (!data) return;
 
   const s = data.stats || {};
-  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기 · BC ${s.bcTotal || s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / BC ${(s.bcTabFound || s.polyTabFound) ? 'O' : 'X'})`;
+  const btiSrc = s.btiSource === 'dom' ? ' · DOM' : (s.btiSource === 'api' ? ' · API' : '');
+  stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기${btiSrc} · BC ${s.bcTotal || s.polyTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / BC ${(s.bcTabFound || s.polyTabFound) ? 'O' : 'X'})`;
+  if (!s.btiTotal && s.btiTabFound) {
+    stats.textContent += ' — 배당판이 보이는 10벳 스포츠 탭인지 확인';
+  }
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');

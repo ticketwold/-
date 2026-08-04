@@ -292,7 +292,9 @@ function parseBtiOdds(markets) {
   const result = { ml: [] };
   for (const m of markets || []) {
     const typeId = m.MarketType?._id || m._id || '';
-    if (!String(typeId).startsWith('ML')) continue;
+    const kind = m.marketKind || '';
+    if (typeId && !String(typeId).startsWith('ML') && kind && kind !== 'ml') continue;
+    if (!typeId && kind && kind !== 'ml') continue;
     for (const s of (m.Selections || [])) {
       const side = s.Side || '';
       const odds = parseBtiSelectionPrice(s);
@@ -302,32 +304,81 @@ function parseBtiOdds(markets) {
   return result;
 }
 
-async function getBtiLiveMatchups(tabId) {
-  const tab = tabId ? { id: tabId } : await pickBtiTab();
-  if (!tab?.id) return [];
-  let tabUrl = tab.url;
-  if (!tabUrl) {
-    try { tabUrl = (await chrome.tabs.get(tab.id)).url; } catch (_) {}
+function normalizeBtiSide(side) {
+  const s = String(side || '').toLowerCase();
+  if (s === 'h' || s === 'home' || s === '1' || s === 'w1') return 'H';
+  if (s === 'a' || s === 'away' || s === '2' || s === 'w2') return 'A';
+  return String(side || '').toUpperCase();
+}
+
+function isBtiHomeSide(side) {
+  const s = normalizeBtiSide(side);
+  return s === 'H' || s === 'HOME';
+}
+
+function isBtiAwaySide(side) {
+  const s = normalizeBtiSide(side);
+  return s === 'A' || s === 'AWAY';
+}
+
+async function ensureBtiScript(tabId) {
+  const frames = await getAllTabFrames(tabId);
+  let ok = false;
+  for (const frame of frames) {
+    if (frame.frameId !== 0 && frame.url && !isInjectableBtiFrame(frame.url)) continue;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frame.frameId] },
+        files: ['bti_content.js']
+      });
+      ok = true;
+    } catch (_) {}
   }
-
-  const liveUrl = `/api/sportscenter/inplay/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`;
-  let data = null;
-  try {
-    data = await fetchBtiViaTab(tab.id, liveUrl, tabUrl);
-  } catch (e) {
-    console.warn('[BTI] live API:', e.message);
+  if (!ok) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['bti_content.js'] });
+      ok = true;
+    } catch (_) {}
   }
+  return ok;
+}
 
-  if (!Array.isArray(data) || !data.length) return [];
+async function scanBtiTabBoard(tab) {
+  if (!tab?.id) return { events: [], buttonCount: 0, frameId: 0, score: -1 };
+  await ensureBtiScript(tab.id);
+  const frames = await getAllTabFrames(tab.id);
+  let best = { events: [], buttonCount: 0, frameId: 0, score: -1 };
 
+  for (const frame of frames) {
+    if (frame.frameId !== 0 && frame.url && !isInjectableBtiFrame(frame.url) && frame.url !== 'about:blank') {
+      try {
+        const ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }, { frameId: frame.frameId });
+        if (!(ping?.buttonCount || ping?.hasSlip)) continue;
+      } catch (_) { continue; }
+    }
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_BOARD' }, { frameId: frame.frameId });
+      if (!res) continue;
+      const eventCount = res.eventCount || res.events?.length || 0;
+      const btnCount = res.buttonCount || 0;
+      const score = eventCount * 200 + btnCount + (res.ok ? 50 : 0);
+      if (score > best.score) {
+        best = { events: res.events || [], buttonCount: btnCount, frameId: frame.frameId, score };
+      }
+    } catch (_) {}
+  }
+  return best;
+}
+
+function convertBtiApiEvents(data) {
   const result = [];
-  for (const event of data) {
+  for (const event of data || []) {
     if (!event.id || !event.markets?.length) continue;
     let home = '', away = '';
     const m0 = event.markets[0];
     if (m0.Selections) {
-      const h = m0.Selections.find((s) => s.Side === 'H' || s.Side === 'Home');
-      const a = m0.Selections.find((s) => s.Side === 'A' || s.Side === 'Away');
+      const h = m0.Selections.find((s) => isBtiHomeSide(s.Side));
+      const a = m0.Selections.find((s) => isBtiAwaySide(s.Side));
       if (h) home = h.Name || h.TeamName || '';
       if (a) away = a.Name || a.TeamName || '';
     }
@@ -335,17 +386,88 @@ async function getBtiLiveMatchups(tabId) {
       const parts = m0.EventName.split(' vs ');
       if (parts.length >= 2) { home = parts[0].trim(); away = parts[1].trim(); }
     }
-    result.push({ id: event.id, home, away, markets: event.markets, sportId: m0.SportId || 0 });
+    result.push({ id: event.id, home, away, markets: event.markets, sportId: m0.SportId || 0, source: 'api' });
   }
   return result;
+}
+
+function btiMatchupsFromDom(events) {
+  const result = [];
+  for (const ev of events || []) {
+    const home = ev.homeTeam || '';
+    const away = ev.awayTeam || '';
+    const ml = ev.moneyline?.length
+      ? ev.moneyline
+      : (ev.selections || []).filter((s) => s.marketKind === 'ml');
+    if (!ml.length) continue;
+
+    const selections = ml.map((s) => ({
+      Side: normalizeBtiSide(s.side),
+      Name: s.selectionText || s.label || '',
+      TeamName: s.selectionText || '',
+      Price: s.odds,
+      Odds: s.odds,
+      DisplayPrice: s.odds
+    })).filter((s) => parseBtiSelectionPrice(s) > 1);
+
+    if (!selections.length) continue;
+    result.push({
+      id: ev.eventId || ev.eventText || `${home}_${away}`,
+      home,
+      away,
+      markets: [{ MarketType: { _id: 'ML0' }, Selections: selections }],
+      sportId: 0,
+      source: 'dom'
+    });
+  }
+  return result;
+}
+
+async function getBtiLiveMatchups(tabId) {
+  const tab = tabId ? { id: tabId } : await pickBtiTab();
+  if (!tab?.id) return { matchups: [], source: 'none' };
+  let tabUrl = tab.url;
+  if (!tabUrl) {
+    try { tabUrl = (await chrome.tabs.get(tab.id)).url; } catch (_) {}
+  }
+
+  const apiPaths = [
+    `/api/sportscenter/inplay/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`,
+    `/api/sportscenter/prematch/markets?language=KO&marketTypes=${BTI_MARKET_TYPES}&minimumOdds=1.1&draft=false`
+  ];
+
+  for (const path of apiPaths) {
+    try {
+      const data = await fetchBtiViaTab(tab.id, path, tabUrl);
+      if (Array.isArray(data) && data.length) {
+        const converted = convertBtiApiEvents(data);
+        if (converted.length) return { matchups: converted, source: 'api' };
+      }
+    } catch (e) {
+      console.warn('[BTI] API', path.split('?')[0], e.message);
+    }
+  }
+
+  try {
+    const board = await scanBtiTabBoard(tab);
+    const domMatchups = btiMatchupsFromDom(board.events);
+    if (domMatchups.length) {
+      console.log(`[BTI] DOM ${domMatchups.length}경기 frame#${board.frameId} buttons=${board.buttonCount}`);
+      return { matchups: domMatchups, source: 'dom' };
+    }
+  } catch (e) {
+    console.warn('[BTI] DOM scrape:', e.message);
+  }
+
+  return { matchups: [], source: 'none' };
 }
 
 function findArbOpportunities(btiList, bcList) {
   const opps = [];
   for (const bti of btiList) {
     const btiOdds = parseBtiOdds(bti.markets);
-    const mlH = btiOdds.ml.find((m) => m.side === 'H' || m.side === 'Home');
-    const mlA = btiOdds.ml.find((m) => m.side === 'A' || m.side === 'Away');
+    const mlH = btiOdds.ml.find((m) => isBtiHomeSide(m.side));
+    const mlA = btiOdds.ml.find((m) => isBtiAwaySide(m.side));
     if (!mlH?.odds || !mlA?.odds) continue;
 
     for (const bc of bcList) {
@@ -376,8 +498,13 @@ function findArbOpportunities(btiList, bcList) {
 async function runSearchOnce() {
   const btiTab = await pickBtiTab();
   let btiAll = [];
+  let btiSource = 'none';
   if (btiTab) {
-    try { btiAll = await getBtiLiveMatchups(btiTab.id); } catch (e) {
+    try {
+      const btiRes = await getBtiLiveMatchups(btiTab.id);
+      btiAll = btiRes.matchups || [];
+      btiSource = btiRes.source || 'none';
+    } catch (e) {
       console.warn('[BTI]', e.message);
     }
   }
@@ -399,6 +526,7 @@ async function runSearchOnce() {
     stats: {
       btiTotal: btiAll.length,
       btiTabFound: !!btiTab,
+      btiSource,
       bcTotal: bcAll.length,
       bcTabFound: !!bcTab,
       matched: opps.length
@@ -526,7 +654,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.7.0] background loaded — 금액동기화 + 자동배팅');
+console.log('[양방봇 v5.7.1] background loaded — BTI DOM 서치 폴백');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
