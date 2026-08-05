@@ -460,8 +460,15 @@ function btiMatchupsFromDom(events) {
     })).filter((s) => parseBtiSelectionPrice(s) > 1);
 
     if (!selections.length) continue;
-    const homeOdds = selections.find((s) => isBtiHomeSide(s.Side));
-    const awayOdds = selections.find((s) => isBtiAwaySide(s.Side));
+    let homeOdds = selections.find((s) => isBtiHomeSide(s.Side));
+    let awayOdds = selections.find((s) => isBtiAwaySide(s.Side));
+    if (!homeOdds || !awayOdds) {
+      if (selections.length < 2) continue;
+      homeOdds = homeOdds || { ...selections[0], Side: 'H' };
+      awayOdds = awayOdds || { ...selections[1], Side: 'A' };
+      if (!home) home = homeOdds.Name || homeOdds.TeamName || selections[0].Name || '';
+      if (!away) away = awayOdds.Name || awayOdds.TeamName || selections[1].Name || '';
+    }
     if (!homeOdds || !awayOdds) continue;
     result.push({
       id: ev.eventId || ev.eventText || `${home}_${away}`,
@@ -706,7 +713,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.8.2] background loaded — 배당 유지 + 서치 수정');
+console.log('[양방봇 v5.8.3] background loaded — 금액동기화/자동배팅 수정');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
