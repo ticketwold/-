@@ -335,23 +335,57 @@ function isBtiAwaySide(side) {
 async function ensureBtiScript(tabId) {
   const frames = await getAllTabFrames(tabId);
   let ok = false;
-  for (const frame of frames) {
-    if (frame.frameId !== 0 && frame.url && !isInjectableBtiFrame(frame.url)) continue;
+
+  async function injectFrame(frameId) {
     try {
       await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [frame.frameId] },
+        target: { tabId, frameIds: [frameId] },
         files: ['bti_content.js']
       });
-      ok = true;
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
-  if (!ok) {
+
+  for (const frame of frames) {
+    const skip = frame.frameId !== 0
+      && frame.url
+      && frame.url !== 'about:blank'
+      && !isInjectableBtiFrame(frame.url);
+    if (skip) continue;
+    if (await injectFrame(frame.frameId)) ok = true;
+  }
+
+  for (const frame of frames) {
+    if (frame.frameId === 0) continue;
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['bti_content.js'] });
-      ok = true;
-    } catch (_) {}
+      const ping = await chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: frame.frameId });
+      if (ping?.ok && (ping.buttonCount || ping.hasSlip || ping.hasInput)) {
+        if (await injectFrame(frame.frameId)) ok = true;
+      }
+    } catch (_) {
+      if (frame.url === 'about:blank' || !frame.url) {
+        if (await injectFrame(frame.frameId)) ok = true;
+      }
+    }
   }
+
+  if (!ok) await injectFrame(0);
   return ok;
+}
+
+async function injectScrapeBtiBoard(tabId, frameId) {
+  try {
+    await ensureBtiScript(tabId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: () => (typeof window.__btiScrapeBoard === 'function' ? window.__btiScrapeBoard() : null)
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function scanBtiTabBoard(tab) {
@@ -367,16 +401,20 @@ async function scanBtiTabBoard(tab) {
         if (!(ping?.buttonCount || ping?.hasSlip)) continue;
       } catch (_) { continue; }
     }
+    let res = null;
     try {
-      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_BOARD' }, { frameId: frame.frameId });
-      if (!res) continue;
-      const eventCount = res.eventCount || res.events?.length || 0;
-      const btnCount = res.buttonCount || 0;
-      const score = eventCount * 200 + btnCount + (res.ok ? 50 : 0);
-      if (score > best.score) {
-        best = { events: res.events || [], buttonCount: btnCount, frameId: frame.frameId, score };
-      }
+      res = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_BOARD' }, { frameId: frame.frameId });
     } catch (_) {}
+    if (!res?.eventCount && !(res?.buttonCount > 0)) {
+      res = await injectScrapeBtiBoard(tab.id, frame.frameId);
+    }
+    if (!res) continue;
+    const eventCount = res.eventCount || res.events?.length || 0;
+    const btnCount = res.buttonCount || 0;
+    const score = eventCount * 200 + btnCount + (res.ok ? 50 : 0);
+    if (score > best.score) {
+      best = { events: res.events || [], buttonCount: btnCount, frameId: frame.frameId, score };
+    }
   }
   return best;
 }
@@ -668,7 +706,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.8.1] background loaded — 5.7.2 배당 읽기 복원');
+console.log('[양방봇 v5.8.2] background loaded — 배당 유지 + 서치 수정');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

@@ -1170,8 +1170,11 @@ function mergeSlipCached(cached, fresh) {
 
 function applySlipUpdate(source, slip, opts = {}) {
   if (source === 'bti') {
-    if (opts.cartEmpty) cachedBti = null;
-    else if (slipOdds(slip)) cachedBti = mergeSlipCached(cachedBti, slip);
+    if (opts.cartEmpty) {
+      if (!cachedBti || cachedBti.fromSlip || isCartSlip(cachedBti)) cachedBti = null;
+    } else if (slipOdds(slip)) {
+      cachedBti = mergeSlipCached(cachedBti, slip);
+    }
   }
   if (source === 'polymarket' || source === 'bcgame') {
     if (opts.cartEmpty || !slip) cachedPoly = null;
@@ -1197,8 +1200,13 @@ async function refreshSlips() {
       readBtiSlip(found.btiTab)
     ]);
 
-    cachedPoly = normalizeCartSlip(poly);
-    cachedBti = bti;
+    if (found.btiTab?.id) {
+      const cartCheck = await readBtiFromAllFrames(found.btiTab.id, {}, false, true);
+      if (cartCheck.cartEmpty && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
+    }
+
+    cachedPoly = mergeSlipCached(cachedPoly, normalizeCartSlip(poly) || poly);
+    cachedBti = mergeSlipCached(cachedBti, bti);
 
     updateSlipUI(cachedBti, cachedPoly);
     if (shouldSyncAmounts()) scheduleSyncAmounts();
@@ -1533,7 +1541,6 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb) {
 
 async function pollLoop() {
   if (!shouldSyncAmounts()) return;
-  await refreshSlips();
   scheduleSyncAmounts();
   scheduleAutoBetCheck();
 }
@@ -1719,4 +1726,4 @@ loadHistory();
 startBithumbRateLoop();
 enableAutoSync();
 refreshSlips();
-log(`v5.8.1 ${IS_PANEL ? '패널' : '팝업'} 로드 — 5.7.2 배당 읽기 복원`, 'info');
+log(`v5.8.2 ${IS_PANEL ? '패널' : '팝업'} 로드 — 배당 유지 + 서치 수정`, 'info');

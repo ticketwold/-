@@ -1904,17 +1904,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   function checkAndNotify() {
     const slip = readBtiOdds();
-    if (!slip || !slip.odds || slip.odds <= 1) {
-      if (getRealSlipCards().length === 0 && !hasBtiChildIframe()) {
-        if (lastOddsKey !== '') {
-          lastOddsKey = '';
-          try {
-            chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: 'bti', slip: null, cartEmpty: true });
-          } catch (e) {}
-        }
-      }
-      return;
-    }
+    if (!slip?.odds || slip.odds <= 1) return;
     const key = oddsKey(slip);
     if (key === lastOddsKey) return;
     lastOddsKey = key;
@@ -1965,4 +1955,5 @@ console.log('[텐텐뱃 v5] content script loaded');
 try {
   window.__btiReadOdds = readBtiOdds;
   window.__btiEnsureSlip = ensureSlipFromBoard;
+  window.__btiScrapeBoard = scrapeBoardSelections;
 } catch (_) {}
