@@ -713,7 +713,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.8.4] background loaded — BC 금액동기화/자동배팅');
+console.log('[양방봇 v5.9.0] background loaded — BC.Game 전용');
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

@@ -1,8 +1,8 @@
-# 양방 베팅 봇 v5.6.3
+# 양방 베팅 봇 v5.9.0
 
 **텐텐뱃 (x10x10s.com) + BC.Game** 전용 Chrome 확장 프로그램.
 
-v5.6.2 배당 서치(BTI API) 기반에 Polymarket을 제거하고 BC.Game 스포츠/예측을 연동했습니다.
+v5.6.2 배당 서치(BTI API) 기반 — **BC.Game 스포츠 전용** (Polymarket 제거).
 
 ## 설치
 

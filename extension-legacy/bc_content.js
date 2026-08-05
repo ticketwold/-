@@ -940,7 +940,7 @@ function buildBoardSlip(team, stake, boardCents, boardOdds, opts = {}) {
     hint: pending ? '금액 동기화 중 — ¢ 배당' : `${centsLabel} 기준`,
     marketKind: 'ml',
     period: 'ft',
-    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    marketKey: `bc_ml_${(team || 'out').slice(0, 20)}`,
     fromPayout: false,
     liveCents: true,
     pendingToWin: !!pending
@@ -978,19 +978,22 @@ function buildPendingPolySlip(team, stake, boardCents, hint) {
     hint: hint || '금액 변경 중 — ¢ 배당 유지',
     marketKind: 'ml',
     period: 'ft',
-    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    marketKey: `bc_ml_${(team || 'out').slice(0, 20)}`,
     fromPayout: false,
     liveCents: true,
     pendingToWin: true
   };
 }
 
-function readPolymarketSlip() {
-  if (isBcSportsPage() || /베팅\s*슬립|bet\s*slip|betslip/i.test(document.body?.innerText || '')) {
-    const sports = readSportsSlip();
-    if (sports?.odds > 1.01) return sports;
+function isBcPredictionsPage() {
+  try {
+    return /bc\.game/i.test(location.hostname) && /\/predictions\//i.test(location.pathname);
+  } catch (_) {
+    return false;
   }
+}
 
+function readBcPredictionsSlip() {
   const panel = findTradePanel();
   const stake = readPanelStake(panel);
   notePolyStakeChange(stake);
@@ -1059,7 +1062,7 @@ function readPolymarketSlip() {
         : `당첨금 $${toWinDisplay.toFixed(2)} ÷ 베팅 $${stake.toFixed(2)}`,
       marketKind: 'ml',
       period: 'ft',
-      marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+      marketKey: `bc_ml_${(team || 'out').slice(0, 20)}`,
       fromPayout: true,
       liveCents: false
     };
@@ -1095,7 +1098,7 @@ function readPolymarketSlip() {
       priceCents: isValidPolyCents(listedCents) ? listedCents : null,
       hint: listedCents
         ? `${formatCentsLabel(listedCents)} — Amount 입력 시 당첨금 기준 배당`
-        : 'Polymarket Amount 입력 후 To win 확인',
+        : 'BC.Game Amount 입력 후 우승(당첨) 확인',
       marketKind: 'ml'
     };
   }
@@ -1118,11 +1121,33 @@ function readPolymarketSlip() {
     hint: 'Amount 입력 시 To win 기준 배당으로 전환',
     marketKind: 'ml',
     period: 'ft',
-    marketKey: `poly_ml_${(team || 'out').slice(0, 20)}`,
+    marketKey: `bc_ml_${(team || 'out').slice(0, 20)}`,
     fromPayout: false,
     liveCents: !!listedCents
   };
 }
+
+function readBcSlip() {
+  const sports = readSportsSlip();
+  if (sports?.odds > 1.01) return sports;
+
+  const onSports = isBcSportsPage()
+    || /베팅\s*슬립|bet\s*slip|betslip/i.test(document.body?.innerText || '');
+  if (onSports) {
+    return sports || {
+      source: 'bcgame',
+      odds: null,
+      needsStake: true,
+      hint: 'BC.Game 스포츠 배팅카트에 담기',
+      marketKind: 'ml'
+    };
+  }
+
+  if (isBcPredictionsPage()) return readBcPredictionsSlip();
+  return sports;
+}
+
+const readPolymarketSlip = readBcSlip;
 
 function calcOddsFromStakeAndPayout(stake, totalPayout) {
   if (!stake || !totalPayout || stake <= 0 || totalPayout <= 0) return null;
@@ -1393,7 +1418,10 @@ async function placeBcBet(amountUsd, opts = {}) {
   const sports = await placeSportsBetViaMain(rounded);
   if (sports?.success) return sports;
 
-  return placePolymarketBet(rounded, { skipFill });
+  if (isBcPredictionsPage()) {
+    return placeBcPredictionsBet(rounded, { skipFill });
+  }
+  return { success: false, reason: 'BC.Game 스포츠 배팅 실패 — 배팅카트 확인' };
 }
 
 async function setSportsStakeViaMain(amountUsd) {
@@ -1437,10 +1465,11 @@ async function setBcStakeAmount(amountUsd, force = true) {
   const sports = await setSportsStakeViaMain(amountUsd);
   if (sports?.ok) return { ...sports, method: sports.method || 'sports-main' };
   if (sports?.partial) return sports;
-  return setPolyTradeAmount(amountUsd, force);
+  if (isBcPredictionsPage()) return setBcPredictionsAmount(amountUsd, force);
+  return sports || { ok: false, reason: 'BC.Game 스포츠 금액 입력 실패 — 배팅카트 확인' };
 }
 
-async function setPolyTradeAmount(amountUsd, force = true) {
+async function setBcPredictionsAmount(amountUsd, force = true) {
   const panel = findTradePanel();
   if (!panel) return { ok: false, reason: '주문 패널 없음 — outcome 클릭 후 Amount 표시' };
 
@@ -1591,7 +1620,7 @@ function clickBuyButton(btn) {
   return true;
 }
 
-async function placePolymarketBet(amountUsd, opts = {}) {
+async function placeBcPredictionsBet(amountUsd, opts = {}) {
   const skipFill = !!opts.skipFill;
   const panel = findTradePanel();
   if (!panel) {
@@ -1609,7 +1638,7 @@ async function placePolymarketBet(amountUsd, opts = {}) {
   } else {
     const existing = readAmountFromPanel(panel);
     if (!existing || Math.abs(existing - amount) > 0.2) {
-      fill = await setPolyTradeAmount(amount, true);
+      fill = await setBcPredictionsAmount(amount, true);
     }
   }
 
@@ -1821,7 +1850,7 @@ function scanPredictionsBoard() {
     }
   }
 
-  const cartSlip = readPolymarketSlip();
+  const cartSlip = readBcSlip();
   if (cartSlip?.odds > 1.01 && cartSlip.teamLabel) {
     const key = `${cartSlip.homeTeam || cartSlip.teamLabel}|${cartSlip.awayTeam || ''}`.toLowerCase();
     if (!seen.has(key)) {
@@ -1853,7 +1882,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg.type === 'READ_SLIP') {
-    sendResponse({ slip: readPolymarketSlip() });
+    sendResponse({ slip: readBcSlip() });
     return false;
   }
   if (msg.type === 'SCAN_BOARD') {
@@ -1867,11 +1896,11 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     sendResponse(scanPredictionsBoard());
     return false;
   }
-  if (msg.type === 'PROBE_POLY') {
+  if (msg.type === 'PROBE_BC' || msg.type === 'PROBE_POLY') {
     sendResponse({ ok: true, probe: probePolyBetUi() });
     return false;
   }
-  if (msg.type === 'SET_POLY_AMOUNT') {
+  if (msg.type === 'SET_BC_AMOUNT' || msg.type === 'SET_POLY_AMOUNT') {
     setBcStakeAmount(msg.amount, msg.force !== false).then(sendResponse);
     return true;
   }
@@ -1882,10 +1911,14 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 });
 
 try {
+  window.__bcPlaceBet = placeBcBet;
+  window.__bcSetAmount = setBcStakeAmount;
+  window.__bcProbe = probePolyBetUi;
+  window.__bcReadSlip = readBcSlip;
   window.__polyPlaceBet = placeBcBet;
   window.__polySetAmount = setBcStakeAmount;
   window.__polyProbe = probePolyBetUi;
-  window.__polyReadSlip = readPolymarketSlip;
+  window.__polyReadSlip = readBcSlip;
 } catch (_) {}
 
 (function observe() {
@@ -1900,7 +1933,7 @@ try {
   }
 
   function tick() {
-    const slip = readPolymarketSlip();
+    const slip = readBcSlip();
     if (!slip || !slip.odds || slip.odds <= 1) {
       if (last !== '') {
         last = '';
