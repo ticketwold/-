@@ -169,10 +169,13 @@
     walkDeep(scope, (node) => {
       if (node.nodeType !== 1 || !visible(node)) return;
       const t = slipText(node);
-      if (!/^\d+(?:\.\d+)?\s*USDT$/i.test(t) && !/^0\s*USDT$/i.test(t)) return;
+      if (!/\d+(?:\.\d+)?\s*USDT/i.test(t)) return;
       if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') return;
+      if (t.length > 40) return;
       let score = 10;
-      if (node.closest?.('[class*="slip"], [class*="Slip"], [class*="counter"], [class*="Counter"]')) score += 50;
+      if (/^0(?:\.\d+)?\s*USDT$/i.test(t)) score += 80;
+      if (node.closest?.('[class*="slip"], [class*="Slip"], [class*="counter"], [class*="Counter"], [class*="stake"], [class*="Stake"]')) score += 50;
+      if (node.getAttribute?.('role') === 'spinbutton') score += 60;
       if (score > bestScore) {
         bestScore = score;
         best = node;
@@ -273,7 +276,17 @@
       const shell = findClickableStakeShell(slip || document.documentElement);
       if (shell) {
         try { shell.click(); } catch (_) {}
+        try { shell.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (_) {}
         inp = findStakeInput(slip || document);
+      }
+    }
+
+    if (!inp) {
+      for (const el of collectAll('[role="spinbutton"], [class*="counter"], [class*="Counter"]', slip || document.documentElement)) {
+        if (!visible(el)) continue;
+        try { el.click(); } catch (_) {}
+        inp = findStakeInput(slip || document);
+        if (inp) break;
       }
     }
 

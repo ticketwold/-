@@ -21,8 +21,8 @@ function readMainWorldSlipRaw() {
     script.textContent = `(function(){
       var r=null;
       try{
-        if(typeof __bcScrapeOdds==='function'){var x=__bcScrapeOdds();if(x&&(x.odds>1.01||x.ok&&x.odds>1.01))r=x;}
-        if(!r&&window.__bcApiSlip&&window.__bcApiSlip.odds>1.01)r=window.__bcApiSlip;
+        if(typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&(n.odds>1.01||n.ok&&n.odds>1.01))r=n;}
+        if(!r&&typeof __bcScrapeOdds==='function'){var x=__bcScrapeOdds();if(x&&(x.odds>1.01||x.ok&&x.odds>1.01))r=x;}
       }catch(e){}
       document.documentElement.setAttribute('${attr}',JSON.stringify(r));
     })();`;
@@ -41,16 +41,18 @@ function normalizeSportsSlip(raw) {
   const odds = raw.odds > 1.01 ? raw.odds : null;
   if (!odds) return null;
   const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
-  const stake = raw.stake > 0 ? raw.stake : null;
-  const payout = raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);
-  const fromPayout = !!raw.fromPayout || (stake > 0 && payout > stake);
+  const kind = raw.sourceKind || raw.method || '';
+  const apiOnly = kind === 'bc-api' || raw.method === 'api-cache';
+  const stake = !apiOnly && raw.stake > 0 ? raw.stake : null;
+  const payout = !apiOnly && raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);
+  const fromPayout = !apiOnly && (!!raw.fromPayout || (stake > 0 && payout > stake));
   return {
     source: 'bcgame',
     odds,
     teamLabel: team,
     outcome: team,
     selectionText: raw.selectionText || team,
-    displayLabel: raw.displayLabel || `${odds.toFixed(3)}${stake ? ` · ${stake} USDT` : ''}`,
+    displayLabel: odds.toFixed(3),
     stake,
     payout,
     toWin: fromPayout && payout && stake ? payout - stake : null,

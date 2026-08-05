@@ -237,8 +237,11 @@ function formatOdds(slip) {
     if (slip.needsStake) return '금액입력';
     return '-';
   }
-  if (slip.fromPayout) return slip.displayLabel || slip.odds.toFixed(3);
-  if (slip.displayLabel) return slip.displayLabel;
+  if (slip.fromPayout) {
+    const lbl = slip.displayLabel || '';
+    if (/당첨|to\s*win/i.test(lbl)) return lbl;
+    return slip.odds.toFixed(3);
+  }
   if (slip.priceCents != null) return `${slip.priceCents}¢ (${slip.odds.toFixed(3)})`;
   return slip.odds.toFixed(3);
 }
@@ -482,7 +485,7 @@ async function injectReadBcSports(tabId, frameId = 0) {
                 teamLabel: team,
                 outcome: team,
                 selectionText: r.selectionText || team,
-                displayLabel: r.displayLabel || `${odds.toFixed(3)}${stake ? ` · ${stake} USDT` : ''}`,
+                displayLabel: odds.toFixed(3),
                 stake,
                 payout,
                 fromPayout: !!r.fromPayout || (stake > 0 && payout > stake),
@@ -491,18 +494,6 @@ async function injectReadBcSports(tabId, frameId = 0) {
                 marketKind: 'ml'
               };
             }
-          }
-          if (window.__bcApiSlip?.odds > 1.01) {
-            const r = window.__bcApiSlip;
-            return {
-              source: 'bcgame',
-              odds: r.odds,
-              teamLabel: r.teamLabel || '',
-              fromPayout: !!r.fromPayout,
-              fromSlip: true,
-              sourceKind: 'bc-api',
-              marketKind: 'ml'
-            };
           }
         } catch (_) {}
         return null;
@@ -541,6 +532,7 @@ function scoreBcSlip(slip) {
   if (slip.sourceKind === 'bc-native-slip') s += 900;
   else if (slip.sourceKind === 'sports-slip') s += 500;
   else if (slip.sourceKind === 'sports-board-selected') s -= 600;
+  else if (slip.sourceKind === 'bc-api') s -= 900;
   if (slip.fromPayout) s += 200;
   if (slip.teamLabel) s += 150;
   if (slip.stake > 0) s += 50;
@@ -1106,6 +1098,13 @@ async function ensureBcStakeScripts(tabId) {
         world: 'MAIN'
       });
     } catch (_) {}
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        files: ['bc_slip_read.js'],
+        world: 'MAIN'
+      });
+    } catch (_) {}
   }
 }
 
@@ -1209,6 +1208,7 @@ function slipSourceRank(slip) {
   if (slip.sourceKind === 'sports-slip') return 3;
   if (slip.fromPayout) return 2;
   if (slip.sourceKind === 'sports-board-selected') return 1;
+  if (slip.sourceKind === 'bc-api') return -1;
   return 0;
 }
 
@@ -1216,6 +1216,9 @@ function mergeSlipCached(cached, fresh) {
   if (!fresh || !slipOdds(fresh)) return cached || null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
+  const freshTeam = fresh.teamLabel || fresh.eventText || fresh.selectionText || '';
+  const cachedTeam = cached.teamLabel || cached.eventText || cached.selectionText || '';
+  if (freshTeam && cachedTeam && freshTeam !== cachedTeam) return { ...fresh, odds: freshOdds };
   if (slipSourceRank(fresh) > slipSourceRank(cached)) return { ...fresh, odds: freshOdds };
   if (slipSourceRank(cached) > slipSourceRank(fresh)) return { ...cached, odds: slipOdds(cached) };
   if (fresh.fromPayout && !cached.fromPayout) return { ...fresh, odds: freshOdds };
