@@ -1226,6 +1226,9 @@ function mergeSlipCached(cached, fresh) {
   if (cached.teamLabel && fresh.teamLabel && cached.teamLabel !== fresh.teamLabel) {
     return { ...fresh, odds: freshOdds };
   }
+  if (cached.odds && freshOdds && Math.abs(cached.odds - freshOdds) / Math.max(cached.odds, freshOdds) > 0.12) {
+    return { ...fresh, odds: freshOdds };
+  }
   return { ...cached, ...fresh, odds: freshOdds };
 }
 

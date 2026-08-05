@@ -256,10 +256,10 @@
     if (!slip) return 0;
     const presets = [10, 20, 50, 100, 300];
     const target = presets.find((p) => p >= amount) || presets[presets.length - 1];
-    for (const btn of collectAll('button, [role="button"]', slip)) {
+    for (const btn of collectAll('button, [role="button"], div[class*="chip"], span[class*="chip"]', slip)) {
       if (!visible(btn)) continue;
       const t = (btn.textContent || '').replace(/\s+/g, '').trim();
-      if (t === String(target) || t === `+${target}` || t === `$${target}`) {
+      if (t === String(target) || t === `+${target}` || t === `$${target}` || t === `${target}USDT`) {
         try { btn.click(); } catch (_) {}
         return 1;
       }
@@ -287,6 +287,14 @@
         try { el.click(); } catch (_) {}
         inp = findStakeInput(slip || document);
         if (inp) break;
+      }
+    }
+
+    if (!inp && target <= 50) {
+      clickPresetChip(slip, target);
+      const st = readStake(slip);
+      if (st > 0 && Math.abs(st - target) < Math.max(0.2, target * 0.15)) {
+        return { ok: true, stake: st, target, method: 'preset-chip-early', hasSlip: !!slip };
       }
     }
 
