@@ -21,7 +21,8 @@ function readMainWorldSlipRaw() {
     script.textContent = `(function(){
       var r=null;
       try{
-        if(typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&(n.odds>1.01||n.ok&&n.odds>1.01))r=n;}
+        if(typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&(d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
+        if(!r&&typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&(n.odds>1.01||n.ok&&n.odds>1.01))r=n;}
         if(!r&&typeof __bcScrapeOdds==='function'){var x=__bcScrapeOdds();if(x&&(x.odds>1.01||x.ok&&x.odds>1.01))r=x;}
       }catch(e){}
       document.documentElement.setAttribute('${attr}',JSON.stringify(r));
@@ -59,7 +60,6 @@ function normalizeSportsSlip(raw) {
     fromPayout,
     fromSlip: true,
     sourceKind: raw.sourceKind || 'sports-slip',
-    eventText: raw.eventText || '',
     homeTeam: raw.homeTeam || '',
     awayTeam: raw.awayTeam || '',
     marketKind: 'ml'

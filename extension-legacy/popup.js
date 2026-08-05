@@ -430,7 +430,7 @@ async function ensureBtiScript(tabId, frameId) {
 async function ensureBcScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
   if (bcScriptReady.has(key)) return;
-  const mainFiles = ['bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js'];
+  const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null
@@ -471,29 +471,42 @@ async function injectReadBcSports(tabId, frameId = 0) {
       target: { tabId, frameIds: [frameId] },
       world: 'MAIN',
       func: () => {
+        function pack(r) {
+          if (!r || !(r.odds > 1.01 || (r.ok && r.odds > 1.01))) return null;
+          const odds = r.odds;
+          const team = r.teamLabel || r.selectionText || r.outcome || '';
+          const stake = r.stake > 0 ? r.stake : null;
+          const payout = r.payout > 0 ? r.payout : null;
+          return {
+            source: 'bcgame',
+            odds,
+            teamLabel: team,
+            outcome: team,
+            eventText: r.eventText || '',
+            selectionText: r.selectionText || team,
+            displayLabel: odds.toFixed(3),
+            stake,
+            payout,
+            fromPayout: !!r.fromPayout || (stake > 0 && payout > stake),
+            fromSlip: true,
+            sourceKind: r.sourceKind || 'sports-slip',
+            marketKind: r.marketKind || 'ml'
+          };
+        }
         try {
+          if (typeof window.__bcReadDirectSlip === 'function') {
+            const d = pack(window.__bcReadDirectSlip());
+            if (d) return d;
+          }
+          if (typeof window.__bcReadNativeSlip === 'function') {
+            const n = window.__bcReadNativeSlip();
+            const p = pack(n?.ok ? n : n);
+            if (p) return p;
+          }
           if (typeof window.__bcScrapeOdds === 'function') {
-            const r = window.__bcScrapeOdds();
-            if (r && (r.odds > 1.01 || (r.ok && r.odds > 1.01))) {
-              const odds = r.odds;
-              const team = r.teamLabel || r.selectionText || r.outcome || '';
-              const stake = r.stake > 0 ? r.stake : null;
-              const payout = r.payout > 0 ? r.payout : null;
-              return {
-                source: 'bcgame',
-                odds,
-                teamLabel: team,
-                outcome: team,
-                selectionText: r.selectionText || team,
-                displayLabel: odds.toFixed(3),
-                stake,
-                payout,
-                fromPayout: !!r.fromPayout || (stake > 0 && payout > stake),
-                fromSlip: true,
-                sourceKind: r.sourceKind || 'sports-slip',
-                marketKind: 'ml'
-              };
-            }
+            const s = window.__bcScrapeOdds();
+            const p = pack(s?.ok ? s : s);
+            if (p && p.sourceKind !== 'sports-board-selected') return p;
           }
         } catch (_) {}
         return null;
@@ -513,7 +526,7 @@ function isCartSlip(slip) {
   if (kind === 'sports-board-selected') return false;
   if (src === 'board' || src === 'main-scrape' || src === 'board-emergency') return false;
   if (src === 'slip-display' || src === 'board-live' || src === 'merged' || src === 'slip') return true;
-  if (kind === 'bc-native-slip' || kind === 'sports-slip') return true;
+  if (kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-direct-slip') return true;
   if (slip.fromPayout) return true;
   return false;
 }
@@ -529,7 +542,8 @@ function scoreBcSlip(slip) {
   if (!slip?.odds || slip.odds <= 1) return -1;
   let s = slip.odds;
   if (slip.fromSlip) s += 1000;
-  if (slip.sourceKind === 'bc-native-slip') s += 900;
+  if (slip.sourceKind === 'bc-direct-slip') s += 1200;
+  else if (slip.sourceKind === 'bc-native-slip') s += 900;
   else if (slip.sourceKind === 'sports-slip') s += 500;
   else if (slip.sourceKind === 'sports-board-selected') s -= 600;
   else if (slip.sourceKind === 'bc-api') s -= 900;
@@ -549,13 +563,20 @@ async function readBcSlipAllFrames(bcTab) {
     if (seen.has(frameId)) continue;
     seen.add(frameId);
     await ensureBcScript(bcTab.id, frameId);
+
+    const injected = await injectReadBcSports(bcTab.id, frameId);
+    if (injected?.odds > 1) {
+      const sc = scoreBcSlip(injected);
+      if (injected.sourceKind === 'bc-direct-slip' && sc >= bestScore) return injected;
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = injected;
+      }
+    }
+
     const res = await sendBc(bcTab.id, { type: 'READ_SLIP' }, frameId);
     let slip = res?.slip;
-    if (!slip?.odds && !slip?.fromPayout) {
-      const injected = await injectReadBcSports(bcTab.id, frameId);
-      if (injected?.odds > 1) slip = injected;
-    }
-    if (!slip?.odds && !slip?.fromPayout && !slip?.needsStake) continue;
+    if (!slip?.odds && !slip?.fromPayout) continue;
     if (slip && !isCartSlip(slip) && !slip.fromPayout) continue;
     const sc = scoreBcSlip(slip);
     if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) return slip;
@@ -1204,6 +1225,7 @@ function slipOdds(slip) {
 
 function slipSourceRank(slip) {
   if (!slip) return 0;
+  if (slip.sourceKind === 'bc-direct-slip') return 5;
   if (slip.sourceKind === 'bc-native-slip') return 4;
   if (slip.sourceKind === 'sports-slip') return 3;
   if (slip.fromPayout) return 2;
@@ -1245,6 +1267,7 @@ function applySlipUpdate(source, slip, opts = {}) {
     else {
       const normalized = normalizeCartSlip(slip);
       if (normalized) cachedBc = normalized;
+      else if (slip?.odds > 1 && slip.sourceKind === 'bc-direct-slip') cachedBc = slip;
     }
   }
   updateSlipUI(cachedBti, cachedBc);
@@ -1269,7 +1292,12 @@ async function refreshSlips() {
       if (cartCheck.cartEmpty && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
     }
 
-    cachedBc = mergeSlipCached(cachedBc, normalizeCartSlip(poly) || poly);
+    cachedBc = (() => {
+      const norm = normalizeCartSlip(poly);
+      if (norm) return norm;
+      if (poly?.needsStake) return poly;
+      return null;
+    })();
     cachedBti = mergeSlipCached(cachedBti, bti);
 
     updateSlipUI(cachedBti, cachedBc);
@@ -1374,6 +1402,14 @@ async function probeBcFrame(tabId, frameId, url) {
         let score = 0;
         let slipOdds = 0;
         let sourceKind = '';
+        if (typeof window.__bcProbeDirectSlip === 'function') {
+          const d = window.__bcProbeDirectSlip();
+          score += d.score || 0;
+          if (d.odds > 1) {
+            slipOdds = d.odds;
+            sourceKind = 'bc-direct-slip';
+          }
+        }
         if (typeof window.__bcProbeStakeFrame === 'function') {
           const p = window.__bcProbeStakeFrame();
           score += p.score || 0;
@@ -1384,7 +1420,7 @@ async function probeBcFrame(tabId, frameId, url) {
           if (/베팅\s*슬립|bet\s*slip/i.test(body)) score += 50;
           if (/USDT/i.test(body)) score += 30;
         }
-        if (typeof window.__bcScrapeOdds === 'function') {
+        if (!slipOdds && typeof window.__bcScrapeOdds === 'function') {
           const r = window.__bcScrapeOdds();
           if (r?.odds > 1.01) {
             slipOdds = r.odds;
