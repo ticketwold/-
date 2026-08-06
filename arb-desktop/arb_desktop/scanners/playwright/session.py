@@ -42,6 +42,9 @@ def log_step(message: str) -> None:
     print(message, flush=True)
 
 
+LAUNCH_PERSISTENT_CONTEXT_TIMEOUT_SEC = 15
+
+
 class BrowserSession:
     """Chrome User Data + Default 프로필 직접 사용."""
 
@@ -64,13 +67,23 @@ class BrowserSession:
         try:
             self._pw = await async_playwright().start()
             launch_args = launch_args_for_profile(self.profile_directory)
-            self._context = await self._pw.chromium.launch_persistent_context(
-                user_data_dir=str(self.user_data_dir),
-                executable_path=str(settings.chrome_executable.resolve()),
-                headless=settings.headless,
-                viewport={"width": 1400, "height": 900},
-                args=launch_args,
-            )
+            log_step("[DEBUG] before launch_persistent_context")
+            try:
+                self._context = await asyncio.wait_for(
+                    self._pw.chromium.launch_persistent_context(
+                        user_data_dir=str(self.user_data_dir),
+                        executable_path=str(settings.chrome_executable.resolve()),
+                        headless=settings.headless,
+                        viewport={"width": 1400, "height": 900},
+                        args=launch_args,
+                    ),
+                    timeout=LAUNCH_PERSISTENT_CONTEXT_TIMEOUT_SEC,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                log_step("[ERROR] launch_persistent_context timeout")
+                await self.stop()
+                raise SystemExit(1) from None
+            log_step("[DEBUG] after launch_persistent_context")
             self._browser = None
 
             expected = expected_profile_path(self.user_data_dir, self.profile_directory)
