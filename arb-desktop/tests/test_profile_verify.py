@@ -13,11 +13,10 @@ from arb_desktop.scanners.playwright.profile_verify import (
 )
 
 
-def test_launch_args_include_user_data_and_profile(tmp_path: Path):
-    user_data = tmp_path / "arb-chrome-profile"
-    args = launch_args_for_automation(user_data, "Default")
-    assert f"--user-data-dir={user_data.resolve()}" in args
+def test_launch_args_exclude_user_data_dir():
+    args = launch_args_for_automation("Default")
     assert "--profile-directory=Default" in args
+    assert not any(arg.startswith("--user-data-dir=") for arg in args)
 
 
 def test_forbid_source_user_data_for_launch():

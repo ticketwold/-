@@ -39,10 +39,8 @@ def forbid_source_user_data_for_launch(
         pass
 
 
-def launch_args_for_automation(user_data_dir: Path, profile_subdir: str = AUTOMATION_PROFILE_SUBDIR) -> list[str]:
-    resolved = resolve_automation_user_data_dir(user_data_dir)
+def launch_args_for_automation(profile_subdir: str = AUTOMATION_PROFILE_SUBDIR) -> list[str]:
     return [
-        f"--user-data-dir={resolved}",
         f"--profile-directory={profile_subdir}",
         "--no-first-run",
         "--no-default-browser-check",

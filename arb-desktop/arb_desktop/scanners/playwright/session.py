@@ -71,30 +71,33 @@ class BrowserSession:
         self.automation_user_data_dir.mkdir(parents=True, exist_ok=True)
 
         log_step("[STEP1] Launch dedicated Chrome profile")
-        self._pw = await async_playwright().start()
+        try:
+            self._pw = await async_playwright().start()
+            launch_args = launch_args_for_automation(self.profile_subdirectory)
+            self._context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(self.automation_user_data_dir),
+                executable_path=str(settings.chrome_executable.resolve()),
+                headless=settings.headless,
+                viewport={"width": 1400, "height": 900},
+                args=launch_args,
+            )
+            self._browser = None
 
-        launch_args = launch_args_for_automation(self.automation_user_data_dir, self.profile_subdirectory)
-        self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self.automation_user_data_dir),
-            executable_path=str(settings.chrome_executable.resolve()),
-            headless=settings.headless,
-            viewport={"width": 1400, "height": 900},
-            args=launch_args,
-        )
-        self._browser = None
-
-        expected = expected_profile_path(self.automation_user_data_dir, self.profile_subdirectory)
-        actual = await detect_actual_profile_path(
-            self._context,
-            user_data_dir=self.automation_user_data_dir,
-            profile_subdir=self.profile_subdirectory,
-        )
-        verify_profile_path(
-            expected=expected,
-            actual=actual,
-            requested_user_data_dir=self.automation_user_data_dir,
-            requested_profile=self.profile_subdirectory,
-        )
+            expected = expected_profile_path(self.automation_user_data_dir, self.profile_subdirectory)
+            actual = await detect_actual_profile_path(
+                self._context,
+                user_data_dir=self.automation_user_data_dir,
+                profile_subdir=self.profile_subdirectory,
+            )
+            verify_profile_path(
+                expected=expected,
+                actual=actual,
+                requested_user_data_dir=self.automation_user_data_dir,
+                requested_profile=self.profile_subdirectory,
+            )
+        except Exception:
+            await self.stop()
+            raise
 
         log_step("[STEP2] Open BC")
         log_step("[STEP3] Open x10")
@@ -174,13 +177,18 @@ class BrowserSession:
     async def stop(self) -> None:
         await self.bti_rest.close()
         await self.sptpub_client.close()
-        if self._context:
-            await _safe_close(lambda: self._context.close())  # type: ignore[union-attr]
-        if self._browser:
-            await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
-        if self._pw:
-            await _safe_close(lambda: self._pw.stop())  # type: ignore[union-attr]
-        self._pw = self._browser = self._context = None
+        context = self._context
+        browser = self._browser
+        pw = self._pw
+        self._context = None
+        self._browser = None
+        self._pw = None
+        if context:
+            await _safe_close(lambda: context.close())
+        if browser:
+            await _safe_close(lambda: browser.close())
+        if pw:
+            await _safe_close(lambda: pw.stop())
 
     async def wait_for_frames(self, page: Page, timeout_ms: int = 8000) -> None:
         deadline = asyncio.get_event_loop().time() + timeout_ms / 1000
