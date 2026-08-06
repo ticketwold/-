@@ -52,6 +52,8 @@ function updateSlipStatus(site, result) {
   const key = site === "bc" ? "bc" : "x10";
   if (!result || result.empty || !result.items?.length) {
     slipStatus[key] = "empty";
+  } else if (result.items[0]?.status === "suspended") {
+    slipStatus[key] = "suspended";
   } else if (result.items[0]?.status === "active") {
     slipStatus[key] = "active";
   } else {

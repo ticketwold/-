@@ -1,264 +1,412 @@
 from __future__ import annotations
 
-import asyncio
+import os
+import subprocess
 import sys
-from typing import Any
+import webbrowser
+from pathlib import Path
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtGui import QFont, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
+    QDoubleSpinBox,
+    QStatusBar,
     QVBoxLayout,
     QWidget,
-    QDoubleSpinBox,
-    QCheckBox,
-    QStatusBar,
 )
 
-from arb_desktop.config import settings
-from arb_desktop.engine.coordinator import Coordinator
-from arb_desktop.models import EngineTick
+from arb_desktop.bridge.message_models import BridgeStatus, BetSlipState
+from arb_desktop.betslip.matcher import calculate_arbitrage
+from arb_desktop.ui.bridge_worker import BridgeWorker
+from arb_desktop.ui.log_manager import LogManager
+from arb_desktop.ui.log_window import LogWindow
+from arb_desktop.ui.settings_store import AppSettings, SettingsStore
+from arb_desktop.ui.setup_wizard import SetupWizard
+from arb_desktop.ui.watch_engine import WatchMetrics
 
 
-class AsyncWorker(QObject):
-    tick = pyqtSignal(object)
-    status = pyqtSignal(str)
-    error = pyqtSignal(str)
-    ready = pyqtSignal()
-    bridge_token = pyqtSignal(str)
-    bridge_status = pyqtSignal(object)
-
-    def __init__(self):
-        super().__init__()
-        self._coordinator: Coordinator | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @pyqtSlot()
-    def bootstrap(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._coordinator = Coordinator(on_tick=lambda t: self.tick.emit(t))
-            self._coordinator.set_bridge_status_handler(
-                lambda s: self.bridge_status.emit(s)
-            )
-            self._loop.run_until_complete(self._coordinator.start())
-            self.bridge_token.emit(self._coordinator.bridge_token)
-            self.ready.emit()
-            self._loop.run_forever()
-        except Exception as exc:
-            self.error.emit(str(exc))
-        finally:
-            if self._coordinator and self._loop:
-                self._loop.run_until_complete(self._coordinator.stop())
-            if self._loop:
-                self._loop.close()
-
-    @pyqtSlot()
-    def start_scan(self) -> None:
-        if self._coordinator:
-            self._coordinator.start_loop()
-            self.status.emit("스캔 시작")
-
-    @pyqtSlot()
-    def stop_scan(self) -> None:
-        if self._coordinator:
-            self._coordinator.stop_loop()
-            self.status.emit("스캔 정지")
-
-    @pyqtSlot(float, int)
-    def update_settings(self, min_profit: float, bti_stake: int) -> None:
-        if self._coordinator:
-            self._coordinator.engine.min_profit_pct = min_profit
-            self._coordinator.engine.bti_stake_krw = float(bti_stake)
+def _chrome_bridge_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "chrome-bridge"  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parents[3] / "chrome-bridge"
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("양방 배팅 데스크톱 v1.3.0 (Chrome Bridge)")
-        self.resize(1100, 760)
+        self.setWindowTitle("arb-desktop — 양방 배팅 데스크톱")
+        self.resize(980, 820)
+
+        self._store = SettingsStore()
+        self._settings = self._store.load()
+        self._store.apply_to_runtime(self._settings)
+
+        self._log_window: LogWindow | None = None
+        self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        root = QVBoxLayout(central)
 
-        # Bridge connection status
-        bridge_box = QVBoxLayout()
-        self.lbl_bridge = QLabel("Chrome Bridge: DISCONNECTED")
-        self.lbl_bc_tab = QLabel("BC.Game tab: NOT FOUND")
-        self.lbl_x10_tab = QLabel("x10x10s tab: NOT FOUND")
-        self.lbl_bc_slip = QLabel("BC BetSlip: EMPTY")
-        self.lbl_x10_slip = QLabel("x10 BetSlip: EMPTY")
-        for lbl in (
-            self.lbl_bridge,
-            self.lbl_bc_tab,
-            self.lbl_x10_tab,
-            self.lbl_bc_slip,
-            self.lbl_x10_slip,
-        ):
-            lbl.setFont(QFont("Consolas", 10))
-            bridge_box.addWidget(lbl)
-        layout.addLayout(bridge_box)
-
-        # Header metrics
-        metrics = QHBoxLayout()
-        self.lbl_bti = QLabel("텐텐뱃: —")
-        self.lbl_bc = QLabel("BC.Game: —")
-        self.lbl_latency = QLabel("감지: — ms | 계산: — ms | 틱: — ms")
-        self.lbl_fx = QLabel(f"USDT/KRW: {settings.default_usdt_rate:,.0f}")
-        for lbl in (self.lbl_bti, self.lbl_bc, self.lbl_latency, self.lbl_fx):
-            lbl.setFont(QFont("Consolas", 10))
-            metrics.addWidget(lbl)
-        layout.addLayout(metrics)
-
-        # Controls
-        controls = QHBoxLayout()
-        self.btn_start = QPushButton("스캔 시작")
-        self.btn_stop = QPushButton("스캔 정지")
-        self.btn_stop.setEnabled(False)
-        self.spin_min_profit = QDoubleSpinBox()
-        self.spin_min_profit.setRange(0, 50)
-        self.spin_min_profit.setValue(settings.min_profit_pct)
-        self.spin_min_profit.setSuffix(" %")
-        self.spin_stake = QSpinBox()
-        self.spin_stake.setRange(1000, 10_000_000)
-        self.spin_stake.setValue(settings.default_bti_stake_krw)
-        self.spin_stake.setSuffix(" KRW")
-        self.chk_dry = QCheckBox("드라이런 (실제 배팅 안 함)")
-        self.chk_dry.setChecked(True)
-
-        controls.addWidget(QLabel("최소 수익"))
-        controls.addWidget(self.spin_min_profit)
-        controls.addWidget(QLabel("텐텐뱃 금액"))
-        controls.addWidget(self.spin_stake)
-        controls.addWidget(self.chk_dry)
-        controls.addStretch()
-        controls.addWidget(self.btn_start)
-        controls.addWidget(self.btn_stop)
-        layout.addLayout(controls)
-
-        # Opportunities table
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(
-            ["경기", "BC팀", "BC배당", "텐텐쪽", "텐텐배당", "수익%", "BC USDT", "감지ms", "계산ms"]
-        )
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.table)
+        root.addWidget(self._build_connection_group())
+        root.addWidget(self._build_settings_group())
+        root.addWidget(self._build_live_group())
+        root.addWidget(self._build_state_group())
+        root.addWidget(self._build_buttons_group())
+        root.addWidget(self._build_log_preview())
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("Chrome Bridge 서버 시작 중… (기존 Chrome 탭 유지)")
+        self.status.showMessage("Bridge 서버 시작 중…")
 
-        # Async worker thread
         self._thread = QThread()
-        self._worker = AsyncWorker()
+        self._worker = BridgeWorker(self._store)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.bootstrap)
-        self._worker.ready.connect(self._on_ready)
-        self._worker.bridge_token.connect(self._on_bridge_token)
-        self._worker.tick.connect(self._on_tick)
-        self._worker.status.connect(self.status.showMessage)
+        self._worker.ready.connect(self._on_bridge_ready)
         self._worker.error.connect(self._on_error)
         self._worker.bridge_status.connect(self._on_bridge_status)
+        self._worker.bridge_token.connect(self._on_bridge_token)
+        self._worker.slip_updated.connect(self._on_slip_updated)
+        self._worker.watch_state.connect(self._on_watch_state)
+        self._worker.log_message.connect(self._on_worker_log)
 
-        self.btn_start.clicked.connect(self._start)
-        self.btn_stop.clicked.connect(self._stop)
-        self.spin_min_profit.valueChanged.connect(self._settings_changed)
-        self.spin_stake.valueChanged.connect(self._settings_changed)
-
+        self._wire_buttons()
+        self._load_settings_to_ui()
         self._thread.start()
 
-    def _on_bridge_token(self, token: str) -> None:
-        if token:
-            print(f"[BRIDGE] Token: {token}", flush=True)
+        if not self._settings.setup_completed:
+            self._run_setup_wizard()
 
-    def _on_ready(self) -> None:
-        self.status.showMessage("준비 완료 — Chrome에서 BC.Game / x10x10s 탭을 열고 확장프로그램 연결")
-        self.btn_start.setEnabled(True)
+    def _build_connection_group(self) -> QGroupBox:
+        box = QGroupBox("연결 상태")
+        grid = QGridLayout(box)
+        font = QFont("Consolas", 10)
+        self.lbl_bridge = QLabel("Chrome Bridge: DISCONNECTED")
+        self.lbl_bc_tab = QLabel("BC.Game 탭: NOT FOUND")
+        self.lbl_x10_tab = QLabel("x10x10s 탭: NOT FOUND")
+        self.lbl_bc_slip = QLabel("BC BetSlip: EMPTY")
+        self.lbl_x10_slip = QLabel("x10 BetSlip: EMPTY")
+        for i, lbl in enumerate(
+            [self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_bc_slip, self.lbl_x10_slip]
+        ):
+            lbl.setFont(font)
+            grid.addWidget(lbl, i, 0)
 
-    def _on_bridge_status(self, status) -> None:
-        lines = status.format_lines()
+        token_row = QHBoxLayout()
+        self.edit_token = QLineEdit()
+        self.edit_token.setReadOnly(True)
+        self.edit_token.setPlaceholderText("Bridge Token")
+        btn_copy = QPushButton("Token 복사")
+        btn_copy.clicked.connect(self._copy_token)
+        btn_ext = QPushButton("확장 옵션 열기")
+        btn_ext.clicked.connect(self._open_extension_help)
+        token_row.addWidget(QLabel("Token:"))
+        token_row.addWidget(self.edit_token, 1)
+        token_row.addWidget(btn_copy)
+        token_row.addWidget(btn_ext)
+        grid.addLayout(token_row, 5, 0)
+        return box
+
+    def _build_settings_group(self) -> QGroupBox:
+        box = QGroupBox("사용자 설정")
+        form = QFormLayout(box)
+        self.spin_target = QDoubleSpinBox()
+        self.spin_target.setRange(0, 50)
+        self.spin_target.setSuffix(" %")
+        self.spin_bti_stake = QSpinBox()
+        self.spin_bti_stake.setRange(1000, 50_000_000)
+        self.spin_bti_stake.setSuffix(" KRW")
+        self.lbl_bc_stake = QLabel("— USDT")
+        self.spin_usdt = QDoubleSpinBox()
+        self.spin_usdt.setRange(100, 5000)
+        self.spin_usdt.setValue(self._settings.usdt_rate)
+        self.combo_round_krw = QComboBox()
+        self.combo_round_krw.addItems(["100", "500", "1000", "10000"])
+        self.combo_round_usdt = QComboBox()
+        self.combo_round_usdt.addItems(["0.01", "0.1", "1.0"])
+        self.spin_stabilize = QDoubleSpinBox()
+        self.spin_stabilize.setRange(0.5, 60)
+        self.spin_stabilize.setSuffix(" s")
+        self.spin_stable_count = QSpinBox()
+        self.spin_stable_count.setRange(1, 20)
+        self.chk_dry = QCheckBox("드라이런 (실제 배팅 안 함)")
+        self.chk_dry.setChecked(True)
+        self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 직접 확인했습니다")
+        form.addRow("목표 수익률", self.spin_target)
+        form.addRow("텐텐벳 배팅금액", self.spin_bti_stake)
+        form.addRow("BC.Game 자동 계산 금액", self.lbl_bc_stake)
+        form.addRow("USDT/KRW 환율", self.spin_usdt)
+        form.addRow("원화 반올림 단위", self.combo_round_krw)
+        form.addRow("USDT 반올림 단위", self.combo_round_usdt)
+        form.addRow("배당 안정화 시간", self.spin_stabilize)
+        form.addRow("연속 동일 배당 확인", self.spin_stable_count)
+        form.addRow(self.chk_dry)
+        form.addRow(self.chk_confirm)
+        return box
+
+    def _build_live_group(self) -> QGroupBox:
+        box = QGroupBox("실시간 값")
+        grid = QGridLayout(box)
         labels = [
-            self.lbl_bridge,
-            self.lbl_bc_tab,
-            self.lbl_x10_tab,
-            self.lbl_bc_slip,
-            self.lbl_x10_slip,
+            ("텐텐벳 현재 배당", "lbl_bti_odds"),
+            ("BC.Game 현재 배당", "lbl_bc_odds"),
+            ("총 배팅금", "lbl_total_stake"),
+            ("텐텐벳 예상수익", "lbl_bti_return"),
+            ("BC 예상수익", "lbl_bc_return"),
+            ("최저 보장 수익", "lbl_min_profit"),
+            ("최저 보장 수익률", "lbl_min_profit_pct"),
         ]
+        for row, (title, attr) in enumerate(labels):
+            grid.addWidget(QLabel(title), row, 0)
+            lbl = QLabel("—")
+            lbl.setFont(QFont("Consolas", 10))
+            setattr(self, attr, lbl)
+            grid.addWidget(lbl, row, 1)
+        return box
+
+    def _build_state_group(self) -> QGroupBox:
+        box = QGroupBox("상태")
+        layout = QVBoxLayout(box)
+        self.lbl_engine_state = QLabel("IDLE")
+        self.lbl_engine_state.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
+        self.lbl_engine_msg = QLabel("")
+        layout.addWidget(self.lbl_engine_state)
+        layout.addWidget(self.lbl_engine_msg)
+        return box
+
+    def _build_buttons_group(self) -> QWidget:
+        w = QWidget()
+        row = QHBoxLayout(w)
+        self.btn_reconnect = QPushButton("연결 다시 확인")
+        self.btn_watch_start = QPushButton("자동감시 시작")
+        self.btn_watch_stop = QPushButton("자동감시 중지")
+        self.btn_watch_stop.setEnabled(False)
+        self.btn_dry_test = QPushButton("드라이런 테스트")
+        self.btn_save = QPushButton("설정 저장")
+        self.btn_log = QPushButton("로그 열기")
+        self.btn_quit = QPushButton("프로그램 종료")
+        for btn in (
+            self.btn_reconnect,
+            self.btn_watch_start,
+            self.btn_watch_stop,
+            self.btn_dry_test,
+            self.btn_save,
+            self.btn_log,
+            self.btn_quit,
+        ):
+            row.addWidget(btn)
+        return w
+
+    def _build_log_preview(self) -> QGroupBox:
+        box = QGroupBox("최근 로그")
+        layout = QVBoxLayout(box)
+        self.lbl_last_log = QLabel("—")
+        self.lbl_last_log.setFont(QFont("Consolas", 9))
+        self.lbl_last_log.setWordWrap(True)
+        layout.addWidget(self.lbl_last_log)
+        return box
+
+    def _wire_buttons(self) -> None:
+        self.btn_reconnect.clicked.connect(self._worker.reconnect)
+        self.btn_watch_start.clicked.connect(self._start_watch)
+        self.btn_watch_stop.clicked.connect(self._stop_watch)
+        self.btn_dry_test.clicked.connect(self._dry_run_test)
+        self.btn_save.clicked.connect(self._save_settings)
+        self.btn_log.clicked.connect(self._open_log_window)
+        self.btn_quit.clicked.connect(self.close)
+        self.spin_target.valueChanged.connect(self._update_preview_calc)
+        self.spin_bti_stake.valueChanged.connect(self._update_preview_calc)
+        self.spin_usdt.valueChanged.connect(self._update_preview_calc)
+
+    def _load_settings_to_ui(self) -> None:
+        s = self._settings
+        self.spin_target.setValue(s.target_profit_pct)
+        self.spin_bti_stake.setValue(s.bti_stake_krw)
+        self.spin_usdt.setValue(s.usdt_rate)
+        self.spin_stabilize.setValue(s.stabilize_seconds)
+        self.spin_stable_count.setValue(s.stable_count_required)
+        self.chk_dry.setChecked(s.dry_run)
+        self._set_combo_value(self.combo_round_krw, str(s.round_unit_krw))
+        self._set_combo_value(self.combo_round_usdt, str(s.round_unit_usdt))
+        self.edit_token.setText(s.bridge_token)
+
+    def _set_combo_value(self, combo: QComboBox, value: str) -> None:
+        idx = combo.findText(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _collect_settings(self) -> AppSettings:
+        s = self._settings
+        s.target_profit_pct = self.spin_target.value()
+        s.bti_stake_krw = self.spin_bti_stake.value()
+        s.usdt_rate = self.spin_usdt.value()
+        s.stabilize_seconds = self.spin_stabilize.value()
+        s.stable_count_required = self.spin_stable_count.value()
+        s.dry_run = self.chk_dry.isChecked()
+        s.round_unit_krw = int(self.combo_round_krw.currentText())
+        s.round_unit_usdt = float(self.combo_round_usdt.currentText())
+        s.bridge_token = self.edit_token.text().strip() or s.bridge_token
+        return s
+
+    def _save_settings(self) -> None:
+        self._settings = self._collect_settings()
+        self._store.save(self._settings)
+        self._worker.update_settings(self._settings)
+        self.status.showMessage("설정 저장됨")
+        self._log.log(site="APP", status="SAVE", message="settings saved")
+
+    def _copy_token(self) -> None:
+        token = self.edit_token.text().strip()
+        if token:
+            QGuiApplication.clipboard().setText(token)
+            self.status.showMessage("Token 복사됨 — 확장 옵션 페이지에 붙여넣으세요")
+
+    def _open_extension_help(self) -> None:
+        ext_dir = _chrome_bridge_dir()
+        msg = (
+            f"1. chrome://extensions 열기\n"
+            f"2. 개발자 모드 → '압축해제된 확장 프로그램 로드'\n"
+            f"3. 폴더 선택: {ext_dir}\n"
+            f"4. 확장 '옵션' 에서 Token / Port 입력\n"
+            f"5. Token 복사 버튼으로 값 붙여넣기"
+        )
+        QMessageBox.information(self, "Chrome 확장 설치", msg)
+        webbrowser.open("chrome://extensions")
+
+    def _run_setup_wizard(self) -> None:
+        wizard = SetupWizard(self)
+        if wizard.exec():
+            self._settings.setup_completed = True
+            self._store.save(self._settings)
+
+    def _on_bridge_ready(self) -> None:
+        self.status.showMessage("Bridge 서버 실행 중 — 확장 프로그램 연결 대기")
+        self.btn_watch_start.setEnabled(True)
+
+    def _on_bridge_token(self, token: str) -> None:
+        if token and not self.edit_token.text():
+            self.edit_token.setText(token)
+            self._settings.bridge_token = token
+            self._store.save(self._settings)
+
+    def _on_bridge_status(self, status: BridgeStatus) -> None:
+        lines = status.format_lines()
+        # Extend slip labels for SUSPENDED from manager if needed
+        labels = [self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_bc_slip, self.lbl_x10_slip]
         for lbl, line in zip(labels, lines, strict=True):
-            lbl.setText(line)
+            lbl.setText(line.replace("BC.Game tab", "BC.Game 탭").replace("x10x10s tab", "x10x10s 탭"))
+        if status.bridge.value == "CONNECTED":
+            self.status.showMessage("Chrome Bridge 연결됨")
+        else:
+            self.status.showMessage("Chrome Bridge 연결 대기 중…")
+
+    def _on_slip_updated(self, site: str, read) -> None:
+        self._update_preview_calc(read_bc=(site == "bc"), read_bti=(site == "bti"), read=read)
+
+    def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
+        self.lbl_engine_state.setText(state)
+        self.lbl_engine_msg.setText(message)
+        self._apply_metrics(metrics)
+
+    def _on_worker_log(self, site: str, status: str, odds: str, profit: str, message: str, dedup: str) -> None:
+        self._log.log(site=site, status=status, odds=odds, profit=profit, message=message, dedup_key=dedup)
+
+    def _on_log_entry(self, entry) -> None:
+        line = entry.format_line()
+        self.lbl_last_log.setText(line)
+        if self._log_window:
+            self._log_window.append(entry.timestamp, entry.site, entry.status, entry.odds, entry.profit, entry.message)
 
     def _on_error(self, msg: str) -> None:
         self.status.showMessage(f"오류: {msg}")
+        self._log.log(site="APP", status="ERROR", message=msg)
 
-    def _start(self) -> None:
-        self._settings_changed()
-        self._worker.start_scan()
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
+    def _apply_metrics(self, m: WatchMetrics) -> None:
+        self.lbl_bti_odds.setText(f"{m.bti_odds:.3f}" if m.bti_odds else "—")
+        self.lbl_bc_odds.setText(f"{m.bc_odds:.3f}" if m.bc_odds else "—")
+        self.lbl_total_stake.setText(f"{m.total_stake_krw:,.0f} KRW" if m.total_stake_krw else "—")
+        self.lbl_bti_return.setText(f"{m.bti_return_krw:,.0f} KRW" if m.bti_return_krw else "—")
+        self.lbl_bc_return.setText(f"{m.bc_return_krw:,.0f} KRW" if m.bc_return_krw else "—")
+        self.lbl_min_profit.setText(f"{m.min_guaranteed_profit_krw:,.0f} KRW" if m.total_stake_krw else "—")
+        self.lbl_min_profit_pct.setText(f"{m.min_guaranteed_profit_pct:.2f} %" if m.total_stake_krw else "—")
+        if m.bc_stake_usdt:
+            self.lbl_bc_stake.setText(f"{m.bc_stake_usdt:.2f} USDT")
 
-    def _stop(self) -> None:
-        self._worker.stop_scan()
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-
-    def _settings_changed(self) -> None:
-        self._worker.update_settings(self.spin_min_profit.value(), self.spin_stake.value())
-
-    def _on_tick(self, tick: EngineTick) -> None:
-        bti = tick.bti
-        bc = tick.bc
-        if tick.betslip:
-            slip = tick.betslip
-            self.lbl_bti.setText(
-                f"텐텐뱃 카트: {slip.bti.first.selection if slip.bti.first else '비어있음'} "
-                f"| {slip.bti.first.status.value if slip.bti.first else '-'}"
-            )
-            self.lbl_bc.setText(
-                f"BC 카트: {slip.bc.first.selection if slip.bc.first else '비어있음'} "
-                f"| {slip.bc.first.status.value if slip.bc.first else '-'}"
-            )
-        else:
-            if bti:
-                self.lbl_bti.setText(
-                    f"텐텐뱃: {len(bti.matchups)}경기 | {bti.tier.value} | {bti.latency_ms:.1f}ms"
-                )
-            if bc:
-                self.lbl_bc.setText(
-                    f"BC: {len(bc.matchups)}경기 | {bc.tier.value} | {bc.latency_ms:.1f}ms"
-                )
-        self.lbl_latency.setText(
-            f"감지: {max(bti.latency_ms if bti else 0, bc.latency_ms if bc else 0):.1f}ms "
-            f"| 계산: {tick.calc_latency_ms:.1f}ms | 틱: {tick.tick_latency_ms:.1f}ms"
+    def _update_preview_calc(self, read_bc: bool = False, read_bti: bool = False, read=None) -> None:
+        if not self._worker.bridge_connected:
+            return
+        bc = self._worker.get_bc_read()
+        bti = self._worker.get_bti_read()
+        if read_bc and read:
+            bc = read
+        if read_bti and read:
+            bti = read
+        if not bc.first or not bti.first:
+            return
+        arb = calculate_arbitrage(
+            bc.first,
+            bti.first,
+            bti_base_stake_krw=self.spin_bti_stake.value(),
+            usdt_rate=self.spin_usdt.value(),
         )
+        if not arb:
+            return
+        self.lbl_bti_odds.setText(f"{arb.odds_b:.3f}" if arb.odds_b else "—")
+        self.lbl_bc_odds.setText(f"{arb.odds_a:.3f}" if arb.odds_a else "—")
+        if arb.stake_a is not None:
+            self.lbl_bc_stake.setText(f"{arb.stake_a:.2f} USDT")
 
-        self.table.setRowCount(len(tick.opportunities))
-        for row, opp in enumerate(tick.opportunities[:100]):
-            vals = [
-                f"{opp.home} vs {opp.away}",
-                opp.bc_team,
-                f"{opp.bc_odds:.3f}",
-                opp.bti_side,
-                f"{opp.bti_odds:.3f}",
-                f"{opp.profit_pct:.2f}",
-                f"{opp.bc_stake_usdt:.2f}",
-                f"{opp.detection_ms:.1f}",
-                f"{opp.calc_ms:.1f}",
-            ]
-            for col, val in enumerate(vals):
-                self.table.setItem(row, col, QTableWidgetItem(val))
+    def _start_watch(self) -> None:
+        if not self.chk_confirm.isChecked():
+            self.status.showMessage("반대 선택 확인 체크박스를 선택하세요")
+            return
+        self._settings = self._collect_settings()
+        self._worker.update_settings(self._settings)
+        self._worker.start_watch()
+        self.btn_watch_start.setEnabled(False)
+        self.btn_watch_stop.setEnabled(True)
+        self._log.log(site="APP", status="WATCH", message="auto watch started")
+
+    def _stop_watch(self) -> None:
+        self._worker.stop_watch()
+        self.btn_watch_start.setEnabled(True)
+        self.btn_watch_stop.setEnabled(False)
+        self._log.log(site="APP", status="WATCH", message="auto watch stopped")
+
+    def _dry_run_test(self) -> None:
+        self._settings = self._collect_settings()
+        self._worker.update_settings(self._settings)
+        self._worker.start_watch()
+        self.status.showMessage("드라이런 테스트 — READY 까지 감시 (Bet 클릭 없음)")
+
+    def _open_log_window(self) -> None:
+        if not self._log_window:
+            self._log_window = LogWindow(self)
+        self._log_window.show()
+        self._log_window.raise_()
+        path = self._log.open_log_file()
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
 
     def closeEvent(self, event) -> None:
-        self._worker.stop_scan()
+        self._worker.stop_watch()
+        self._worker.stop_bridge()
         self._thread.quit()
         self._thread.wait(3000)
         super().closeEvent(event)
@@ -266,6 +414,7 @@ class MainWindow(QMainWindow):
 
 def run_app() -> int:
     app = QApplication(sys.argv)
+    app.setApplicationName("arb-desktop")
     app.setStyle("Fusion")
     win = MainWindow()
     win.show()

@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from arb_desktop.betslip.models import BetSlipReadResult
+from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
 from arb_desktop.bridge.message_models import (
     BetSlipState,
     BridgeConnectionState,
@@ -73,11 +73,11 @@ class ConnectionManager:
         if site_key == "bc":
             self.bc_slip = read
             self.bc_tab = "found"
-            self.bc_betslip = "active" if read.first and read.first.status.value == "ACTIVE" else "empty"
+            self.bc_betslip = _slip_state_from_read(read)
         else:
             self.x10_slip = read
             self.x10_tab = "found"
-            self.x10_betslip = "active" if read.first and read.first.status.value == "ACTIVE" else "empty"
+            self.x10_betslip = _slip_state_from_read(read)
 
         self._notify_status()
         if self.on_slip_update:
@@ -101,6 +101,14 @@ class ConnectionManager:
             and status.bc_tab == tab_state_from_raw("found")
             and status.x10_tab == tab_state_from_raw("found")
         )
+
+
+def _slip_state_from_read(read: BetSlipReadResult) -> str:
+    if read.first and read.first.status == SlipStatus.SUSPENDED:
+        return "suspended"
+    if read.first and read.first.status == SlipStatus.ACTIVE:
+        return "active"
+    return "empty"
 
 
 def _slip_score(read: BetSlipReadResult | None) -> int:

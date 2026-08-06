@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>arb Chrome Bridge 설정</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; margin: 24px; max-width: 520px; }
+    label { display: block; margin-top: 12px; font-weight: 600; }
+    input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 8px 16px; }
+    .ok { color: #0a0; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h2>arb Chrome Bridge</h2>
+  <p>arb-desktop 프로그램에서 표시된 Token 을 붙여넣으세요.</p>
+  <label for="host">Bridge Host</label>
+  <input id="host" value="127.0.0.1" />
+  <label for="port">Bridge Port</label>
+  <input id="port" type="number" value="18765" />
+  <label for="token">Bridge Token</label>
+  <input id="token" placeholder="프로그램 Token 복사 → 붙여넣기" />
+  <button id="save">저장</button>
+  <div id="status" class="ok"></div>
+  <script src="options.js"></script>
+</body>
+</html>

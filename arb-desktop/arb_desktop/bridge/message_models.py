@@ -19,6 +19,7 @@ class TabState(str, Enum):
 class BetSlipState(str, Enum):
     ACTIVE = "ACTIVE"
     EMPTY = "EMPTY"
+    SUSPENDED = "SUSPENDED"
 
 
 class SlipUpdateMessage(BaseModel):
@@ -68,4 +69,9 @@ def tab_state_from_raw(value: str) -> TabState:
 
 
 def slip_state_from_raw(value: str) -> BetSlipState:
-    return BetSlipState.ACTIVE if str(value).lower() == "active" else BetSlipState.EMPTY
+    raw = str(value).lower()
+    if raw == "active":
+        return BetSlipState.ACTIVE
+    if raw == "suspended":
+        return BetSlipState.SUSPENDED
+    return BetSlipState.EMPTY

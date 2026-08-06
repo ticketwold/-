@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+
+from arb_desktop.bridge.app import create_bridge_runtime
+from arb_desktop.bridge.message_models import BridgeStatus
+from arb_desktop.betslip.models import BetSlipReadResult
+from arb_desktop.betslip.scanner import BetSlipScanner
+from arb_desktop.config import settings
+from arb_desktop.ui.settings_store import AppSettings, SettingsStore
+from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
+
+
+class BridgeWorker(QObject):
+    bridge_status = pyqtSignal(object)
+    bridge_token = pyqtSignal(str)
+    slip_updated = pyqtSignal(str, object)
+    watch_state = pyqtSignal(str, object, str)
+    log_message = pyqtSignal(str, str, str, str, str, str)
+    ready = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, store: SettingsStore) -> None:
+        super().__init__()
+        self._store = store
+        self._app_settings = store.load()
+        store.apply_to_runtime(self._app_settings)
+        self._runtime = None
+        self._scanner: BetSlipScanner | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._watch_engine = WatchEngine()
+        self._watching = False
+        self._poll_task: asyncio.Task | None = None
+        self._bridge_started = False
+
+    @property
+    def app_settings(self) -> AppSettings:
+        return self._app_settings
+
+    @property
+    def bridge_connected(self) -> bool:
+        return bool(self._runtime and self._runtime.manager.bridge_connected)
+
+    def get_bc_read(self):
+        if self._runtime:
+            return self._runtime.manager.get_bc_read()
+        from arb_desktop.betslip.models import BetSlipReadResult
+        return BetSlipReadResult(site="bc", ok=False, empty=True)
+
+    def get_bti_read(self):
+        if self._runtime:
+            return self._runtime.manager.get_bti_read()
+        from arb_desktop.betslip.models import BetSlipReadResult
+        return BetSlipReadResult(site="bti", ok=False, empty=True)
+
+    def update_settings(self, app_settings: AppSettings) -> None:
+        self._app_settings = app_settings
+        self._store.apply_to_runtime(app_settings)
+
+    @pyqtSlot()
+    def bootstrap(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._start_bridge())
+            self.ready.emit()
+            self._loop.run_forever()
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            if self._runtime and self._loop:
+                self._loop.run_until_complete(self._runtime.stop())
+            if self._loop:
+                self._loop.close()
+
+    async def _start_bridge(self) -> None:
+        self._watch_engine.set_connecting()
+        self._emit_watch_state()
+
+        def on_status(status: BridgeStatus) -> None:
+            self.bridge_status.emit(status)
+
+        def on_slip(site: str, read: BetSlipReadResult) -> None:
+            label = "BC" if site == "bc" else "X10"
+            odds = f"{read.first.odds:.2f}" if read.first and read.first.odds else "-"
+            status = read.first.status.value if read.first else "EMPTY"
+            self.log_message.emit(
+                label,
+                status,
+                odds,
+                "-",
+                "slip updated",
+                f"{label}|{status}|{odds}|slip updated",
+            )
+            self.slip_updated.emit(site, read)
+            if self._watching:
+                asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
+
+        self._runtime = create_bridge_runtime(
+            token=self._app_settings.bridge_token,
+            on_status_change=on_status,
+            on_slip_update=on_slip,
+        )
+        self._scanner = BetSlipScanner(self._runtime.session)
+        await self._runtime.start()
+        self._bridge_started = True
+        self.bridge_token.emit(self._runtime.manager.token)
+        self._watch_engine.set_idle()
+        self._emit_watch_state()
+        self._poll_task = asyncio.create_task(self._poll_loop())
+
+    async def _poll_loop(self) -> None:
+        while True:
+            try:
+                if self._runtime:
+                    await self._runtime.server.request_status()
+                    if self._watching:
+                        await self._evaluate_watch()
+            except Exception:
+                pass
+            await asyncio.sleep(settings.scan_interval_ms / 1000)
+
+    async def _evaluate_watch(self) -> None:
+        if not self._runtime or not self._scanner:
+            return
+        bc = self._runtime.manager.get_bc_read()
+        bti = self._runtime.manager.get_bti_read()
+        state, metrics, err_key = self._watch_engine.tick(
+            bridge_connected=self._runtime.manager.bridge_connected,
+            bc=bc,
+            bti=bti,
+            settings=self._app_settings,
+        )
+        self._emit_watch_state(metrics, err_key)
+        if err_key == "below-target":
+            self.log_message.emit(
+                "ENGINE",
+                state.value,
+                "-",
+                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                metrics.message,
+                f"ENGINE|{state.value}|{metrics.min_guaranteed_profit_pct:.2f}|below-target",
+            )
+        elif state == WatchState.READY:
+            self.log_message.emit(
+                "ENGINE",
+                "READY",
+                "-",
+                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                "target reached",
+                f"ENGINE|READY|{metrics.min_guaranteed_profit_pct:.2f}|ready",
+            )
+
+    def _emit_watch_state(self, metrics: WatchMetrics | None = None, err: str | None = None) -> None:
+        m = metrics or self._watch_engine.metrics
+        msg = m.message or err or ""
+        self.watch_state.emit(self._watch_engine.state.value, m, msg)
+
+    @pyqtSlot()
+    def reconnect(self) -> None:
+        if self._loop and self._runtime:
+            asyncio.run_coroutine_threadsafe(self._runtime.server.request_status(), self._loop)
+
+    @pyqtSlot()
+    def start_watch(self) -> None:
+        self._watching = True
+        self._watch_engine.start_watch()
+        self._emit_watch_state()
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
+
+    @pyqtSlot()
+    def stop_watch(self) -> None:
+        self._watching = False
+        self._watch_engine.stop_watch()
+        self._emit_watch_state()
+
+    @pyqtSlot()
+    def stop_bridge(self) -> None:
+        self._watching = False
+        if self._poll_task:
+            self._poll_task.cancel()
+        if self._loop and self._runtime:
+            asyncio.run_coroutine_threadsafe(self._runtime.stop(), self._loop)

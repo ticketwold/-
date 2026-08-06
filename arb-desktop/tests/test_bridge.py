@@ -86,6 +86,9 @@ def test_slip_update_prefers_non_empty() -> None:
         )
     )
     assert ignored is None
+
+
+def test_status_format_block() -> None:
     manager = ConnectionManager(token="secret")
     block = manager.status().format_block()
     assert "Chrome Bridge: DISCONNECTED" in block

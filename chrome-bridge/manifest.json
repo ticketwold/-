@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "arb Chrome Bridge",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "BC.Game / x10x10s BetSlip bridge for arb-desktop",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
@@ -53,5 +53,6 @@
   ],
   "action": {
     "default_title": "arb Chrome Bridge"
-  }
+  },
+  "options_page": "options.html"
 }
