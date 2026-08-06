@@ -48,6 +48,7 @@ const SYNC_STATE_KEY = 'syncState';
 const HISTORY_KEY = 'calcHistory';
 const HISTORY_MAX = 100;
 let historyEntries = [];
+let lastHistoryKey = '';
 let cachedUsdtRate = 1400;
 let cachedUsdtSource = 'manual';
 let usdtRateTimer = null;
@@ -1825,8 +1826,9 @@ function needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force = false) {
   return false;
 }
 
-async function syncBcAmountOnly(force = false) {
-  if (!shouldSyncAmounts() || bcSyncPending) return null;
+async function syncBcAmountOnly(force = false, always = false) {
+  if (!always && !shouldSyncAmounts()) return null;
+  if (bcSyncPending) return null;
   const found = await findTabs();
   if (!found.bcTab?.id) return null;
 
@@ -1838,7 +1840,7 @@ async function syncBcAmountOnly(force = false) {
   if (!btiBet) return null;
 
   const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
-  if (!needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force)) return null;
+  if (!force && !always && !needsAmountSync(btiBet, btiOdds, polyO, polyUsd, false)) return null;
 
   bcSyncPending = true;
   try {
@@ -1861,7 +1863,22 @@ function scheduleSyncAmounts() {
   syncTimer = setTimeout(() => {
     syncTimer = null;
     syncAmounts();
-  }, 80);
+  }, 40);
+}
+
+let btiBetSyncTimer = null;
+
+function onBtiBetInput() {
+  lastSyncedBtiKrw = 0;
+  lastSyncedBcUsd = 0;
+  updateSlipUI(cachedBti, cachedBc);
+  persistSyncState();
+  syncBcAmountOnly(true, true);
+  if (btiBetSyncTimer) clearTimeout(btiBetSyncTimer);
+  btiBetSyncTimer = setTimeout(() => {
+    btiBetSyncTimer = null;
+    syncAmounts(true);
+  }, 24);
 }
 
 let lastAutoBetHintAt = 0;
@@ -2045,26 +2062,19 @@ async function manualBet() {
     log('수동 배팅: 다른 배팅 진행 중', 'err');
     return;
   }
-  log('수동 배팅 요청...', 'info');
-  const btn = $('manualBetBtn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '준비 중...';
-  }
+  log('수동 배팅 — 즉시 실행', 'info');
 
   try {
-    await refreshSlips();
     const found = await findTabs();
     if (!found.btiTab?.id || !found.bcTab?.id) {
       log('수동 배팅: 텐텐뱃·BC.Game 탭을 열어주세요', 'err');
       return;
     }
 
-    const active = getActiveBetOdds();
-    let polyO = active.polyO;
-    let btiOdds = active.btiOdds;
-    if (!polyO) polyO = resolveBcOddsForSync();
-    if (!btiOdds) btiOdds = await resolveBtiOddsForSync(found.btiTab);
+    const polyO = resolveBcOddsForSync();
+    const btiOdds = cachedBti?.odds > 1
+      ? cachedBti.odds
+      : await resolveBtiOddsForSync(found.btiTab);
     if (!polyO || !btiOdds || btiOdds <= 1) {
       log(`수동 배팅: 배당 확인 (텐텐 ${btiOdds?.toFixed(3) || '-'} / BC ${polyO?.toFixed(3) || '-'})`, 'err');
       return;
@@ -2074,35 +2084,15 @@ async function manualBet() {
       return;
     }
 
-    const btiBet = await getBtiBetAmount(found.btiTab);
+    const btiBet = getBtiBet();
     const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
     const profit = calcProfit(btiOdds, polyO);
     const minP = getMinProfit();
     if (profit != null && profit < minP) {
       log(`수동 배팅 — 수익 ${profit.toFixed(2)}% (최소 ${minP}% 미만, 진행)`, 'info');
-    } else if (profit != null) {
-      log(`수동 배팅 — 수익 ${profit.toFixed(2)}%`, 'info');
     }
 
-    if (btn) btn.textContent = '금액 동기화...';
-    await syncAmounts(true);
-    if (!amountsSyncedForBet(btiBet, polyUsd)) {
-      log('수동 배팅: 금액 동기화 재시도...', 'info');
-      await syncAmounts(true);
-    }
-
-    const hint = {
-      excludeTeam: cachedBc?.teamLabel,
-      polyTeam: cachedBc?.teamLabel
-    };
-    if (btn) btn.textContent = '슬립 준비...';
-    const ensured = await ensureBtiSlip(found.btiTab, hint);
-    if (!ensured?.ok && !ensured?.alreadyHad) {
-      log(`수동 배팅: 슬립 준비 실패 — ${ensured?.reason || '카트에 담기 필요'}`, 'err');
-      return;
-    }
-
-    await strikeBothBets(found, btiBet, polyUsd, btiOdds, null, { manual: true });
+    await strikeBothBets(found, btiBet, polyUsd, btiOdds, null, { manual: true, immediate: true });
   } catch (e) {
     log(`수동 배팅 오류 — ${e?.message || e}`, 'err');
   } finally {
@@ -2117,15 +2107,23 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
   const hint = {
     excludeTeam: cachedBc?.teamLabel,
     polyTeam: cachedBc?.teamLabel,
-    skipEnsure: false
+    skipEnsure: !!opts.immediate
   };
   const label = opts.manual ? '수동 배팅' : '동시 배팅';
   log(`${label} — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${bcOLabel()} · ${btiBet.toLocaleString()}원 / $${polyUsd.toFixed(2)}`, 'info');
 
   try {
+    await Promise.all([
+      setBtiAmount(found.btiTab, btiBet),
+      setBcAmount(found.bcTab, polyUsd)
+    ]);
+    lastSyncedBtiKrw = btiBet;
+    lastSyncedBcUsd = polyUsd;
+    lastSyncedAt = Date.now();
+
     const [btiRes, polyRes] = await Promise.all([
       placeBtiBet(found.btiTab, btiBet, btiOdds, hint),
-      placeBcBet(found.bcTab, polyUsd, { skipFill: !opts.manual })
+      placeBcBet(found.bcTab, polyUsd, { skipFill: true })
     ]);
 
     if (btiRes?.success || polyRes?.success) {
@@ -2453,19 +2451,14 @@ $('searchStop')?.addEventListener('click', stopSearch);
 $('openPanelBtn')?.addEventListener('click', openPanel);
 $('openPanelFromSearch')?.addEventListener('click', openPanel);
 $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로고침', 'info'); });
-['slipMinProfit', 'minProfit', 'btiBet'].forEach((id) => {
+['slipMinProfit', 'minProfit'].forEach((id) => {
   $(id)?.addEventListener('input', () => {
     updateSlipUI(cachedBti, cachedBc);
-    if (id === 'btiBet') {
-      lastSyncedBtiKrw = 0;
-      persistSyncState();
-    }
-    if (shouldSyncAmounts()) {
-      scheduleSyncAmounts();
-      syncBcAmountOnly(true);
-    }
+    if (shouldSyncAmounts()) scheduleSyncAmounts();
   });
 });
+$('btiBet')?.addEventListener('input', onBtiBetInput);
+$('btiBet')?.addEventListener('change', onBtiBetInput);
 
 $('diagBtn')?.addEventListener('click', async () => {
   log('진단...', 'info');
@@ -2515,4 +2508,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.16 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 빈카트 배당 표시 수정`, 'info');
+log(`v5.9.17 ${IS_PANEL ? '패널' : '팝업'} 로드 — 수동배팅·금액동기화 수정`, 'info');
