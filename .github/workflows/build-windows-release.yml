@@ -21,17 +21,24 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION: ${{ github.event.inputs.version || github.ref_name && startsWith(github.ref_name, 'arb-desktop-v') && github.ref_name || 'arb-desktop-v1.4.0' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Resolve version
         shell: pwsh
         run: |
-          $raw = "${{ env.VERSION }}"
-          if ($raw -match 'arb-desktop-v(.+)') { $raw = $Matches[1] }
-          "APP_VERSION=$raw" >> $env:GITHUB_ENV
-          Write-Host "Building version $raw"
+          $input = "${{ github.event.inputs.version }}"
+          $ref = "${{ github.ref }}"
+          if ($input) {
+            $v = $input
+          } elseif ($ref -match 'refs/tags/arb-desktop-v(.+)') {
+            $v = $Matches[1]
+          } else {
+            $v = "1.4.0"
+          }
+          "APP_VERSION=$v" >> $env:GITHUB_ENV
+          Write-Host "Building version $v"
 
       - uses: actions/setup-python@v5
         with:
