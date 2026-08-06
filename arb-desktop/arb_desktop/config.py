@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     betslip_network_tolerance: float = 0.06
     dry_run: bool = True
     live_execution_enabled: bool = False
+    auto_retry_max: int = 3
 
     # Browser
     headless: bool = False

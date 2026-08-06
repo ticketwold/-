@@ -10,6 +10,11 @@ from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
 from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
 
+try:
+    from arb_desktop.betslip.dom_runtime import setup_monitors
+except ImportError:
+    setup_monitors = None  # type: ignore[misc, assignment]
+
 
 class BrowserSession:
     """공유 Playwright 세션 — 로그인 쿠키 유지."""
@@ -43,6 +48,8 @@ class BrowserSession:
         await self.bc_page.goto(settings.bc_sports_url, wait_until="domcontentloaded", timeout=30_000)
         await self.wait_for_frames(self.bti_page, timeout_ms=15_000)
         await self._sync_bti_session()
+        if setup_monitors and self.bc_page and self.bti_page:
+            await setup_monitors(self.bc_page, self.bti_page)
 
     async def _sync_bti_session(self) -> None:
         if not self._context:
