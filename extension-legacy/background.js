@@ -911,10 +911,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'SET_AUTO_BET') {
     const enabled = !!msg.enabled;
+    const epoch = Number(msg.stateEpoch) || 0;
     saveSyncState({
       autoBetRunning: enabled && !msg.pausedByClose,
       autoBetWanted: enabled ? (msg.wanted !== false) : false,
-      autoBetPausedByClose: enabled ? !!msg.pausedByClose : false
+      autoBetPausedByClose: enabled ? !!msg.pausedByClose : false,
+      ...(epoch ? { autoBetStateEpoch: epoch } : {})
     }).then(async () => {
       const state = await loadSyncState();
       broadcast({ type: 'AUTO_BET_STATE', state });
@@ -926,8 +928,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'STOP_AUTO_BET') {
     const clearWanted = msg.clearWanted !== false;
+    const epoch = Number(msg.stateEpoch) || 0;
     const patch = { autoBetRunning: false, autoBetPausedByClose: false };
     if (clearWanted) patch.autoBetWanted = false;
+    if (epoch) patch.autoBetStateEpoch = epoch;
     saveSyncState(patch).then(async () => {
       const state = await loadSyncState();
       broadcast({ type: 'AUTO_BET_STATE', state });

@@ -13,6 +13,7 @@ let autoBetRunning = false;
 let autoBetWanted = false;
 let autoBetPausedByClose = false;
 let autoBetSessionId = 0;
+let autoBetStateEpoch = 0;
 let suppressStorageApplyUntil = 0;
 let lastMarketCloseLogAt = 0;
 let lastMarketOpenLogAt = 0;
@@ -1280,13 +1281,20 @@ function resumeAutoBetByMarketOpen() {
   if (!autoBetWanted || !autoBetPausedByClose) return;
   autoBetPausedByClose = false;
   autoBetRunning = true;
+  const stateEpoch = bumpAutoBetStateEpoch();
   chrome.runtime.sendMessage({
     type: 'SET_AUTO_BET',
     enabled: true,
     wanted: true,
-    pausedByClose: false
+    pausedByClose: false,
+    stateEpoch
   }).catch(() => {});
-  persistSyncState({ autoBetRunning: true, autoBetWanted: true, autoBetPausedByClose: false });
+  persistSyncState({
+    autoBetRunning: true,
+    autoBetWanted: true,
+    autoBetPausedByClose: false,
+    autoBetStateEpoch: stateEpoch
+  });
   updateAutomationButtons();
   updateSlipUI(cachedBti, cachedBc);
   if (Date.now() - lastMarketOpenLogAt > 3000) {
@@ -2113,8 +2121,14 @@ function onBtiStakeChanged(msg) {
   scheduleSyncAmounts();
 }
 
+function bumpAutoBetStateEpoch() {
+  autoBetStateEpoch += 1;
+  return autoBetStateEpoch;
+}
+
 function persistSyncState(extra = {}) {
-  suppressStorageApplyUntil = Date.now() + 300;
+  suppressStorageApplyUntil = Date.now() + 1200;
+  const epoch = extra.autoBetStateEpoch ?? autoBetStateEpoch;
   chrome.storage.local.get(SYNC_STATE_KEY, (data) => {
     const cur = data[SYNC_STATE_KEY] || {};
     chrome.storage.local.set({
@@ -2124,9 +2138,11 @@ function persistSyncState(extra = {}) {
         autoBetRunning,
         autoBetWanted,
         autoBetPausedByClose,
+        autoBetStateEpoch: epoch,
         btiBet: getBtiBet(),
         usdRate: getUsdRate(),
-        ...extra
+        ...extra,
+        autoBetStateEpoch: extra.autoBetStateEpoch ?? epoch
       }
     });
   });
@@ -2134,6 +2150,15 @@ function persistSyncState(extra = {}) {
 
 function applySyncStateFromStorage(s, fromRemote = false) {
   if (!s) return;
+  if (fromRemote) {
+    if (Date.now() < suppressStorageApplyUntil) return;
+    const remoteEpoch = Number(s.autoBetStateEpoch) || 0;
+    if (remoteEpoch < autoBetStateEpoch) return;
+    const remoteEngaged = !!(s.autoBetWanted || s.autoBetRunning || s.autoBetPausedByClose);
+    if (isAutoBetEngaged() && !remoteEngaged) return;
+  }
+  const incomingEpoch = Number(s.autoBetStateEpoch) || 0;
+  if (incomingEpoch > autoBetStateEpoch) autoBetStateEpoch = incomingEpoch;
   const wasLooping = isAutoBetLooping();
   autoBetWanted = !!s.autoBetWanted;
   autoBetPausedByClose = !!s.autoBetPausedByClose;
@@ -2156,11 +2181,13 @@ async function initSyncFromStorage() {
     const data = await chrome.storage.local.get(SYNC_STATE_KEY);
     const s = data[SYNC_STATE_KEY] || {};
     if (s.btiBet && $('btiBet')) $('btiBet').value = String(s.btiBet);
+    if (s.autoBetStateEpoch) autoBetStateEpoch = Number(s.autoBetStateEpoch) || 0;
     if (s.autoBetWanted || s.autoBetRunning) {
       applySyncStateFromStorage({
         autoBetWanted: !!(s.autoBetWanted ?? s.autoBetRunning),
         autoBetPausedByClose: !!s.autoBetPausedByClose,
-        autoBetRunning: !!s.autoBetRunning
+        autoBetRunning: !!s.autoBetRunning,
+        autoBetStateEpoch: autoBetStateEpoch
       });
       if (isAutoBetLooping()) {
         chrome.runtime.sendMessage({
@@ -2198,7 +2225,9 @@ function updateAutomationButtons() {
     betStartBtn.textContent = autoBetPausedByClose ? '자동 배팅 재개' : '자동 배팅';
   }
   if (betStopBtn) {
-    betStopBtn.disabled = !engaged;
+    betStopBtn.disabled = false;
+    betStopBtn.classList.toggle('is-idle', !engaged);
+    betStopBtn.setAttribute('aria-disabled', engaged ? 'false' : 'true');
   }
   updateManualBetButton();
 }
@@ -2209,6 +2238,8 @@ function startAutoBet() {
   if (isAutoBetLooping()) return;
   autoBetSessionId++;
   const session = autoBetSessionId;
+  const stateEpoch = bumpAutoBetStateEpoch();
+  suppressStorageApplyUntil = Date.now() + 1200;
   document.querySelector('.tab[data-tab="slip"]')?.click();
   autoBetWanted = true;
   autoBetPausedByClose = false;
@@ -2218,16 +2249,22 @@ function startAutoBet() {
   lastAutoBetHintAt = 0;
   lastMarketCloseLogAt = 0;
   lastMarketOpenLogAt = 0;
-  enableAutoSync();
   updateAutomationButtons();
   updateSlipUI(cachedBti, cachedBc);
+  enableAutoSync();
   chrome.runtime.sendMessage({
     type: 'SET_AUTO_BET',
     enabled: true,
     wanted: true,
-    pausedByClose: false
+    pausedByClose: false,
+    stateEpoch
   }).catch(() => {});
-  persistSyncState({ autoBetRunning: true, autoBetWanted: true, autoBetPausedByClose: false });
+  persistSyncState({
+    autoBetRunning: true,
+    autoBetWanted: true,
+    autoBetPausedByClose: false,
+    autoBetStateEpoch: stateEpoch
+  });
   log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
   scheduleAutoBetCheck();
   refreshSlips().then(async () => {
@@ -2246,25 +2283,31 @@ function startAutoBet() {
 
 function stopAutoBetOnly(clearWanted = true) {
   autoBetSessionId++;
+  const stateEpoch = bumpAutoBetStateEpoch();
+  suppressStorageApplyUntil = Date.now() + 1200;
   autoBetRunning = false;
   if (clearWanted) autoBetWanted = false;
   autoBetPausedByClose = false;
   strikePending = false;
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
+  updateAutomationButtons();
   chrome.runtime.sendMessage({
     type: 'STOP_AUTO_BET',
-    clearWanted
+    clearWanted,
+    stateEpoch
   }).catch(() => {});
   persistSyncState({
     autoBetRunning: false,
     autoBetWanted: clearWanted ? false : autoBetWanted,
-    autoBetPausedByClose: false
+    autoBetPausedByClose: false,
+    autoBetStateEpoch: stateEpoch
   });
   updateAutomationButtons();
   updateSlipUI(cachedBti, cachedBc);
 }
 
 function stopAutoBet() {
+  if (!isAutoBetEngaged()) return;
   stopAutoBetOnly(true);
   log('자동 배팅 정지', 'info');
 }
@@ -2388,7 +2431,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
   if (msg.type === 'USDT_RATE_UPDATED' && msg.rate) applyUsdtRate(msg.rate);
-  if (msg.type === 'AUTO_BET_STATE' && msg.state) applySyncStateFromStorage(msg.state, true);
+  if (msg.type === 'AUTO_BET_STATE' && msg.state) {
+    if (Date.now() >= suppressStorageApplyUntil) {
+      applySyncStateFromStorage(msg.state, true);
+    }
+  }
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -2408,4 +2455,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.13 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 빈카트 배당 재수정`, 'info');
+log(`v5.9.14 ${IS_PANEL ? '패널' : '팝업'} 로드 — 자동배팅 정지 버튼 수정`, 'info');

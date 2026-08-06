@@ -76,8 +76,10 @@ header .sub { font-size: 11px; color: #888; margin-top: 2px; }
 .btn.danger-outline {
   background: #2a1520; color: #ff8fa3; border: 1px solid #e63946;
 }
-.btn.danger-outline:hover:not(:disabled) { background: #3a1a24; color: #fff; }
-.btn.danger-outline:not(:disabled) { cursor: pointer; }
+.btn.danger-outline:hover:not(:disabled):not(.is-idle) { background: #3a1a24; color: #fff; }
+.btn.danger-outline:not(:disabled):not(.is-idle) { cursor: pointer; }
+#autoBetStop.is-idle { opacity: 0.45; cursor: not-allowed; }
+#autoBetStop:not(.is-idle) { opacity: 1; cursor: pointer; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 .btn.small { flex: 0 0 auto; padding: 9px 14px; font-size: 12px; }
 .btn.link-btn {
