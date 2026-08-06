@@ -999,7 +999,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.10] background loaded');
+console.log('[양방봇 v5.9.11] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();
