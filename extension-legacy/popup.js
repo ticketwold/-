@@ -681,6 +681,35 @@ function amountsSyncedForBet(btiBet, polyUsd) {
   return true;
 }
 
+async function readBcLiveStake(bcTab) {
+  if (!bcTab?.id) return 0;
+  const order = await orderBcFrames(bcTab.id);
+  const tryFrames = [];
+  if (lastBcStakeFrameId != null) tryFrames.push(lastBcStakeFrameId);
+  for (const frameId of order) {
+    if (!tryFrames.includes(frameId)) tryFrames.push(frameId);
+  }
+  for (const frameId of tryFrames.slice(0, 10)) {
+    const probe = await probeBcStakeFrame(bcTab.id, frameId);
+    if (probe.stake > 0) return probe.stake;
+  }
+  return cachedBc?.stake > 0 ? cachedBc.stake : 0;
+}
+
+async function verifyBcStakeForBet(bcTab, polyUsd) {
+  const live = await readBcLiveStake(bcTab);
+  if (!live || live <= 0) return { ok: false, stake: live, reason: 'stake-read-empty' };
+  const tol = Math.max(0.12, polyUsd * 0.04);
+  if (Math.abs(live - polyUsd) <= tol) return { ok: true, stake: live };
+  return { ok: false, stake: live, reason: 'stake-mismatch' };
+}
+
+function applySyncedBcStake(polyUsd) {
+  if (cachedBc && polyUsd > 0) {
+    cachedBc = { ...cachedBc, stake: polyUsd };
+  }
+}
+
 function isStaleBcSource(slip) {
   if (!slip) return true;
   const kind = slip.sourceKind || '';
@@ -1317,10 +1346,33 @@ function resolveBcOddsForAmountSync() {
   if (!slip || bcCartEmptyConfirmed) return null;
   if (slip.fromPayout && slip.stake > 0 && slip.payout > slip.stake) {
     const o = Math.round((slip.payout / slip.stake) * 1000) / 1000;
-    if (o > 1.01 && o <= 25) return o;
+    if (o > 1.01 && o <= 15 && !isOuLineMistakenAsOdds({ ...slip, odds: o })) return o;
   }
-  if (slip.odds > 1.01 && slip.odds <= 25 && (isCartSlip(slip) || slip.fromPayout)) return slip.odds;
+  if (slip.odds > 1.01 && slip.odds <= 15 && (isCartSlip(slip) || slip.fromPayout)) {
+    if (!isOuLineMistakenAsOdds(slip)) return slip.odds;
+  }
   return null;
+}
+
+async function prepareAmountSyncTargets(found) {
+  if (!found?.btiTab?.id || !found?.bcTab?.id) return null;
+  await refreshBithumbRate();
+  await refreshSlips();
+  const btiOdds = await resolveBtiOddsForSync(found.btiTab);
+  const btiBet = getBtiBet();
+  if (!btiBet || !btiOdds || btiOdds <= 1) return null;
+  let polyO = resolveBcOddsForAmountSync();
+  if (!polyO) {
+    const fresh = await readBcSlip(found.bcTab);
+    const coerced = coerceSlipCached(fresh);
+    if (coerced?.odds > 1) {
+      cachedBc = coerced;
+      polyO = resolveBcOddsForAmountSync();
+    }
+  }
+  if (!polyO || polyO <= 1) return null;
+  const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
+  return { btiBet, btiOdds, polyO, polyUsd };
 }
 
 function isBcStakeCloseEnough(targetUsd, res) {
@@ -1900,11 +1952,18 @@ async function setBcAmount(bcTab, amountUsd) {
   const order = await orderBcFrames(bcTab.id);
   let lastRes = null;
 
-  const probes = await Promise.all(order.slice(0, 12).map((frameId) => probeBcStakeFrame(bcTab.id, frameId)));
-  probes.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const probes = await Promise.all(order.slice(0, 16).map((frameId) => probeBcStakeFrame(bcTab.id, frameId)));
+  probes.sort((a, b) => {
+    const aIn = a.hasInput && a.hasSlip ? 10000 : (a.hasInput ? 5000 : 0);
+    const bIn = b.hasInput && b.hasSlip ? 10000 : (b.hasInput ? 5000 : 0);
+    return (bIn + (b.score || 0)) - (aIn + (a.score || 0));
+  });
 
   const tryOrder = [];
   if (lastBcStakeFrameId != null) tryOrder.push(lastBcStakeFrameId);
+  for (const probe of probes) {
+    if (probe.hasInput && !tryOrder.includes(probe.frameId)) tryOrder.push(probe.frameId);
+  }
   for (const probe of probes) {
     if (!tryOrder.includes(probe.frameId)) tryOrder.push(probe.frameId);
   }
@@ -1912,13 +1971,12 @@ async function setBcAmount(bcTab, amountUsd) {
     if (!tryOrder.includes(frameId)) tryOrder.push(frameId);
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const frameBatch = tryOrder.slice(0, attempt === 0 ? 6 : tryOrder.length);
-    const batchResults = await Promise.all(frameBatch.map(async (frameId) => {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    for (const frameId of tryOrder) {
+      const probe = probes.find((p) => p.frameId === frameId) || {};
+      if (attempt < 2 && !probe.hasInput && frameId !== lastBcStakeFrameId) continue;
+
       const res = await setBcStakeMain(bcTab.id, frameId, amountUsd);
-      return { frameId, res };
-    }));
-    for (const { frameId, res } of batchResults) {
       if (isBcStakeCloseEnough(amountUsd, res)) {
         lastBcStakeFrameId = frameId;
         return { ...res, ok: true, frameId };
@@ -1927,16 +1985,15 @@ async function setBcAmount(bcTab, amountUsd) {
         lastRes = { ...res, frameId };
         lastBcStakeFrameId = frameId;
       }
-    }
 
-    for (const frameId of frameBatch.slice(0, 8)) {
-      const res = await sendBc(bcTab.id, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, frameId);
-      if (isBcStakeCloseEnough(amountUsd, res)) {
+      const viaMsg = await sendBc(bcTab.id, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, frameId);
+      if (isBcStakeCloseEnough(amountUsd, viaMsg)) {
         lastBcStakeFrameId = frameId;
-        return { ...res, ok: true, frameId };
+        return { ...viaMsg, ok: true, frameId };
       }
-      if (res?.stake > 0) lastRes = res;
+      if (viaMsg?.stake > 0) lastRes = viaMsg;
     }
+    await delay(attempt < 3 ? 120 : 0);
   }
 
   return lastRes || { ok: false, reason: '금액 입력 실패 — BC 배팅카트 열고 슬립 선택' };
@@ -1963,14 +2020,12 @@ async function syncBcAmountOnly(force = false, always = false) {
   const found = await findTabs();
   if (!found.bcTab?.id) return null;
 
-  const polyO = resolveBcOddsForAmountSync();
-  const btiOdds = await resolveBtiOddsForSync(found.btiTab);
-  if (!polyO || !btiOdds || btiOdds <= 1) return null;
-
-  const btiBet = getBtiBet();
-  if (!btiBet) return null;
-
-  const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
+  const targets = await prepareAmountSyncTargets(found);
+  if (!targets) {
+    if (always || force) log('BC 금액 동기화 대기 — 배당 확인 필요', 'err');
+    return null;
+  }
+  const { btiBet, btiOdds, polyO, polyUsd } = targets;
   if (!force && !always && !needsAmountSync(btiBet, btiOdds, polyO, polyUsd, false)) return null;
 
   bcSyncPending = true;
@@ -1978,10 +2033,13 @@ async function syncBcAmountOnly(force = false, always = false) {
   try {
     polyRes = await setBcAmount(found.bcTab, polyUsd);
     if (isBcStakeCloseEnough(polyUsd, polyRes)) {
+      lastSyncedBtiKrw = btiBet;
       lastSyncedBcUsd = polyUsd;
       lastSyncedBcOdds = polyO;
+      lastSyncedBtiOdds = btiOdds;
       lastBcSyncAt = Date.now();
       lastSyncedAt = Date.now();
+      applySyncedBcStake(polyUsd);
     } else if (always || force) {
       const got = polyRes?.stake > 0 ? `$${polyRes.stake}` : '-';
       log(`BC 금액 동기화 실패 — 목표 $${polyUsd.toFixed(2)}, 현재 ${got}`, 'err');
@@ -2027,18 +2085,12 @@ async function syncAmounts(force = false) {
     return;
   }
 
-  const polyO = resolveBcOddsForAmountSync();
-  const btiOdds = await resolveBtiOddsForSync(found.btiTab);
-  if (!polyO || !btiOdds || btiOdds <= 1) {
-    if (force) log(`동기화 대기 — 텐텐뱃 ${btiOdds?.toFixed(3) || '-'} · BC ${polyO?.toFixed(3) || '-'}`, 'err');
+  const targets = await prepareAmountSyncTargets(found);
+  if (!targets) {
+    if (force) log('동기화 대기 — BC 배당 확인 (OU는 기준점≠배당)', 'err');
     return;
   }
-
-  const btiBet = getBtiBet();
-  if (!btiBet) return;
-
-  await refreshBithumbRate();
-  const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
+  const { btiBet, btiOdds, polyO, polyUsd } = targets;
   if (!needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force)) {
     updateSlipUI(cachedBti, cachedBc);
     return;
@@ -2059,6 +2111,7 @@ async function syncAmounts(force = false) {
         lastSyncedBcUsd = polyUsd;
         lastSyncedBcOdds = polyO;
         lastBcSyncAt = Date.now();
+        applySyncedBcStake(polyUsd);
       }
       lastSyncedBtiOdds = btiOdds;
       lastSyncedAt = Date.now();
@@ -2260,8 +2313,25 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
     let stakeReady = amountsReady;
     if (!stakeReady) {
       await syncAmounts(true);
+      await refreshSlips();
       stakeReady = amountsSyncedForBet(btiBet, polyUsd);
     }
+
+    let stakeCheck = await verifyBcStakeForBet(found.bcTab, polyUsd);
+    if (!stakeCheck.ok) {
+      await setBcAmount(found.bcTab, polyUsd);
+      await delay(100);
+      stakeCheck = await verifyBcStakeForBet(found.bcTab, polyUsd);
+    }
+
+    if (!stakeCheck.ok) {
+      log(`${label} 중단 — BC 금액 동기화 실패 (목표 $${polyUsd.toFixed(2)}, 슬립 $${(stakeCheck.stake || 0).toFixed(2)})`, 'err');
+      return { ok: false, reason: 'bc-stake-not-synced' };
+    }
+
+    lastSyncedBcUsd = polyUsd;
+    applySyncedBcStake(polyUsd);
+    stakeReady = true;
 
     const [btiRes, polyRes] = await Promise.all([
       placeBtiBet(found.btiTab, btiBet, btiOdds, hint),

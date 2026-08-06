@@ -68,7 +68,6 @@ function normalizeSportsSlip(raw) {
   if (kind === 'sports-board-selected' || raw.method === 'api-cache') return null;
   if (kind === 'bc-api' && !(raw.capturedAt && Date.now() - raw.capturedAt < 8000)) return null;
   if (!raw.fromSlip && kind !== 'bc-direct-slip' && kind !== 'bc-native-slip' && kind !== 'sports-slip' && kind !== 'bc-api-fresh' && kind !== 'bc-api') return null;
-  const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
   const apiOnly = kind === 'bc-api' && !(raw.capturedAt && Date.now() - raw.capturedAt < 8000);
   const stake = !apiOnly && raw.stake > 0 ? raw.stake : null;
   const payout = !apiOnly && raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);

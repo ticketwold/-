@@ -1,5 +1,7 @@
 (function () {
-  if (window.__bcStakeSetLoaded) return;
+  const STAKE_SET_VER = 27;
+  if (window.__bcStakeSetVer >= STAKE_SET_VER && typeof window.__bcSetStakeNative === 'function') return;
+  window.__bcStakeSetVer = STAKE_SET_VER;
   window.__bcStakeSetLoaded = true;
 
   function openShadow(el) {
@@ -245,10 +247,50 @@
     }
   }
 
+  function assignNativeValue(target, v) {
+    if (!target) return;
+    if (target.isContentEditable) {
+      target.textContent = v;
+      return;
+    }
+    const tracker = target._valueTracker;
+    if (tracker && typeof tracker.setValue === 'function') {
+      try { tracker.setValue(target.value || ''); } catch (_) {}
+    }
+    const proto = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(target, v);
+    else target.value = v;
+  }
+
+  function dispatchInput(target, v, inputType) {
+    const type = inputType || 'insertFromPaste';
+    try {
+      target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: type, data: v }));
+    } catch (_) {}
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, data: v, inputType: type }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function pasteIntoField(target, v) {
+    activateStakeField(target);
+    try { target.focus(); } catch (_) {}
+    try { target.select?.(); } catch (_) {}
+    try { document.execCommand('selectAll', false, null); } catch (_) {}
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', v);
+      target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+    } catch (_) {}
+    assignNativeValue(target, v);
+    dispatchInput(target, v, 'insertFromPaste');
+  }
+
   function setFieldValue(field, value) {
     const target = resolveStakeInput(field);
     const s = String(value);
-    const tol = Math.max(0.08, parseFloat(s) * 0.03);
+    const want = parseFloat(s);
+    const tol = Math.max(0.08, want * 0.03);
 
     function readNow() {
       return readStakeFromInput(target) || readStake(findSlipRoot());
@@ -258,44 +300,39 @@
       activateStakeField(target);
       if (target.isContentEditable) {
         target.textContent = v;
-        target.dispatchEvent(new InputEvent('input', { bubbles: true, data: v, inputType: 'insertFromPaste' }));
-        target.dispatchEvent(new Event('change', { bubbles: true }));
+        dispatchInput(target, v, 'insertFromPaste');
         return;
       }
-      const proto = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(target, v);
-      else target.value = v;
-      target.dispatchEvent(new InputEvent('input', { bubbles: true, data: v, inputType: 'insertFromPaste' }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
+      pasteIntoField(target, v);
     }
-
-    activateStakeField(target);
-    try { target.focus(); } catch (_) {}
-    try { target.select?.(); } catch (_) {}
-    try { document.execCommand('selectAll', false, null); } catch (_) {}
-    try { document.execCommand('delete', false, null); } catch (_) {}
 
     write('');
     write(s);
 
-    if (Math.abs(readNow() - parseFloat(s)) > tol) {
+    if (Math.abs(readNow() - want) > tol) {
+      assignNativeValue(target, '');
+      dispatchInput(target, '', 'deleteContentBackward');
+      pasteIntoField(target, s);
+    }
+
+    if (Math.abs(readNow() - want) > tol) {
       activateStakeField(target);
       try { target.focus(); } catch (_) {}
+      assignNativeValue(target, '');
       for (const ch of s) {
         target.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
         const cur = (target.value || '') + ch;
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-        if (setter && target instanceof HTMLInputElement) setter.call(target, cur);
-        else if ('value' in target) target.value = cur;
-        else target.textContent = cur;
-        target.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+        assignNativeValue(target, cur);
+        dispatchInput(target, ch, 'insertText');
         target.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
       }
       target.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    if (Math.abs(readNow() - parseFloat(s)) > tol) write(s);
+    if (Math.abs(readNow() - want) > tol) {
+      assignNativeValue(target, s);
+      dispatchInput(target, s, 'insertReplacementText');
+    }
 
     try { target.dispatchEvent(new FocusEvent('blur', { bubbles: true })); } catch (_) {}
   }
@@ -303,7 +340,7 @@
   function clickPresetChip(slip, amount) {
     if (!slip) return 0;
     const presets = [10, 20, 50, 100, 300];
-    const exact = presets.find((p) => Math.abs(p - amount) < 0.06);
+    const exact = presets.find((p) => Math.abs(p - amount) < 0.02);
     if (!exact) return 0;
     for (const btn of collectAll('button, [role="button"], div[class*="chip"], span[class*="chip"]', slip)) {
       if (!visible(btn)) continue;
@@ -340,10 +377,13 @@
     }
 
     if (!inp && target <= 50) {
-      clickPresetChip(slip, target);
-      const st = readStake(slip);
-      if (st > 0 && Math.abs(st - target) < 0.06) {
-        return { ok: true, stake: st, target, method: 'preset-chip-exact', hasSlip: !!slip };
+      const chipExact = [10, 20, 50, 100, 300].some((p) => Math.abs(p - target) < 0.02);
+      if (chipExact) {
+        clickPresetChip(slip, target);
+        const st = readStake(slip);
+        if (st > 0 && Math.abs(st - target) < 0.04) {
+          return { ok: true, stake: st, target, method: 'preset-chip-exact', hasSlip: !!slip };
+        }
       }
     }
 
