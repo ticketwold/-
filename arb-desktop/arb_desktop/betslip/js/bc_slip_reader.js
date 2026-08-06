@@ -1,6 +1,5 @@
 /**
  * BC.Game BetSlip reader — 배팅카트 컨테이너 내부만 탐색.
- * 페이지 전체 스캔 / 최대 숫자 휴리스틱 금지.
  */
 (function () {
   const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
@@ -10,8 +9,7 @@
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
-    if (el.shadowRoot) return el.shadowRoot;
-    return null;
+    return el.shadowRoot || null;
   }
 
   function walk(root, fn, depth) {
@@ -39,6 +37,17 @@
 
   function text(el) {
     return (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function selectorHint(el) {
+    if (!el) return '';
+    const editor = el.getAttribute?.('data-editor-id');
+    if (editor) return `[data-editor-id="${editor}"]`;
+    const testId = el.getAttribute?.('data-testid');
+    if (testId) return `[data-testid="${testId}"]`;
+    const cls = String(el.className || '').split(/\s+/).filter(Boolean)[0];
+    if (cls) return `.${cls}`;
+    return el.tagName ? el.tagName.toLowerCase() : '';
   }
 
   function parseOdds(raw, max = 100) {
@@ -136,12 +145,18 @@
     return blocks;
   }
 
-  function isSuspendedBlock(block) {
-    return SUSPENDED_RE.test(text(block));
+  function detectMarket(blockText) {
+    if (/오버|언더|over|under|total|O\/U|합계|득점/i.test(blockText)) return { market: 'Over/Under', kind: 'over_under' };
+    if (/핸디|handicap|spread/i.test(blockText)) return { market: 'Handicap', kind: 'handicap' };
+    if (/승자|winner|moneyline|match winner|승패/i.test(blockText)) return { market: 'Moneyline', kind: 'moneyline' };
+    return { market: '', kind: 'unknown' };
   }
 
-  function isClosedBlock(block) {
-    return /closed|마감/i.test(text(block)) && !/live/i.test(text(block));
+  function detectPhase(slipTextFull, blockText) {
+    const blob = `${slipTextFull} ${blockText}`;
+    if (/live|라이브|in[\s-]?play|진행\s*중/i.test(blob)) return 'live';
+    if (/prematch|프리매치|pre[\s-]?match/i.test(blob)) return 'prematch';
+    return 'unknown';
   }
 
   function extractEvent(blockText, slipTextFull) {
@@ -225,46 +240,55 @@
 
   function parseBlock(block, slip) {
     const blockText = text(block);
-    if (isSuspendedBlock(block)) {
+    const slipTextFull = text(slip);
+    const marketInfo = detectMarket(blockText);
+    const event = extractEvent(blockText, slipTextFull);
+    const selection = extractSelection(blockText);
+    const eventPhase = detectPhase(slipTextFull, blockText);
+    const containerSelector = selectorHint(block);
+
+    if (SUSPENDED_RE.test(blockText)) {
       return {
-        event: extractEvent(blockText, text(slip)),
-        selection: extractSelection(blockText),
+        event,
+        market: marketInfo.market,
+        selection,
         odds: null,
         status: 'suspended',
-        stake: readStake(slip) || null
+        stake: readStake(slip) || null,
+        event_phase: eventPhase,
+        market_kind: marketInfo.kind,
+        container_selector: containerSelector,
+        item_key: `${event}|${marketInfo.market}|${selection}`.toLowerCase()
       };
     }
-    if (isClosedBlock(block)) {
-      return {
-        event: extractEvent(blockText, text(slip)),
-        selection: extractSelection(blockText),
-        odds: null,
-        status: 'closed',
-        stake: readStake(slip) || null
-      };
-    }
+
     const odds = extractOddsFromBlock(block);
     return {
-      event: extractEvent(blockText, text(slip)),
-      selection: extractSelection(blockText),
-      odds: odds,
+      event,
+      market: marketInfo.market,
+      selection,
+      odds,
       status: odds ? 'active' : 'odds_missing',
-      stake: readStake(slip) || null
+      stake: readStake(slip) || null,
+      event_phase: eventPhase,
+      market_kind: marketInfo.kind,
+      container_selector: containerSelector,
+      item_key: `${event}|${marketInfo.market}|${selection}`.toLowerCase()
     };
   }
 
   function readBcBetSlip() {
     const slip = findSlipRoot();
     if (!slip) {
-      return { ok: false, empty: true, items: [], reason: 'no-slip-root' };
+      return { ok: false, empty: true, items: [], reason: 'no-slip-root', container_selector: '' };
     }
     if (isEmptySlip(slip)) {
-      return { ok: true, empty: true, items: [], reason: 'empty-slip' };
+      return { ok: true, empty: true, items: [], reason: 'empty-slip', container_selector: selectorHint(slip) };
     }
 
     const blocks = findSelectionBlocks(slip);
     if (!blocks.length) {
-      return { ok: false, empty: true, items: [], reason: 'no-selection-block' };
+      return { ok: false, empty: true, items: [], reason: 'no-selection-block', container_selector: selectorHint(slip) };
     }
 
     const items = blocks.slice(0, 1).map((block) => parseBlock(block, slip));
@@ -273,7 +297,8 @@
       empty: false,
       items,
       source: 'dom',
-      reason: ''
+      reason: '',
+      container_selector: selectorHint(slip)
     };
   }
 

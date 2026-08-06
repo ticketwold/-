@@ -78,7 +78,7 @@ class AsyncWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("양방 배팅 데스크톱 v1.0")
+        self.setWindowTitle("양방 배팅 데스크톱 v1.0.2 (BetSlip-first)")
         self.resize(1100, 720)
 
         central = QWidget()
@@ -175,14 +175,25 @@ class MainWindow(QMainWindow):
     def _on_tick(self, tick: EngineTick) -> None:
         bti = tick.bti
         bc = tick.bc
-        if bti:
+        if tick.betslip:
+            slip = tick.betslip
             self.lbl_bti.setText(
-                f"텐텐뱃: {len(bti.matchups)}경기 | {bti.tier.value} | {bti.latency_ms:.1f}ms"
+                f"텐텐뱃 카트: {slip.bti.first.selection if slip.bti.first else '비어있음'} "
+                f"| {slip.bti.first.status.value if slip.bti.first else '-'}"
             )
-        if bc:
             self.lbl_bc.setText(
-                f"BC: {len(bc.matchups)}경기 | {bc.tier.value} | {bc.latency_ms:.1f}ms"
+                f"BC 카트: {slip.bc.first.selection if slip.bc.first else '비어있음'} "
+                f"| {slip.bc.first.status.value if slip.bc.first else '-'}"
             )
+        else:
+            if bti:
+                self.lbl_bti.setText(
+                    f"텐텐뱃: {len(bti.matchups)}경기 | {bti.tier.value} | {bti.latency_ms:.1f}ms"
+                )
+            if bc:
+                self.lbl_bc.setText(
+                    f"BC: {len(bc.matchups)}경기 | {bc.tier.value} | {bc.latency_ms:.1f}ms"
+                )
         self.lbl_latency.setText(
             f"감지: {max(bti.latency_ms if bti else 0, bc.latency_ms if bc else 0):.1f}ms "
             f"| 계산: {tick.calc_latency_ms:.1f}ms | 틱: {tick.tick_latency_ms:.1f}ms"

@@ -14,25 +14,33 @@ BTI_FRAME_HINTS = ("bti", "sportsbook", "x10x10s", "sports")
 
 def _frame_score(url: str, hints: tuple[str, ...]) -> int:
     u = url.lower()
-    score = 0
-    for hint in hints:
-        if hint in u:
-            score += 100
-    return score
+    return sum(100 for hint in hints if hint in u)
 
 
 def _parse_result(site: str, payload: dict | None, frame_url: str) -> BetSlipReadResult:
     if not payload:
         return BetSlipReadResult(site=site, ok=False, empty=True, reason="evaluate-failed", frame_url=frame_url)
 
-    items = [BetSlipItem.from_dict(site, item) for item in payload.get("items") or []]
+    container_selector = str(payload.get("container_selector") or "")
+    source = str(payload.get("source") or "dom")
+    items = [
+        BetSlipItem.from_dict(
+            site,
+            item,
+            frame_url=frame_url,
+            source=source,
+            container_selector=str(item.get("container_selector") or container_selector),
+        )
+        for item in (payload.get("items") or [])
+    ]
     return BetSlipReadResult(
         site=site,
         ok=bool(payload.get("ok")),
         empty=bool(payload.get("empty", not items)),
         items=items,
         frame_url=frame_url,
-        source=str(payload.get("source") or "dom"),
+        source=source,
+        container_selector=container_selector,
         reason=str(payload.get("reason") or ""),
         raw=payload,
     )
@@ -64,8 +72,7 @@ async def _read_in_frames(page: Page, js_name: str, site: str, hints: tuple[str,
         result = _parse_result(site, payload, frame.url[:160])
         results.append(result)
         if result.ok and not result.empty and result.first and (result.first.event or result.first.selection):
-            if result.first.odds is not None:
-                return result
+            return result
 
     return _pick_best(results) if results else BetSlipReadResult(site=site, ok=False, empty=True, reason="no-readable-frame")
 

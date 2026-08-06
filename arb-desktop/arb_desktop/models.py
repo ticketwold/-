@@ -92,3 +92,4 @@ class EngineTick:
     opportunities: list[ArbOpportunity]
     tick_latency_ms: float
     calc_latency_ms: float
+    betslip: Any | None = None

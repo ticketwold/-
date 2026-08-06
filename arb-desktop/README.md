@@ -125,30 +125,54 @@ SCREEN odds: T1=2.150, Gen.G=1.720
 
 실패 시: event id 불일치 / team name 정규화 실패 / market type 불일치
 
-## BetSlip 검증 (배팅카트 DOM)
+## BetSlip 검증 (배팅카트 DOM) — 드라이런
 
 전체 경기/API 스캔 대신 **배팅카트에 담긴 항목만** 읽는 BetSlip-first 검증 도구입니다.
 
 ```bash
-python scripts/verify_betslip.py
-# 또는: arb-verify-betslip
+python scripts/verify_betslips.py
+# 또는: arb-verify-betslips
 ```
 
-BC.Game / x10x10s 각각 배팅카트에 항목 1개를 담으면 아래 형식으로 출력됩니다:
+1. Chromium에서 BC.Game / x10x10s 탭이 열립니다.
+2. 양쪽 사이트에 각각 항목 1개를 배팅카트에 담습니다.
+3. **Enter**를 누르면 배팅카트만 스캔합니다.
+
+출력 예:
 
 ```
 [BETSLIP]
 site: BC.Game
 event: Team A vs Team B
+market: Moneyline
 selection: Team B
 odds: 1.95
-status: active
+status: ACTIVE
 stake: 10
+source: dom
+frame_url: ...
+container_selector: ...
+
+[MATCH CHECK]
+same_event: true
+same_market: true
+opposite_selection: true
+network_verified: false
+safe_to_calculate: false
+reason: network-unavailable
+
+[ARBITRAGE]
+odds_a: 1.95
+odds_b: 2.1
+...
 ```
 
-- 배팅카트 컨테이너 내부 DOM만 탐색 (페이지 전체 숫자 스캔 금지)
+옵션: `--watch` (변경 감지), `--no-keep-open`
+
+- 배팅카트 컨테이너 내부 DOM만 탐색
 - suspended/정지/closed 상태는 배당으로 인식하지 않음
 - 기본 드라이런 — 실제 배팅 버튼 자동 클릭 없음
+- `ARB_BETSLIP_FIRST_MODE=true` (기본) 시 데스크톱 앱도 BetSlipScanner 사용
 
 ## 향후
 
