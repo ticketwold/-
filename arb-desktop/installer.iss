@@ -30,7 +30,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checked
 
 [Files]
 Source: "dist\ArbDesktop\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
