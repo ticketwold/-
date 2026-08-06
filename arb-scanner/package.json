@@ -1,0 +1,22 @@
+{
+  "name": "arb-scanner",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/chrome": "^0.0.329",
+    "happy-dom": "^20.0.10",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10"
+  }
+}

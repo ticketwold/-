@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@core/*": ["./src/core/*"],
+      "@scanner/*": ["./src/scanner/*"],
+      "@adapters/*": ["./src/scanner/adapters/*"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}

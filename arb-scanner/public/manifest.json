@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "Arb Scanner",
+  "version": "2.3.0",
+  "description": "x10x10s · BC.Game 실시간 배당 · 양방 · 자동베팅",
+  "permissions": ["storage", "notifications", "alarms", "tabs", "scripting", "webNavigation", "windows", "dom"],
+  "host_permissions": [
+    "*://x10x10s.com/*",
+    "*://*.x10x10s.com/*",
+    "*://*.bti-sports.com/*",
+    "*://*.bti-sports.io/*",
+    "*://*.live8588.com/*",
+    "*://*.fxf774.com/*",
+    "*://*.pbc00.com/*",
+    "*://*.v210x10b.com/*",
+    "*://*.y10x103.com/*",
+    "*://*.v210x10g.com/*",
+    "*://*.z10x104.com/*",
+    "*://*.streambridge.feedconstruct.com/*",
+    "*://*.sptpub.com/*",
+    "*://*.betby.com/*",
+    "*://*.sptsportscdn.com/*",
+    "*://*.biahosted.com/*",
+    "*://*.cocoesports.com/*",
+    "*://bc.game/*",
+    "*://*.bc.game/*",
+    "https://api.bithumb.com/*",
+    "https://api.telegram.org/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://x10x10s.com/*",
+        "*://*.x10x10s.com/*",
+        "*://*.bti-sports.com/*",
+        "*://*.bti-sports.io/*",
+        "*://*.live8588.com/*",
+        "*://*.fxf774.com/*",
+        "*://*.pbc00.com/*",
+        "*://*.v210x10b.com/*",
+        "*://*.y10x103.com/*",
+        "*://*.v210x10g.com/*",
+        "*://*.z10x104.com/*",
+        "*://*.streambridge.feedconstruct.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://bc.game/*",
+        "*://*.bc.game/*",
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Arb Scanner — 클릭 시 패널 창 열기"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {}
+}

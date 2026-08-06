@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arb Scanner</title>
+  <link rel="stylesheet" href="./popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Arb Scanner</h1>
+    <span id="status" class="badge">—</span>
+  </header>
+
+  <section class="profit-box">
+    <div>수익률 <strong id="profit">—</strong></div>
+    <div>USDT/KRW <strong id="rate">—</strong></div>
+    <div>BC 베팅금 <strong id="bc-usdt">—</strong> USDT</div>
+  </section>
+
+  <section class="row">
+    <label>x10 베팅금 (원)
+      <input type="number" id="x10-krw" min="1000" step="1000" />
+    </label>
+    <button id="sync-btn" type="button">금액 동기화</button>
+  </section>
+
+  <section class="row">
+    <button id="arm-btn" type="button" class="arm-off">자동배팅 OFF</button>
+    <button id="strike-btn" type="button">수동 베팅</button>
+  </section>
+
+  <section>
+    <h2>배팅카트 (x10)</h2>
+    <div id="x10-slip" class="slip">—</div>
+  </section>
+  <section>
+    <h2>배팅카트 (BC)</h2>
+    <div id="bc-slip" class="slip">—</div>
+  </section>
+
+  <footer>
+    <button id="diag-btn" type="button">진단</button>
+    <a href="options.html" target="_blank">설정</a>
+  </footer>
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+{
+  "manifest_version": 3,
+  "name": "양방 베팅 봇",
+  "version": "5.9.32",
+  "description": "텐텐뱃 (x10x10s) + BC.Game 양방 서치 및 슬립 비교 베팅",
+  "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom", "alarms"],
+  "host_permissions": [
+    "*://api.bithumb.com/*",
+    "*://*.x10x10s.com/*",
+    "*://bc.game/*",
+    "*://*.bc.game/*",
+    "*://*.bti-sports.com/*",
+    "*://*.bti-sports.io/*",
+    "*://*.live8588.com/*",
+    "*://*.fxf774.com/*",
+    "*://*.sptpub.com/*",
+    "*://*.sptsportscdn.com/*",
+    "*://*.cocoesports.com/*",
+    "*://*.betby.com/*",
+    "*://*.biahosted.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bti-sports.io/*",
+        "*://*.bti-sports.com/*",
+        "*://*.x10x10s.com/*",
+        "*://*.live8588.com/*",
+        "*://*.fxf774.com/*"
+      ],
+      "js": ["bti_content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_api_hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_betby_bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_slip_direct.js", "bc_stake_set.js", "bc_place_bet.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_sports_scrape.js", "bc_board_scrape.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_slip_read.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "type": "module"
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_api_hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_slip_direct.js", "bc_stake_set.js", "bc_place_bet.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_sports_scrape.js", "bc_board_scrape.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_slip_read.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "type": "module"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["chunks/*.js"],
+      "matches": ["*://bc.game/*", "*://*.bc.game/*", "*://*.betby.com/*", "*://*.sptpub.com/*", "*://*.sptsportscdn.com/*", "*://*.cocoesports.com/*", "*://*.biahosted.com/*"]
+    }
+  ],
+  "action": {
+    "default_title": "양방 봇 (텐텐뱃 + BC.Game) — 클릭하면 창 열림"
+  }
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Arb Scanner 설정</title>
+  <link rel="stylesheet" href="./options.css" />
+</head>
+<body>
+  <h1>Arb Scanner 설정</h1>
+  <form id="form">
+    <fieldset>
+      <legend>양방 / 베팅</legend>
+      <label>최소 수익률 (%)
+        <input type="number" id="minProfit" min="0" step="0.1" />
+      </label>
+      <label>x10 기본 베팅금 (원)
+        <input type="number" id="x10BetKrw" min="1000" step="1000" />
+      </label>
+      <label class="check"><input type="checkbox" id="stakeSync" /> x10 → BC 금액 자동 동기화</label>
+      <label class="check"><input type="checkbox" id="autoBet" /> 자동 베팅 (ARM 후)</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>USDT 시세 (빗썸)</legend>
+      <label class="check"><input type="checkbox" id="autoBithumb" /> 빗썸 자동 시세</label>
+      <label>수동 USDT/KRW (빗썸 실패 시)
+        <input type="number" id="manualUsdtKrw" min="1000" step="1" />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>알림</legend>
+      <label class="check"><input type="checkbox" id="notifications" /> 브라우저 알림</label>
+      <label class="check"><input type="checkbox" id="sound" /> 사운드</label>
+      <label class="check"><input type="checkbox" id="telegramEnabled" /> 텔레그램</label>
+      <label>Telegram Bot Token <input type="password" id="telegramToken" /></label>
+      <label>Telegram Chat ID <input type="text" id="telegramChatId" /></label>
+      <label class="check"><input type="checkbox" id="discordEnabled" /> 디스코드</label>
+      <label>Discord Webhook URL <input type="url" id="discordWebhook" /></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>고급</legend>
+      <label>Debounce (ms) <input type="number" id="debounceMs" min="100" /></label>
+      <label class="check"><input type="checkbox" id="diagnostic" /> 진단 모드</label>
+    </fieldset>
+
+    <button type="submit">저장</button>
+  </form>
+  <p id="saved" hidden>저장됨</p>
+  <script type="module" src="./options.ts"></script>
+</body>
+</html>
