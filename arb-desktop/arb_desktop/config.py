@@ -1,10 +1,10 @@
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arb_desktop.scanners.playwright.chrome_profile import (
+    default_automation_profile_dir,
     default_chrome_executable,
     default_chrome_user_data_dir,
 )
@@ -35,25 +35,12 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser — launch_persistent_context + 기존 Chrome 프로필 (기본 Profile 3)
+    # Browser — 자동화 전용 Chrome 프로필 (arb-chrome-profile)
     headless: bool = False
     chrome_executable: Path = Field(default_factory=default_chrome_executable)
-    chrome_profile_mode: Literal["dedicated", "existing"] = "existing"
-    chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
-    chrome_profile_directory: str = "Profile 3"
-    chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
-    chrome_cdp_urls: tuple[str, ...] = ("http://127.0.0.1:9222", "http://127.0.0.1:9229")
-    chrome_cdp_timeout_ms: int = 5000
-    persist_sessions: bool = False
-
-    @property
-    def user_data_dir(self) -> Path:
-        """하위 호환 — dedicated 모드 전용 프로필 경로."""
-        return self.chrome_profile_dir
-
-    @property
-    def uses_existing_chrome_profile(self) -> bool:
-        return self.chrome_profile_mode == "existing"
+    chrome_source_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
+    chrome_source_profile_directory: str = "Profile 3"
+    chrome_automation_profile_dir: Path = Field(default_factory=default_automation_profile_dir)
 
     # BTI API
     bti_market_types: str = "ML0,HC0,OU0"

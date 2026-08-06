@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from arb_desktop.scanners.playwright.chrome_profile import (
-    ChromeProfileError,
-    launch_args_for_mode,
-    validate_profile_directory,
-)
+from arb_desktop.scanners.playwright.chrome_profile import is_chrome_running
 
 
-def test_launch_args_existing_profile():
-    assert launch_args_for_mode("existing", "Profile 3") == ["--profile-directory=Profile 3"]
-    assert launch_args_for_mode("existing", "Default") == ["--profile-directory=Default"]
-    assert launch_args_for_mode("dedicated", "Profile 3") == []
+def test_is_chrome_running_windows_true():
+    with patch("platform.system", return_value="Windows"), patch(
+        "subprocess.run",
+        return_value=type("R", (), {"stdout": "chrome.exe  1234", "returncode": 0})(),
+    ):
+        assert is_chrome_running() is True
 
 
-def test_validate_missing_profile(tmp_path: Path):
-    with pytest.raises(ChromeProfileError, match="프로필을 찾을 수 없습니다"):
-        validate_profile_directory(tmp_path, "Profile 3")
+def test_default_automation_profile_dir():
+    from arb_desktop.scanners.playwright.chrome_profile import default_automation_profile_dir
+
+    assert default_automation_profile_dir() == Path.home() / "arb-chrome-profile"
