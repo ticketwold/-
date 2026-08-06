@@ -12,6 +12,8 @@ let syncRunning = false;
 let autoBetRunning = false;
 let autoBetWanted = false;
 let autoBetPausedByClose = false;
+let autoBetSessionId = 0;
+let suppressStorageApplyUntil = 0;
 let lastMarketCloseLogAt = 0;
 let lastMarketOpenLogAt = 0;
 let calcTimer = null;
@@ -302,12 +304,19 @@ function updateSlipUI(bti, poly, arbBti = null) {
   }
 
   const hint = $('profitHint');
-  if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
+  if (autoBetPausedByClose) {
+    hint.textContent = '배당 마감 — 자동배팅 일시정지 (재개 대기)';
+  } else if (autoBetWanted && autoBetRunning) {
+    if (profit !== null && profit >= getMinProfit()) {
+      hint.textContent = `자동배팅 가동 — 수익 ${profit.toFixed(2)}% (최소 ${getMinProfit()}%)`;
+    } else {
+      hint.textContent = '자동배팅 가동 중 — 수익 조건 충족 시 즉시 배팅';
+    }
+  } else if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
   else if (!poly?.odds) hint.textContent = lastStatus.bc || 'BC.Game: 슬립/배당 확인';
   else if (poly?.needsStake) hint.textContent = shouldSyncAmounts() ? '금액 자동 입력 중...' : '금액 입력 시 당첨금 기준 배당';
   else if (profit !== null && profit >= getMinProfit()) {
-    if (autoBetRunning) hint.textContent = `자동 배팅 대기 — 수익 ${profit.toFixed(2)}% (최소 ${getMinProfit()}%)`;
-    else if (syncRunning) hint.textContent = `수익 구간 — 금액 동기화 중 (${profit.toFixed(2)}%)`;
+    if (syncRunning) hint.textContent = `수익 구간 — 금액 동기화 중 (${profit.toFixed(2)}%)`;
     else hint.textContent = `수익 구간 충족 (${profit.toFixed(2)}%) — 자동 배팅 시작 가능`;
   }
   else if (profit !== null) hint.textContent = `수익 구간 밖 (최소 ${getMinProfit()}%)`;
@@ -1191,6 +1200,14 @@ async function checkMarketOpenForAutoBet() {
   return !!(btiSt?.open && bcSt?.open);
 }
 
+function isAutoBetLooping() {
+  return !!(autoBetWanted && autoBetRunning && !autoBetPausedByClose);
+}
+
+function isAutoBetEngaged() {
+  return !!(autoBetWanted || autoBetRunning || autoBetPausedByClose);
+}
+
 function pauseAutoBetByMarketClose() {
   if (!autoBetWanted || autoBetPausedByClose) return;
   autoBetRunning = false;
@@ -1198,6 +1215,7 @@ function pauseAutoBetByMarketClose() {
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
   persistSyncState({ autoBetRunning: false, autoBetWanted: true, autoBetPausedByClose: true });
   updateAutomationButtons();
+  updateSlipUI(cachedBti, cachedBc);
   if (Date.now() - lastMarketCloseLogAt > 3000) {
     lastMarketCloseLogAt = Date.now();
     log('배당 마감 — 자동배팅 일시정지', 'info');
@@ -1208,9 +1226,15 @@ function resumeAutoBetByMarketOpen() {
   if (!autoBetWanted || !autoBetPausedByClose) return;
   autoBetPausedByClose = false;
   autoBetRunning = true;
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: 'SET_AUTO_BET',
+    enabled: true,
+    wanted: true,
+    pausedByClose: false
+  }).catch(() => {});
   persistSyncState({ autoBetRunning: true, autoBetWanted: true, autoBetPausedByClose: false });
   updateAutomationButtons();
+  updateSlipUI(cachedBti, cachedBc);
   if (Date.now() - lastMarketOpenLogAt > 3000) {
     lastMarketOpenLogAt = Date.now();
     log('배당 재개 — 자동배팅 가동', 'ok');
@@ -1220,7 +1244,9 @@ function resumeAutoBetByMarketOpen() {
 
 async function updateAutoBetMarketState() {
   if (!autoBetWanted) return;
+  const session = autoBetSessionId;
   const open = await checkMarketOpenForAutoBet();
+  if (session !== autoBetSessionId || !autoBetWanted) return;
   if (!open) {
     if (autoBetRunning) pauseAutoBetByMarketClose();
     return;
@@ -1229,6 +1255,7 @@ async function updateAutoBetMarketState() {
   else if (!autoBetRunning) {
     autoBetRunning = true;
     updateAutomationButtons();
+    updateSlipUI(cachedBti, cachedBc);
     scheduleAutoBetCheck();
   }
 }
@@ -1662,7 +1689,7 @@ async function setBcAmount(bcTab, amountUsd) {
 }
 
 function shouldSyncAmounts() {
-  return autoSyncEnabled || syncRunning || autoBetRunning;
+  return autoSyncEnabled || syncRunning || autoBetWanted;
 }
 function needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force = false) {
   if (force) return true;
@@ -1781,10 +1808,12 @@ async function syncAmounts(force = false) {
 }
 
 function scheduleAutoBetCheck() {
-  if (!autoBetWanted || !autoBetRunning) return;
+  if (!isAutoBetLooping()) return;
   if (autoBetTimer) clearTimeout(autoBetTimer);
+  const session = autoBetSessionId;
   autoBetTimer = setTimeout(() => {
     autoBetTimer = null;
+    if (session !== autoBetSessionId) return;
     tryAutoBet();
   }, 30);
 }
@@ -1794,14 +1823,17 @@ function bcOLabel() {
 }
 
 async function tryAutoBet() {
-  if (!autoBetWanted || !autoBetRunning || strikePending) return;
+  if (!isAutoBetLooping() || strikePending) return;
   if (Date.now() - lastStrikeAt < AUTO_BET_COOLDOWN_MS) return;
+  const session = autoBetSessionId;
 
   const found = await findTabs();
+  if (session !== autoBetSessionId || !isAutoBetLooping()) return;
   if (!found.bcTab?.id || !found.btiTab?.id) return;
 
   const polyO = resolveBcOddsForSync();
   const btiOdds = await resolveBtiOddsForSync(found.btiTab);
+  if (session !== autoBetSessionId || !isAutoBetLooping()) return;
   if (!polyO || !btiOdds || btiOdds <= 1) {
     await updateAutoBetMarketState();
     if (!autoBetPausedByClose && Date.now() - lastAutoBetHintAt > 4000) {
@@ -1890,7 +1922,7 @@ async function pollLoop() {
     await syncBcAmountOnly();
     scheduleSyncAmounts();
   }
-  if (autoBetRunning) scheduleAutoBetCheck();
+  if (isAutoBetLooping()) scheduleAutoBetCheck();
 }
 
 function onOddsChanged(msg) {
@@ -1902,7 +1934,7 @@ function onOddsChanged(msg) {
   syncBcAmountOnly(true);
   scheduleSyncAmounts();
   updateAutoBetMarketState();
-  if (autoBetRunning) scheduleAutoBetCheck();
+  if (isAutoBetLooping()) scheduleAutoBetCheck();
 }
 
 function onBtiStakeChanged(msg) {
@@ -1913,6 +1945,7 @@ function onBtiStakeChanged(msg) {
 }
 
 function persistSyncState(extra = {}) {
+  suppressStorageApplyUntil = Date.now() + 300;
   chrome.storage.local.get(SYNC_STATE_KEY, (data) => {
     const cur = data[SYNC_STATE_KEY] || {};
     chrome.storage.local.set({
@@ -1930,17 +1963,43 @@ function persistSyncState(extra = {}) {
   });
 }
 
+function applySyncStateFromStorage(s, fromRemote = false) {
+  if (!s) return;
+  const wasLooping = isAutoBetLooping();
+  autoBetWanted = !!s.autoBetWanted;
+  autoBetPausedByClose = !!s.autoBetPausedByClose;
+  autoBetRunning = !!s.autoBetRunning && !autoBetPausedByClose;
+
+  if (!autoBetWanted && !autoBetRunning) {
+    autoBetSessionId++;
+    strikePending = false;
+    if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
+  } else if (fromRemote && isAutoBetLooping() && !wasLooping) {
+    scheduleAutoBetCheck();
+  }
+
+  updateAutomationButtons();
+  updateSlipUI(cachedBti, cachedBc);
+}
+
 async function initSyncFromStorage() {
   try {
     const data = await chrome.storage.local.get(SYNC_STATE_KEY);
     const s = data[SYNC_STATE_KEY] || {};
     if (s.btiBet && $('btiBet')) $('btiBet').value = String(s.btiBet);
     if (s.autoBetWanted || s.autoBetRunning) {
-      autoBetWanted = !!(s.autoBetWanted ?? s.autoBetRunning);
-      autoBetPausedByClose = !!s.autoBetPausedByClose;
-      autoBetRunning = !!s.autoBetRunning && !autoBetPausedByClose;
-      if (autoBetRunning) {
-        chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
+      applySyncStateFromStorage({
+        autoBetWanted: !!(s.autoBetWanted ?? s.autoBetRunning),
+        autoBetPausedByClose: !!s.autoBetPausedByClose,
+        autoBetRunning: !!s.autoBetRunning
+      });
+      if (isAutoBetLooping()) {
+        chrome.runtime.sendMessage({
+          type: 'SET_AUTO_BET',
+          enabled: true,
+          wanted: true,
+          pausedByClose: false
+        }).catch(() => {});
       }
     }
   } catch (_) {}
@@ -1956,27 +2015,30 @@ function enableAutoSync() {
 }
 
 function isAutomationActive() {
-  return autoBetWanted || autoBetRunning;
+  return isAutoBetEngaged();
 }
 
 function updateAutomationButtons() {
   const betStartBtn = $('autoBetStart');
   const betStopBtn = $('autoBetStop');
+  const looping = isAutoBetLooping();
+  const engaged = isAutoBetEngaged();
 
-  if (betStartBtn) betStartBtn.disabled = autoBetWanted && autoBetRunning;
-  if (betStopBtn) betStopBtn.disabled = !autoBetWanted;
-  const hint = $('profitHint');
-  if (hint && autoBetPausedByClose) {
-    hint.textContent = '배당 마감 — 자동배팅 일시정지 (재개 대기)';
-  } else if (hint && autoBetWanted && autoBetRunning) {
-    hint.textContent = '자동배팅 가동 중 — 수익 조건 충족 시 즉시 배팅';
+  if (betStartBtn) {
+    betStartBtn.disabled = looping;
+    betStartBtn.textContent = autoBetPausedByClose ? '자동 배팅 재개' : '자동 배팅';
+  }
+  if (betStopBtn) {
+    betStopBtn.disabled = !engaged;
   }
 }
 
 const updateSyncButtons = updateAutomationButtons;
 
 function startAutoBet() {
-  if (autoBetRunning) return;
+  if (isAutoBetLooping()) return;
+  autoBetSessionId++;
+  const session = autoBetSessionId;
   document.querySelector('.tab[data-tab="slip"]')?.click();
   autoBetWanted = true;
   autoBetPausedByClose = false;
@@ -1988,41 +2050,50 @@ function startAutoBet() {
   lastMarketOpenLogAt = 0;
   enableAutoSync();
   updateAutomationButtons();
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
+  updateSlipUI(cachedBti, cachedBc);
+  chrome.runtime.sendMessage({
+    type: 'SET_AUTO_BET',
+    enabled: true,
+    wanted: true,
+    pausedByClose: false
+  }).catch(() => {});
   persistSyncState({ autoBetRunning: true, autoBetWanted: true, autoBetPausedByClose: false });
   log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
   refreshSlips().then(async () => {
+    if (session !== autoBetSessionId || !autoBetWanted) return;
     await updateAutoBetMarketState();
-    if (!autoBetRunning) return;
+    if (session !== autoBetSessionId || !isAutoBetLooping()) return;
     const found = await findTabs();
     const polyO = resolveBcOddsForSync();
     const btiOdds = await resolveBtiOddsForSync(found.btiTab);
     const profit = (polyO && btiOdds) ? calcProfit(btiOdds, polyO) : null;
     log(`상태 — 텐텐 ${btiOdds?.toFixed(3) || '-'} · BC ${polyO?.toFixed(3) || '-'} · 수익 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
     await syncAmounts(true);
-    scheduleAutoBetCheck();
+    if (session === autoBetSessionId) scheduleAutoBetCheck();
   });
 }
 
 function stopAutoBetOnly(clearWanted = true) {
+  autoBetSessionId++;
   autoBetRunning = false;
   if (clearWanted) autoBetWanted = false;
   autoBetPausedByClose = false;
   strikePending = false;
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: false }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: 'STOP_AUTO_BET',
+    clearWanted
+  }).catch(() => {});
   persistSyncState({
     autoBetRunning: false,
     autoBetWanted: clearWanted ? false : autoBetWanted,
     autoBetPausedByClose: false
   });
   updateAutomationButtons();
-  const hint = $('profitHint');
-  if (hint && !autoBetWanted) hint.textContent = '배팅카트에 담으면 금액 자동 동기화';
+  updateSlipUI(cachedBti, cachedBc);
 }
 
 function stopAutoBet() {
-  if (!autoBetWanted && !autoBetRunning) return;
   stopAutoBetOnly(true);
   log('자동 배팅 정지', 'info');
 }
@@ -2141,17 +2212,24 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
   if (msg.type === 'USDT_RATE_UPDATED' && msg.rate) applyUsdtRate(msg.rate);
+  if (msg.type === 'AUTO_BET_STATE' && msg.state) applySyncStateFromStorage(msg.state, true);
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes[SYNC_STATE_KEY]) return;
+  if (Date.now() < suppressStorageApplyUntil) return;
+  applySyncStateFromStorage(changes[SYNC_STATE_KEY].newValue, true);
 });
 
 setInterval(() => {
   refreshSlips().then(() => {
-    updateAutoBetMarketState();
+    if (autoBetWanted) updateAutoBetMarketState();
     if (shouldSyncAmounts()) scheduleSyncAmounts();
-    if (autoBetRunning) scheduleAutoBetCheck();
+    if (isAutoBetLooping()) scheduleAutoBetCheck();
   });
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.9 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 빈카트 배당 수정`, 'info');
+log(`v5.9.10 ${IS_PANEL ? '패널' : '팝업'} 로드 — 자동배팅 시작/정지 개선`, 'info');

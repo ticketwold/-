@@ -623,7 +623,7 @@ async function saveSyncState(partial) {
 }
 
 function shouldBgSync(state) {
-  return !!(state?.autoSyncEnabled || state?.autoBetRunning);
+  return !!(state?.autoSyncEnabled || state?.autoBetRunning || state?.autoBetWanted);
 }
 
 async function isPanelOpen() {
@@ -909,7 +909,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'SET_AUTO_BET') {
-    saveSyncState({ autoBetRunning: !!msg.enabled }).then(() => {
+    const enabled = !!msg.enabled;
+    saveSyncState({
+      autoBetRunning: enabled && !msg.pausedByClose,
+      autoBetWanted: enabled ? (msg.wanted !== false) : false,
+      autoBetPausedByClose: enabled ? !!msg.pausedByClose : false
+    }).then(async () => {
+      const state = await loadSyncState();
+      broadcast({ type: 'AUTO_BET_STATE', state });
+      updateBgSyncLoop();
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (msg.type === 'STOP_AUTO_BET') {
+    const clearWanted = msg.clearWanted !== false;
+    const patch = { autoBetRunning: false, autoBetPausedByClose: false };
+    if (clearWanted) patch.autoBetWanted = false;
+    saveSyncState(patch).then(async () => {
+      const state = await loadSyncState();
+      broadcast({ type: 'AUTO_BET_STATE', state });
       updateBgSyncLoop();
       sendResponse({ ok: true });
     });
@@ -917,13 +937,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'STOP_ALL_AUTOMATION') {
-    saveSyncState({ autoSyncEnabled: false, autoBetRunning: false }).then(() => {
+    saveSyncState({ autoSyncEnabled: false, autoBetRunning: false, autoBetWanted: false, autoBetPausedByClose: false }).then(async () => {
       bgLastBcUsd = 0;
       bgLastBcOdds = 0;
       bgLastBtiKrw = 0;
       bgLastBtiOdds = 0;
       bgLastSyncAt = 0;
       stopBgSyncLoop();
+      const state = await loadSyncState();
+      broadcast({ type: 'AUTO_BET_STATE', state });
       sendResponse({ ok: true });
     });
     return true;
@@ -977,7 +999,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.9] background loaded');
+console.log('[양방봇 v5.9.10] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();
