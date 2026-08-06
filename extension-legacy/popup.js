@@ -1838,15 +1838,19 @@ async function setBcStakeMain(tabId, frameId, amountUsd) {
       world: 'MAIN',
       func: (amount) => {
         const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
+        const tol = Math.max(0.12, rounded * 0.04);
+        const closeEnough = (res) => {
+          if (!res?.stake || res.stake <= 0) return false;
+          return Math.abs(res.stake - rounded) <= tol;
+        };
         const trySet = (fn) => {
           if (typeof fn !== 'function') return null;
           const res = fn(rounded);
-          if (res?.ok || res?.partial || (res?.stake > 0 && Math.abs(res.stake - rounded) < Math.max(0.2, rounded * 0.08))) {
-            return res;
-          }
-          return res?.stake > 0 ? res : null;
+          if (res?.ok && closeEnough(res)) return { ...res, ok: true };
+          if (closeEnough(res)) return { ...res, ok: true };
+          return null;
         };
-        return trySet(window.__bcSetStake) || trySet(window.__bcSetStakeNative) || { ok: false, reason: 'stake-handler-missing' };
+        return trySet(window.__bcSetStake) || trySet(window.__bcSetStakeNative) || { ok: false, reason: 'stake-mismatch', stake: 0, target: rounded };
       },
       args: [amountUsd]
     });
@@ -1875,28 +1879,30 @@ async function setBcAmount(bcTab, amountUsd) {
     if (!tryOrder.includes(frameId)) tryOrder.push(frameId);
   }
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const frameId of tryOrder) {
-      const probe = probes.find((p) => p.frameId === frameId) || {};
-      if (attempt === 0 && !probe.hasInput && !probe.hasSlip && (probe.score || 0) < 8 && frameId !== lastBcStakeFrameId) continue;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const frameBatch = tryOrder.slice(0, attempt === 0 ? 6 : tryOrder.length);
+    const batchResults = await Promise.all(frameBatch.map(async (frameId) => {
       const res = await setBcStakeMain(bcTab.id, frameId, amountUsd);
+      return { frameId, res };
+    }));
+    for (const { frameId, res } of batchResults) {
       if (isBcStakeCloseEnough(amountUsd, res)) {
         lastBcStakeFrameId = frameId;
         return { ...res, ok: true, frameId };
       }
-      if (res?.partial || res?.stake > 0) {
+      if (res?.stake > 0) {
         lastRes = { ...res, frameId };
         lastBcStakeFrameId = frameId;
       }
     }
 
-    for (const frameId of tryOrder.slice(0, 8)) {
+    for (const frameId of frameBatch.slice(0, 8)) {
       const res = await sendBc(bcTab.id, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, frameId);
-      if (res?.ok) {
+      if (isBcStakeCloseEnough(amountUsd, res)) {
         lastBcStakeFrameId = frameId;
-        return res;
+        return { ...res, ok: true, frameId };
       }
-      if (res?.stake > 0 || res?.partial) lastRes = res;
+      if (res?.stake > 0) lastRes = res;
     }
   }
 
@@ -2029,8 +2035,11 @@ async function syncAmounts(force = false) {
     } else {
       const reasons = [];
       if (!btiOk) reasons.push(`텐텐뱃: ${btiRes?.reason || '실패'}`);
-      if (!polyOk) reasons.push(`BC: ${polyRes?.reason || '실패'}`);
-      if (reasons.length && (force || Date.now() - lastSyncedAt > 5000)) {
+      if (!polyOk) {
+        const got = polyRes?.stake > 0 ? `$${polyRes.stake}` : '-';
+        reasons.push(`BC: ${polyRes?.reason || '실패'} (목표 $${polyUsd.toFixed(2)}, 현재 ${got})`);
+      }
+      if (reasons.length && (force || Date.now() - lastSyncedAt > 3000)) {
         log(`금액 동기화: ${reasons.join(' / ')}`, 'err');
       }
     }
@@ -2211,14 +2220,16 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
   log(`${label} — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${bcOLabel()} · ${btiBet.toLocaleString()}원 / $${polyUsd.toFixed(2)}`, 'info');
 
   try {
-    if (!amountsReady) {
+    let stakeReady = amountsReady;
+    if (!stakeReady) {
       await syncAmounts(true);
+      stakeReady = amountsSyncedForBet(btiBet, polyUsd);
     }
 
     const [btiRes, polyRes] = await Promise.all([
       placeBtiBet(found.btiTab, btiBet, btiOdds, hint),
       placeBcBet(found.bcTab, polyUsd, {
-        skipFill: amountsReady,
+        skipFill: stakeReady,
         frameId,
         fast: true
       })
@@ -2620,4 +2631,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.24 ${IS_PANEL ? '패널' : '팝업'} 로드 — 금액 동기화`, 'info');
+log(`v5.9.25 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC stake BetBy 입력`, 'info');
