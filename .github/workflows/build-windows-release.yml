@@ -12,8 +12,14 @@ on:
         required: true
         default: "true"
   push:
+    branches:
+      - main
     tags:
       - "arb-desktop-v*"
+    paths:
+      - "arb-desktop/**"
+      - "chrome-bridge/**"
+      - ".github/workflows/build-windows-release.yml"
 
 jobs:
   build-windows:
