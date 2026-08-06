@@ -44,6 +44,56 @@ let refreshQueued = false;
 let bcCartEmptyConfirmed = false;
 let bcScriptReady = new Set();
 let btiScriptReady = new Set();
+
+function isBcUrl(url) {
+  return /bc\.game|betby\.com|sptpub\.com|sptsportscdn|cocoesports|biahosted/i.test(url || '');
+}
+
+function isBtiUrl(url) {
+  return /x10x10s\.com|bti-sports|live8588|fxf774/i.test(url || '');
+}
+
+function clearScriptCacheForTab(tabId) {
+  const prefix = `${tabId}:`;
+  const tabKey = String(tabId);
+  for (const key of [...bcScriptReady]) {
+    if (key === tabKey || key.startsWith(prefix)) bcScriptReady.delete(key);
+  }
+  for (const key of [...btiScriptReady]) {
+    if (key === tabKey || key.startsWith(prefix)) btiScriptReady.delete(key);
+  }
+}
+
+function onTabNavigated(tabId, url) {
+  clearScriptCacheForTab(tabId);
+  if (isBcUrl(url)) {
+    bcCartEmptyConfirmed = false;
+    cachedBc = null;
+    lastBcStakeFrameId = null;
+    lastBcSyncAt = 0;
+    setTimeout(() => refreshSlips().catch(() => {}), 400);
+    setTimeout(() => refreshSlips().catch(() => {}), 1200);
+  }
+  if (isBtiUrl(url)) {
+    cachedBti = null;
+    lastBtiFrame = null;
+    lastBtiSlipFrame = null;
+    lastBtiBoardFrame = null;
+  }
+}
+
+async function probeBcMainWorldReady(tabId, frameId = 0) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => typeof window.__bcReadDirectSlip === 'function' || typeof window.__bcScrapeOdds === 'function'
+    });
+    return !!results?.[0]?.result;
+  } catch (_) {
+    return false;
+  }
+}
 let lastStatus = { bti: '', bc: '' };
 const SYNC_STATE_KEY = 'syncState';
 const HISTORY_KEY = 'calcHistory';
@@ -451,7 +501,13 @@ function sendBc(tabId, msg, frameId = 0) {
 
 async function ensureBtiScript(tabId, frameId) {
   const key = `${tabId}:${frameId}`;
-  if (btiScriptReady.has(key)) return;
+  if (btiScriptReady.has(key)) {
+    try {
+      const ping = await sendBti(tabId, frameId, { type: 'PING' });
+      if (ping?.ok) return;
+    } catch (_) {}
+    btiScriptReady.delete(key);
+  }
   try {
     await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
@@ -463,7 +519,12 @@ async function ensureBtiScript(tabId, frameId) {
 
 async function ensureBcScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
-  if (bcScriptReady.has(key)) return;
+  if (bcScriptReady.has(key)) {
+    const probeId = frameId != null ? frameId : 0;
+    if (await probeBcMainWorldReady(tabId, probeId)) return;
+    bcScriptReady.delete(key);
+    if (frameId == null) bcScriptReady.delete(String(tabId));
+  }
   const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js', 'bc_place_bet.js'];
   for (const file of mainFiles) {
     try {
@@ -2735,6 +2796,7 @@ $('diagBtn')?.addEventListener('click', async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'TAB_NAVIGATED') onTabNavigated(msg.tabId, msg.url);
   if (msg.type === 'SEARCH_RESULT') renderSearchResults(msg);
   if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
@@ -2762,4 +2824,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.28 ${IS_PANEL ? '패널' : '팝업'} 로드 — 카트 비운 뒤 재선택 인식`, 'info');
+log(`v5.9.29 ${IS_PANEL ? '패널' : '팝업'} 로드 — 새로고침 후 재인식`, 'info');

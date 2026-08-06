@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "양방 베팅 봇",
-  "version": "5.9.28",
+  "version": "5.9.29",
   "description": "텐텐뱃 (x10x10s) + BC.Game 양방 서치 및 슬립 비교 베팅",
   "permissions": ["storage", "tabs", "scripting", "webNavigation", "windows", "dom", "alarms"],
   "host_permissions": [
@@ -50,6 +50,13 @@
     },
     {
       "matches": ["*://bc.game/*", "*://*.bc.game/*"],
+      "js": ["bc_slip_direct.js", "bc_stake_set.js", "bc_place_bet.js"],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://bc.game/*", "*://*.bc.game/*"],
       "js": ["bc_sports_scrape.js", "bc_board_scrape.js"],
       "run_at": "document_idle",
       "world": "MAIN",
@@ -78,6 +85,19 @@
       ],
       "js": ["bc_api_hook.js"],
       "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.betby.com/*",
+        "*://*.sptpub.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.cocoesports.com/*",
+        "*://*.biahosted.com/*"
+      ],
+      "js": ["bc_slip_direct.js", "bc_stake_set.js", "bc_place_bet.js"],
+      "run_at": "document_idle",
       "world": "MAIN",
       "all_frames": true
     },
