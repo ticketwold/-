@@ -7,7 +7,13 @@
   playwright install chromium
   python scripts/verify_bc_live.py
 
-BC sports 라이브 탭이 열리고 API/화면 배당 비교 로그가 출력됩니다.
+옵션:
+  --wait 60          사용자가 스포츠/라이브 탭 클릭할 시간(초)
+  --screen-wait 30   화면 경기 로드 대기(초)
+  --keep-open 60     결과 확인 후 브라우저 유지(초)
+  --no-keep-open     검증 후 즉시 종료
+
+Chromium이 열리면 60초 동안 직접 BC.Game 스포츠/라이브 탭을 클릭하세요.
 """
 
 from arb_desktop.validation.verify_bc_live import main
