@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     default_usdt_rate: float = 1400.0
     min_profit_pct: float = 0.5
 
+    # BetSlip-first mode (전체 경기 스캔 비활성화)
+    betslip_first_mode: bool = True
+    betslip_network_tolerance: float = 0.06
+    dry_run: bool = True
+    live_execution_enabled: bool = False
+
     # Browser
     headless: bool = False
     user_data_dir: Path = Path.home() / ".arb-desktop" / "browser-profile"
