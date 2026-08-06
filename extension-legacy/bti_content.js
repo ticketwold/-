@@ -240,8 +240,29 @@ function parseSlipFromCard(card) {
     };
   }
 
-  // ── 배당: 실시간 배당판만 (슬립/베팅내역 @배당 X) ──
-  let odds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  // ── 배당: 슬립 카드 표시 → 실시간 배당판 ──
+  let odds = null;
+  for (const sp of card.querySelectorAll('[class*="UpdateNotification"], [class*="odds"], [class*="Odds"]')) {
+    if (isStruckThrough(sp)) continue;
+    const n = parseOddsText(sp.textContent);
+    if (n) { odds = n; break; }
+  }
+  if (!odds) {
+    const atM = (card.textContent || '').match(/@\s*(\d+\.\d{2,3})/);
+    if (atM) odds = parseOddsText(atM[1]);
+  }
+  if (!odds) {
+    for (const sp of card.querySelectorAll('span, div, b, strong, p')) {
+      if (isStruckThrough(sp)) continue;
+      const t = (sp.textContent || '').trim();
+      if (!/^\d+\.\d{2,3}$/.test(t)) continue;
+      const n = parseOddsText(t);
+      if (n) { odds = n; break; }
+    }
+  }
+
+  const boardOddsEarly = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
+  if (!odds && boardOddsEarly) odds = boardOddsEarly;
 
   let matchedLine = null;
   let matchedSide = null;
@@ -418,12 +439,13 @@ function parseSlipFromCard(card) {
   }
 
   if (!odds) odds = 0;
+  const hadSlipOdds = odds > 1.01;
 
   const boardOdds = readOddsFromBoardForSelection(selectionText, allText, slipMktType);
-  if (boardOdds && boardOdds > 1.01) {
+  if ((!odds || odds <= 1.01) && boardOdds && boardOdds > 1.01) {
     odds = boardOdds;
   }
-  if (!boardOdds && isSlipCardSuspended(card)) return null;
+  if (!hadSlipOdds && !boardOdds && isSlipCardSuspended(card)) return null;
   if (!odds || odds <= 1.01) return null;
 
   // ── 4. 마켓 타입/period/side/line 판별 ──
@@ -477,7 +499,7 @@ function parseSlipFromCard(card) {
   // URL에서 이벤트 ID 추출
   const urlMatch = location.href.match(/\/(\d{10,20})(?:\/|$|\?|#)/);
   const eventId = urlMatch ? urlMatch[1] : null;
-  const usedBoard = boardOdds > 1.01 && Math.abs(odds - boardOdds) < 0.001;
+  const usedBoard = !hadSlipOdds && boardOdds > 1.01 && Math.abs(odds - boardOdds) < 0.001;
 
   return {
     odds,
@@ -488,10 +510,10 @@ function parseSlipFromCard(card) {
     line,
     marketKey,
     mktText,
-    selectionText,  // "언더 16", "삼성 라이온스" 등 실제 선택명 (기준점 검증용)
-    eventText,      // "KIA 타이거즈 vs SSG 랜더스"
-    fromSlip: false,
-    source: usedBoard ? 'board-live' : 'board'
+    selectionText,
+    eventText,
+    fromSlip: hadSlipOdds,
+    source: hadSlipOdds ? 'slip-display' : (usedBoard ? 'board-live' : 'board')
   };
 }
 
@@ -680,7 +702,7 @@ function hasBtiChildIframe() {
 }
 
 function getRealSlipCards() {
-  if (!isActiveBetslipOpen()) return [];
+  if (!isActiveBetslipOpen() && !hasVisibleBetslipCards()) return [];
   const selectors = [
     '[class*="betslip_fe_BetSecondary_bet"]',
     '[class*="BetSecondary_bet"]',
@@ -1676,6 +1698,9 @@ function readBtiOdds(hint) {
     return enrichBtiSlip({ ...board, source: 'board', fromSlip: false });
   }
 
+  const emergency = readEmergencyBoardOdds(hintObj);
+  if (emergency?.odds > 1.01) return emergency;
+
   // hint에 excludeTeam 있으면 반대편 못 찾을 때 전체 보드로 재시도
   if (hintObj.excludeTeam || hintObj.polyTeam) {
     const plain = readBtiBoardOdds({ ...hintObj, excludeTeam: null, polyTeam: null });
@@ -1697,9 +1722,6 @@ function readBtiOdds(hint) {
   if (any?.odds > 1.01) {
     return enrichBtiSlip({ ...any, source: 'board', fromSlip: false });
   }
-
-  const emergency = readEmergencyBoardOdds(hintObj);
-  if (emergency?.odds > 1.01) return emergency;
 
   return null;
 }

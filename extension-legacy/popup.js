@@ -524,8 +524,9 @@ function isCartSlip(slip) {
   const src = slip.source || '';
   const kind = slip.sourceKind || '';
   if (kind === 'sports-board-selected') return false;
-  if (src === 'board' || src === 'main-scrape' || src === 'board-emergency') return false;
+  if (src === 'main-scrape') return false;
   if (src === 'slip-display' || src === 'board-live' || src === 'merged' || src === 'slip') return true;
+  if (src === 'board' || src === 'board-emergency') return true;
   if (kind === 'bc-native-slip' || kind === 'sports-slip' || kind === 'bc-direct-slip') return true;
   if (slip.fromPayout) return true;
   return false;
@@ -1093,9 +1094,10 @@ async function readBtiCartOddsForSync(btiTab) {
 }
 
 async function resolveBtiOddsForSync(btiTab) {
+  const fresh = btiTab?.id ? await readBtiSlip(btiTab) : null;
+  if (fresh?.odds > 1) return fresh.odds;
   if (cachedBti?.odds > 1) return cachedBti.odds;
-  const cartSlip = btiTab?.id ? await readBtiCartOddsForSync(btiTab) : null;
-  return cartSlip?.odds > 1 ? cartSlip.odds : null;
+  return null;
 }
 
 function resolveBcOddsForSync() {
@@ -1163,7 +1165,7 @@ async function readBtiSlip(btiTab) {
     return null;
   }
 
-  const merged = await readBtiFromAllFrames(btiTab.id, {});
+  const merged = await readBtiFromAllFrames(btiTab.id, {}, true);
   if (merged.slip?.odds > 1) {
     lastBtiFrame = { tabId: btiTab.id, frameId: merged.frameId };
     btiTab.frameId = merged.frameId;
@@ -1171,14 +1173,7 @@ async function readBtiSlip(btiTab) {
     return merged.slip;
   }
 
-  const forced = await readBtiFromAllFrames(btiTab.id, {}, true);
-  if (forced.slip?.odds > 1) {
-    lastBtiFrame = { tabId: btiTab.id, frameId: forced.frameId };
-    lastStatus.bti = '';
-    return forced.slip;
-  }
-
-  lastStatus.bti = '텐텐뱃: 배당판 배당 없음 — 슬립에 담고 ↻';
+  lastStatus.bti = '텐텐뱃: 배당판/슬립 배당 없음 — 선택 후 ↻';
   return null;
 }
 
@@ -1288,8 +1283,8 @@ async function refreshSlips() {
     ]);
 
     if (found.btiTab?.id) {
-      const cartCheck = await readBtiFromAllFrames(found.btiTab.id, {}, false, true);
-      if (cartCheck.cartEmpty && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
+      const cartCheck = await readBtiFromAllFrames(found.btiTab.id, {}, true, true);
+      if (cartCheck.cartEmpty && !bti?.odds && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
     }
 
     cachedBc = (() => {
@@ -1298,7 +1293,11 @@ async function refreshSlips() {
       if (poly?.needsStake) return poly;
       return null;
     })();
-    cachedBti = mergeSlipCached(cachedBti, bti);
+    cachedBti = (() => {
+      const o = slipOdds(bti);
+      if (o) return { ...bti, odds: o };
+      return null;
+    })();
 
     updateSlipUI(cachedBti, cachedBc);
     if (shouldSyncAmounts()) scheduleSyncAmounts();
