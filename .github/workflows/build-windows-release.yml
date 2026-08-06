@@ -62,6 +62,17 @@ jobs:
           cd arb-desktop
           python build_windows.py
 
+      - name: Bundle ICU DLLs (PyQt6 6.10+)
+        shell: pwsh
+        run: |
+          $dest = "arb-desktop/dist/ArbDesktop/_internal"
+          if (-not (Test-Path $dest)) { $dest = "arb-desktop/dist/ArbDesktop" }
+          foreach ($name in @("icu.dll","icuuc.dll","icuin.dll")) {
+            $src = Join-Path $env:SystemRoot "System32\$name"
+            if (Test-Path $src) { Copy-Item $src $dest -Force }
+          }
+          Get-ChildItem "$env:SystemRoot\System32\icudt*.dll" | Copy-Item -Destination $dest -Force
+
       - name: Verify bundle contents
         shell: pwsh
         run: |

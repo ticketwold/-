@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from arb_desktop.betslip.matcher import apply_network_verification, calculate_arbitrage, check_slip_pair
 from arb_desktop.betslip.models import BetSlipScanResult
-from arb_desktop.betslip.readers.dom import read_bc_betslip, read_bti_betslip
 from arb_desktop.config import settings
 
 if False:  # TYPE_CHECKING-style import guard without circular import at runtime
@@ -29,6 +28,7 @@ class BetSlipScanner:
             bc = self._manager.get_bc_read()
             bti = self._manager.get_bti_read()
         else:
+            from arb_desktop.betslip.readers.dom import read_bc_betslip, read_bti_betslip
             from arb_desktop.scanners.playwright.session import BrowserSession
 
             if not isinstance(self._session, BrowserSession):
