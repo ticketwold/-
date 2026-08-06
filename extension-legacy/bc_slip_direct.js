@@ -1,5 +1,5 @@
 (function () {
-  const DIRECT_SLIP_VER = 28;
+  const DIRECT_SLIP_VER = 29;
   if (window.__bcDirectSlipVer >= DIRECT_SLIP_VER && typeof window.__bcReadDirectSlip === 'function') return;
   window.__bcDirectSlipVer = DIRECT_SLIP_VER;
   window.__bcDirectSlipLoaded = true;
@@ -136,6 +136,25 @@
     // 슬립 배당 + 0 USDT (예: 1.14 0 USDT) — 가장 신뢰, 빈 카트 문구보다 우선
     if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return true;
 
+    for (const sel of [
+      '[data-editor-id*="betslipSelection"]',
+      '[data-editor-id*="betslipOutcome"]',
+      '[data-editor-id="betslipSelections"]',
+      '[data-editor-id*="SelectionOdds"]',
+      '[data-editor-id*="selectionOdds"]'
+    ]) {
+      for (const el of collectAll(sel, document.documentElement)) {
+        if (!visible(el)) continue;
+        const block = slipText(el);
+        if (block.length < 4 || block.length > 600) continue;
+        const m = block.match(/\b(\d+\.\d{1,3})\b/g);
+        if (m && m.some((x) => {
+          const o = parseOdds(x, 50);
+          return o && o >= 1.02;
+        })) return true;
+      }
+    }
+
     const hasSlipChrome = /베팅\s*슬립|bet\s*slip|betslip|단일|조합|시스템/i.test(t);
     const hasBetCta = /베팅하기|place\s*(a\s*)?bet|총\s*베팅|total\s*stake/i.test(t);
     if (!hasSlipChrome && !hasBetCta) return false;
@@ -210,6 +229,62 @@
     return false;
   }
 
+  function walkCollect(root, selector, out, seen) {
+    walk(root, (node) => {
+      if (node.nodeType !== 1 || !node.querySelectorAll) return;
+      try {
+        for (const el of node.querySelectorAll(selector)) {
+          if (!seen.has(el)) {
+            seen.add(el);
+            out.push(el);
+          }
+        }
+      } catch (_) {}
+    }, 0);
+  }
+
+  function collectAll(selector, scope) {
+    const out = [];
+    const seen = new Set();
+    walkCollect(scope || document.documentElement, selector, out, seen);
+    return out;
+  }
+
+  function findBetBySlipRoot() {
+    const selectors = [
+      '[data-editor-id="betslip"]',
+      '[data-editor-id*="betslip"]',
+      '[data-testid*="betslip"]',
+      '[data-testid*="BetSlip"]',
+      '[class*="betslip-root"]',
+      '[class*="BetslipRoot"]'
+    ];
+    let best = null;
+    let bestScore = -1;
+    const vw = window.innerWidth || 1200;
+
+    for (const sel of selectors) {
+      for (const el of collectAll(sel, document.documentElement)) {
+        if (!visible(el)) continue;
+        const t = slipText(el);
+        if (t.length < 8 || t.length > 8000) continue;
+        if (isHistoryPanel(t)) continue;
+        let score = 0;
+        if (/베팅\s*슬립|bet\s*slip|betslip/i.test(t)) score += 120;
+        if (hasSelectionInSlip(t)) score += 300;
+        if (el.querySelector?.('[data-editor-id*="odds"], [data-editor-id*="Odds"], [data-editor-id*="coefficient"], [data-editor-id*="Selection"]')) score += 200;
+        if (el.querySelector?.('input, [role="spinbutton"], [data-editor-id*="Stake"]')) score += 80;
+        const r = el.getBoundingClientRect();
+        if (r.x > vw * 0.35) score += 100;
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+    }
+    return bestScore >= 200 ? best : null;
+  }
+
   function findSlipRoot() {
     let best = null;
     let bestScore = -1;
@@ -219,13 +294,16 @@
       if (el.nodeType !== 1 || !visible(el)) return;
       const t = slipText(el);
       if (t.length < 25 || t.length > 6000) return;
-      if (isHistoryPanel(t) || isEmptySlip(t)) return;
+      if (isHistoryPanel(t)) return;
+      if (isEmptySlip(t) && !hasSelectionInSlip(t)) return;
 
       const hasSlipUi = /베팅\s*슬립|bet\s*slip|betslip/i.test(t)
-        || (/단일|조합|시스템/.test(t) && /USDT|베팅하기|place\s*bet/i.test(t));
-      if (!hasSlipUi) return;
-      const hasOddsPick = /\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t);
-      if (!MARKET_HINT.test(t) && !hasOddsPick) return;
+        || (/단일|조합|시스템/.test(t) && /USDT|베팅하기|place\s*bet/i.test(t))
+        || /\[data-editor-id/i.test(el.outerHTML || '');
+      if (!hasSlipUi && !el.getAttribute?.('data-editor-id')?.toLowerCase().includes('betslip')) return;
+      const hasOddsPick = /\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)
+        || !!el.querySelector?.('[data-editor-id*="odds"], [data-editor-id*="Odds"], [data-editor-id*="coefficient"]');
+      if (!MARKET_HINT.test(t) && !hasOddsPick && !hasSelectionInSlip(t)) return;
 
       const r = el.getBoundingClientRect();
       let score = 0;
@@ -278,6 +356,13 @@
     const candidates = [];
 
     const oddsSelectors = [
+      '[data-editor-id="betslipSelectionOdds"]',
+      '[data-editor-id*="betslipSelectionOdds"]',
+      '[data-editor-id="betslipOdds"]',
+      '[data-editor-id*="betslipOdds"]',
+      '[data-editor-id*="betslipCoefficient"]',
+      '[data-editor-id*="selectionOdds"]',
+      '[data-editor-id*="SelectionOdds"]',
       '[data-editor-id*="odds"]',
       '[data-editor-id*="Odds"]',
       '[data-editor-id*="coefficient"]',
@@ -294,7 +379,9 @@
         const o = parseOddsLoose(raw, ouLine) || parseOdds(raw, ou ? 15 : 100);
         if (!o || CHIP.has(o)) continue;
         if (isSameAsOuLine(o, ouLine)) continue;
-        candidates.push({ o, score: 200 });
+        const editorId = (el.getAttribute?.('data-editor-id') || '').toLowerCase();
+        const score = /betslip.*odds|selectionodds|coefficient/.test(editorId) ? 400 : 200;
+        candidates.push({ o, score });
       }
     }
 
@@ -419,7 +506,7 @@
     if (isCartEmptyNow()) {
       return { ok: false, empty: true, reason: 'empty-slip' };
     }
-    const slip = findSlipRoot() || findBetSlipShell();
+    const slip = findBetBySlipRoot() || findSlipRoot() || findBetSlipShell();
     if (!slip) {
       if (isCartEmptyNow()) return { ok: false, empty: true, reason: 'empty-slip' };
       return { ok: false, reason: 'no-slip-root' };
@@ -444,7 +531,7 @@
     if (isCartEmptyNow()) {
       return { hasSlip: false, odds: 0, team: '', eventText: '', score: 0, cartEmpty: true };
     }
-    const slip = findSlipRoot() || findBetSlipShell();
+    const slip = findBetBySlipRoot() || findSlipRoot() || findBetSlipShell();
     const r = slip ? extractFromSlip(slip) : null;
     const body = document.body?.innerText || '';
     let score = 0;

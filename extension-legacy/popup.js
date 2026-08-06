@@ -617,17 +617,17 @@ async function injectReadBcSports(tabId, frameId = 0) {
           };
         }
         try {
-          if (typeof window.__bcProbeCartEmpty === 'function') {
-            const probe = window.__bcProbeCartEmpty();
-            if (probe?.empty && probe?.hasSelection === false) {
-              return { empty: true, cartEmpty: true };
-            }
-          }
           if (typeof window.__bcReadDirectSlip === 'function') {
             const d = window.__bcReadDirectSlip();
             if (d?.empty) return { empty: true, cartEmpty: true };
             const packed = pack(d);
             if (packed) return packed;
+          }
+          if (typeof window.__bcProbeCartEmpty === 'function') {
+            const probe = window.__bcProbeCartEmpty();
+            if (probe?.empty && probe?.hasSelection === false) {
+              return { empty: true, cartEmpty: true };
+            }
           }
           if (typeof window.__bcScrapeOdds === 'function') {
             const scraped = window.__bcScrapeOdds();
@@ -899,10 +899,11 @@ async function readBcSlipAllFrames(bcTab) {
     const injected = await injectReadBcSports(bcTab.id, frameId);
     if (injected?.empty || injected?.cartEmpty) continue;
     if (injected?.odds > 1) {
-      const sc = scoreBcSlip(injected);
+      const normalized = coerceSlipCached(injected) || injected;
+      const sc = scoreBcSlip(normalized);
       if (sc > bestScore) {
         bestScore = sc;
-        best = injected;
+        best = normalized;
       }
     }
 
@@ -910,9 +911,11 @@ async function readBcSlipAllFrames(bcTab) {
     const slip = res?.slip;
     if (slip?.empty || slip?.cartEmpty) continue;
     if (!slip?.odds || slip.odds <= 1) continue;
-    if (isStaleBcSource(slip)) continue;
-    if (!isCartSlip(slip) && !slip.fromPayout) continue;
-    const sc = scoreBcSlip(slip);
+    const coerced = coerceSlipCached(slip);
+    if (!coerced) continue;
+    if (isStaleBcSource(coerced)) continue;
+    if (!isCartSlip(coerced) && !coerced.fromPayout) continue;
+    const sc = scoreBcSlip(coerced);
     if (sc > bestScore) {
       bestScore = sc;
       best = slip;
@@ -1717,9 +1720,11 @@ async function readBcSlip(bcTab) {
   bcCartEmptyConfirmed = false;
 
   let slip = await readBcSlipAllFrames(bcTab);
-  const warming = Date.now() < bcTabWarmUntil;
-  if ((!slip?.odds || slip.odds <= 1) && warming) {
-    for (const waitMs of [350, 700, 1200]) {
+  const retryDelays = Date.now() < bcTabWarmUntil
+    ? [350, 700, 1200, 2000]
+    : [200, 500, 1000, 1800, 2800];
+  if (!slip?.odds || slip.odds <= 1) {
+    for (const waitMs of retryDelays) {
       await delay(waitMs);
       await ensureBcScript(bcTab.id);
       if (await probeBcCartEmptyAnyFrame(bcTab)) break;
@@ -2865,4 +2870,4 @@ try {
     onTabNavigated(details.tabId, details.url || '', details.frameId);
   });
 } catch (_) {}
-log(`v5.9.30 ${IS_PANEL ? '패널' : '팝업'} 로드 — iframe 로드 후 재인식`, 'info');
+log(`v5.9.31 ${IS_PANEL ? '패널' : '팝업'} 로드 — BetBy 슬립 DOM 강화`, 'info');
