@@ -14,6 +14,7 @@ let autoBetWanted = false;
 let autoBetPausedByClose = false;
 let autoBetSessionId = 0;
 let autoBetStateEpoch = 0;
+let autoBetUiLocked = false;
 let suppressStorageApplyUntil = 0;
 let lastMarketCloseLogAt = 0;
 let lastMarketOpenLogAt = 0;
@@ -1260,7 +1261,33 @@ function isAutoBetLooping() {
 }
 
 function isAutoBetEngaged() {
-  return !!(autoBetWanted || autoBetRunning || autoBetPausedByClose);
+  return !!autoBetWanted;
+}
+
+function syncAutoBetButtonUi() {
+  const betStartBtn = $('autoBetStart');
+  const betStopBtn = $('autoBetStop');
+  const wanted = !!autoBetWanted;
+  const looping = isAutoBetLooping();
+  const paused = !!autoBetPausedByClose;
+
+  if (betStartBtn) {
+    betStartBtn.disabled = looping;
+    betStartBtn.classList.toggle('is-armed', wanted && !paused);
+    betStartBtn.classList.toggle('is-looping', looping);
+    betStartBtn.textContent = paused ? '자동 배팅 재개' : '자동 배팅';
+  }
+  if (betStopBtn) {
+    betStopBtn.disabled = false;
+    betStopBtn.removeAttribute('disabled');
+    betStopBtn.classList.toggle('is-armed', wanted);
+    betStopBtn.setAttribute('aria-pressed', wanted ? 'true' : 'false');
+  }
+  updateManualBetButton();
+}
+
+function updateAutomationButtons() {
+  syncAutoBetButtonUi();
 }
 
 function pauseAutoBetByMarketClose() {
@@ -1279,6 +1306,7 @@ function pauseAutoBetByMarketClose() {
 
 function resumeAutoBetByMarketOpen() {
   if (!autoBetWanted || !autoBetPausedByClose) return;
+  autoBetUiLocked = true;
   autoBetPausedByClose = false;
   autoBetRunning = true;
   const stateEpoch = bumpAutoBetStateEpoch();
@@ -2088,7 +2116,10 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
 let lastPollRefreshAt = 0;
 
 async function pollLoop() {
-  if (autoBetWanted) await updateAutoBetMarketState();
+  if (autoBetWanted) {
+    syncAutoBetButtonUi();
+    await updateAutoBetMarketState();
+  }
   if (!shouldSyncAmounts() && !autoBetWanted) return;
   const now = Date.now();
   if (now - lastPollRefreshAt > 900) {
@@ -2127,7 +2158,7 @@ function bumpAutoBetStateEpoch() {
 }
 
 function persistSyncState(extra = {}) {
-  suppressStorageApplyUntil = Date.now() + 1200;
+  suppressStorageApplyUntil = Date.now() + 2500;
   const epoch = extra.autoBetStateEpoch ?? autoBetStateEpoch;
   chrome.storage.local.get(SYNC_STATE_KEY, (data) => {
     const cur = data[SYNC_STATE_KEY] || {};
@@ -2154,15 +2185,17 @@ function applySyncStateFromStorage(s, fromRemote = false) {
     if (Date.now() < suppressStorageApplyUntil) return;
     const remoteEpoch = Number(s.autoBetStateEpoch) || 0;
     if (remoteEpoch < autoBetStateEpoch) return;
+    if (autoBetUiLocked && autoBetWanted && s.autoBetWanted === false) return;
     const remoteEngaged = !!(s.autoBetWanted || s.autoBetRunning || s.autoBetPausedByClose);
-    if (isAutoBetEngaged() && !remoteEngaged) return;
+    if (autoBetWanted && !remoteEngaged && s.autoBetWanted !== true) return;
   }
   const incomingEpoch = Number(s.autoBetStateEpoch) || 0;
   if (incomingEpoch > autoBetStateEpoch) autoBetStateEpoch = incomingEpoch;
   const wasLooping = isAutoBetLooping();
-  autoBetWanted = !!s.autoBetWanted;
-  autoBetPausedByClose = !!s.autoBetPausedByClose;
-  autoBetRunning = !!s.autoBetRunning && !autoBetPausedByClose;
+  if (s.autoBetWanted !== undefined) autoBetWanted = !!s.autoBetWanted;
+  if (s.autoBetPausedByClose !== undefined) autoBetPausedByClose = !!s.autoBetPausedByClose;
+  if (s.autoBetRunning !== undefined) autoBetRunning = !!s.autoBetRunning && !autoBetPausedByClose;
+  if (autoBetWanted && !autoBetRunning && !autoBetPausedByClose) autoBetRunning = true;
 
   if (!autoBetWanted && !autoBetRunning) {
     autoBetSessionId++;
@@ -2183,6 +2216,7 @@ async function initSyncFromStorage() {
     if (s.btiBet && $('btiBet')) $('btiBet').value = String(s.btiBet);
     if (s.autoBetStateEpoch) autoBetStateEpoch = Number(s.autoBetStateEpoch) || 0;
     if (s.autoBetWanted || s.autoBetRunning) {
+      autoBetUiLocked = true;
       applySyncStateFromStorage({
         autoBetWanted: !!(s.autoBetWanted ?? s.autoBetRunning),
         autoBetPausedByClose: !!s.autoBetPausedByClose,
@@ -2214,32 +2248,19 @@ function isAutomationActive() {
   return isAutoBetEngaged();
 }
 
-function updateAutomationButtons() {
-  const betStartBtn = $('autoBetStart');
-  const betStopBtn = $('autoBetStop');
-  const looping = isAutoBetLooping();
-  const engaged = isAutoBetEngaged();
-
-  if (betStartBtn) {
-    betStartBtn.disabled = looping;
-    betStartBtn.textContent = autoBetPausedByClose ? '자동 배팅 재개' : '자동 배팅';
-  }
-  if (betStopBtn) {
-    betStopBtn.disabled = false;
-    betStopBtn.classList.toggle('is-idle', !engaged);
-    betStopBtn.setAttribute('aria-disabled', engaged ? 'false' : 'true');
-  }
-  updateManualBetButton();
-}
-
 const updateSyncButtons = updateAutomationButtons;
 
 function startAutoBet() {
+  if (autoBetPausedByClose) {
+    resumeAutoBetByMarketOpen();
+    return;
+  }
   if (isAutoBetLooping()) return;
   autoBetSessionId++;
   const session = autoBetSessionId;
   const stateEpoch = bumpAutoBetStateEpoch();
-  suppressStorageApplyUntil = Date.now() + 1200;
+  autoBetUiLocked = true;
+  suppressStorageApplyUntil = Date.now() + 2500;
   document.querySelector('.tab[data-tab="slip"]')?.click();
   autoBetWanted = true;
   autoBetPausedByClose = false;
@@ -2284,7 +2305,8 @@ function startAutoBet() {
 function stopAutoBetOnly(clearWanted = true) {
   autoBetSessionId++;
   const stateEpoch = bumpAutoBetStateEpoch();
-  suppressStorageApplyUntil = Date.now() + 1200;
+  if (clearWanted) autoBetUiLocked = false;
+  suppressStorageApplyUntil = Date.now() + 2500;
   autoBetRunning = false;
   if (clearWanted) autoBetWanted = false;
   autoBetPausedByClose = false;
@@ -2432,9 +2454,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
   if (msg.type === 'USDT_RATE_UPDATED' && msg.rate) applyUsdtRate(msg.rate);
   if (msg.type === 'AUTO_BET_STATE' && msg.state) {
-    if (Date.now() >= suppressStorageApplyUntil) {
-      applySyncStateFromStorage(msg.state, true);
-    }
+    if (Date.now() < suppressStorageApplyUntil) return;
+    applySyncStateFromStorage(msg.state, true);
   }
 });
 
@@ -2455,4 +2476,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.14 ${IS_PANEL ? '패널' : '팝업'} 로드 — 자동배팅 정지 버튼 수정`, 'info');
+log(`v5.9.15 ${IS_PANEL ? '패널' : '팝업'} 로드 — 자동배팅 버튼 상태 동기화`, 'info');
