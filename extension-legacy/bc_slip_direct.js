@@ -49,7 +49,34 @@
   }
 
   function isEmptySlip(t) {
-    return /슬립이\s*비어|선택한\s*베팅\s*없|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?/i.test(t);
+    return /슬립이\s*비어|선택한\s*베팅\s*없|베팅을\s*선택|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty/i.test(t);
+  }
+
+  const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
+
+  function hasSelectionInSlip(text) {
+    if (!text || isEmptySlip(text)) return false;
+    const t = String(text).replace(/\s+/g, ' ').trim();
+    if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return true;
+    if (/총\s*배당|total\s*odds/i.test(t) && /\d+\.\d{1,3}/.test(t) && /vs\.?|승자|winner/i.test(t)) return true;
+    const slipPart = t.split(/총\s*베팅|total\s*stake|베팅하기|place\s*(a\s*)?bet/i)[0] || t;
+    if (slipPart.length > 900) return false;
+    const selBlocks = slipPart.match(/(?:승자|winner|핸디|handicap|맵)[^\n]{0,120}\d+\.\d{1,3}/gi) || [];
+    for (const block of selBlocks) {
+      const m = block.match(/(\d+\.\d{1,3})\s*$/);
+      if (m) {
+        const o = parseOdds(m[1]);
+        if (o && o >= 1.02 && o <= 50) return true;
+      }
+    }
+    if (/vs\.?/i.test(slipPart) && /\d+\.\d{1,3}/.test(slipPart)) {
+      const nums = [...slipPart.matchAll(/\b(\d+\.\d{1,3})\b/g)]
+        .map((x) => parseOdds(x[1]))
+        .filter((o) => o && o >= 1.02 && o <= 50 && !CHIP.has(o));
+      if (nums.length === 1) return true;
+      if (nums.length >= 2 && /USDT/i.test(slipPart)) return true;
+    }
+    return false;
   }
 
   function findBetSlipShell() {
@@ -76,15 +103,37 @@
     return best;
   }
 
-  function isCartEmptyNow() {
-    const shell = findBetSlipShell();
-    if (shell && isEmptySlip(slipText(shell))) return true;
-    const body = document.body?.innerText || '';
-    if (/베팅\s*슬립|bet\s*slip/i.test(body) && isEmptySlip(body)) return true;
-    return false;
+  function clearStaleBcCaches() {
+    try { window.__bcApiSlip = null; } catch (_) {}
   }
 
-  const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
+  function isCartEmptyNow() {
+    const shell = findBetSlipShell();
+    if (shell) {
+      const t = slipText(shell);
+      if (isEmptySlip(t) || !hasSelectionInSlip(t)) {
+        clearStaleBcCaches();
+        return true;
+      }
+    }
+    const slip = findSlipRoot();
+    if (slip) {
+      const t = slipText(slip);
+      if (!hasSelectionInSlip(t)) {
+        clearStaleBcCaches();
+        return true;
+      }
+      return false;
+    }
+    if (shell) {
+      const t = slipText(shell);
+      if (/베팅\s*슬립|bet\s*slip/i.test(t) && /USDT|0\s*USDT/i.test(t) && !hasSelectionInSlip(t)) {
+        clearStaleBcCaches();
+        return true;
+      }
+    }
+    return false;
+  }
 
   function findSlipRoot() {
     let best = null;
@@ -209,11 +258,15 @@
   function extractFromSlip(slip) {
     const text = slipText(slip);
     if (!text || isEmptySlip(text)) return null;
+    if (!hasSelectionInSlip(text)) return null;
     if (isSlipSuspended(text)) {
       return { ok: false, suspended: true, reason: 'market-suspended', source: 'bcgame' };
     }
 
-    let odds = extractOddsFromText(text);
+    let odds = null;
+    const stakeLine = text.match(/(\d+\.\d{1,3})\s+0(?:\.\d+)?\s*USDT/i);
+    if (stakeLine) odds = parseOdds(stakeLine[1]);
+    if (!odds) odds = extractOddsFromText(text);
     if (!odds) odds = extractOddsFromDom(slip);
     if (!odds) return null;
 
@@ -248,8 +301,12 @@
   };
 
   window.__bcProbeCartEmpty = function () {
-    return { empty: isCartEmptyNow(), hasSlipShell: !!findBetSlipShell() };
+    const empty = isCartEmptyNow();
+    if (empty) clearStaleBcCaches();
+    return { empty, hasSlipShell: !!findBetSlipShell(), hasSelection: !empty && !!findSlipRoot() };
   };
+
+  window.__bcClearSlipCaches = clearStaleBcCaches;
 
   window.__bcProbeDirectSlip = function () {
     const slip = findSlipRoot();

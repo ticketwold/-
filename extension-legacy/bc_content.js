@@ -21,8 +21,9 @@ function readMainWorldSlipRaw() {
     script.textContent = `(function(){
       var r=null;
       try{
-        if(typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&d.empty){r={empty:true};}else if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
-        if(!r&&typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&(n.odds>1.01||n.ok&&n.odds>1.01))r=n;}
+        if(typeof __bcProbeCartEmpty==='function'){var pe=__bcProbeCartEmpty();if(pe&&pe.empty){r={empty:true};}}
+        if(!r&&typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&d.empty){r={empty:true};}else if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
+        if(!r&&typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&n.empty){r={empty:true};}else if(n&&(n.odds>1.01||n.ok&&n.odds>1.01)&&n.sourceKind!=='bc-api'&&n.sourceKind!=='sports-board-selected')r=n;}
       }catch(e){}
       document.documentElement.setAttribute('${attr}',JSON.stringify(r));
     })();`;
@@ -86,14 +87,10 @@ function readSportsSlip() {
   if (raw?.empty) {
     return { source: 'bcgame', odds: null, cartEmpty: true, empty: true, fromSlip: true };
   }
-  if (typeof window.__bcReadNativeSlip === 'function') {
-    try {
-      const native = window.__bcReadNativeSlip();
-      const slip = normalizeSportsSlip(native?.ok ? native : native);
-      if (slip?.odds > 1.01) return slip;
-    } catch (_) {}
-  }
-  return normalizeSportsSlip(raw);
+  const slip = normalizeSportsSlip(raw);
+  if (!slip) return null;
+  if (slip.sourceKind === 'bc-api' || slip.sourceKind === 'sports-board-selected') return null;
+  return slip;
 }
 
 const RE_WIN_LABEL = /\bto\s*win\b|우승|당첨(금)?|획득|예상\s*수익/i;
@@ -1158,13 +1155,9 @@ function readBcSlip() {
   const onSports = isBcSportsPage()
     || /베팅\s*슬립|bet\s*slip|betslip/i.test(document.body?.innerText || '');
   if (onSports) {
-    if (typeof window.__bcProbeCartEmpty === 'function') {
-      try {
-        const probe = window.__bcProbeCartEmpty();
-        if (probe?.empty) {
-          return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
-        }
-      } catch (_) {}
+    const recheck = readMainWorldSlipRaw();
+    if (recheck?.empty) {
+      return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
     }
     return sports || {
       source: 'bcgame',
@@ -1969,6 +1962,14 @@ try {
     if (!slip || slip.empty || slip.cartEmpty || !slip.odds || slip.odds <= 1) {
       if (last !== 'empty') {
         last = 'empty';
+        try {
+          const el = document.documentElement;
+          const attr = 'data-bc-clear-done';
+          const script = document.createElement('script');
+          script.textContent = `(function(){try{if(typeof __bcClearSlipCaches==='function')__bcClearSlipCaches();}catch(e){}document.documentElement.setAttribute('${attr}','1');})();`;
+          (document.head || el).appendChild(script);
+          script.remove();
+        } catch (_) {}
         try {
           chrome.runtime.sendMessage({ type: 'ODDS_CHANGED', source: predictionSiteId(), slip: null, cartEmpty: true });
         } catch (_) {}

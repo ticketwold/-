@@ -653,20 +653,27 @@ async function readBtiSlipBg(tabId) {
 
 async function readBcSlipBg(tab) {
   if (!tab?.id) return null;
-  const board = await scanBcTabBoard(tab);
-  if (board.cartSlip?.odds > 1) return board.cartSlip;
 
   await ensureBcScript(tab.id);
   const frames = await getAllTabFrames(tab.id);
   frames.sort((a, b) => scoreBcFrameUrl(b.url) - scoreBcFrameUrl(a.url));
   let best = null;
+  let sawEmptyCart = false;
   for (const frame of frames) {
     try {
       const res = await chrome.tabs.sendMessage(tab.id, { type: 'READ_SLIP' }, { frameId: frame.frameId });
       const slip = res?.slip;
-      if (slip?.odds > 1 && (!best || slip.odds > best.odds)) best = slip;
+      if (slip?.empty || slip?.cartEmpty) {
+        sawEmptyCart = true;
+        continue;
+      }
+      if (!slip?.odds || slip.odds <= 1) continue;
+      const kind = slip.sourceKind || '';
+      if (kind === 'bc-api' || kind === 'sports-board-selected') continue;
+      if (!best || slip.odds > best.odds) best = slip;
     } catch (_) {}
   }
+  if (sawEmptyCart) return null;
   return best;
 }
 
@@ -970,7 +977,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.8] background loaded');
+console.log('[양방봇 v5.9.9] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();
