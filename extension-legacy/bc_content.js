@@ -23,7 +23,6 @@ function readMainWorldSlipRaw() {
       try{
         if(typeof __bcProbeCartEmpty==='function'){var pe=__bcProbeCartEmpty();if(pe&&pe.empty){r={empty:true};}}
         if(!r&&typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&d.empty){r={empty:true};}else if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
-        if(!r&&typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&n.empty){r={empty:true};}else if(n&&(n.odds>1.01||n.ok&&n.odds>1.01)&&n.sourceKind!=='bc-api'&&n.sourceKind!=='sports-board-selected')r=n;}
       }catch(e){}
       document.documentElement.setAttribute('${attr}',JSON.stringify(r));
     })();`;
@@ -39,6 +38,7 @@ function readMainWorldSlipRaw() {
 
 function normalizeSportsSlip(raw) {
   if (!raw) return null;
+  if (raw.empty) return { source: 'bcgame', odds: null, cartEmpty: true, empty: true, fromSlip: true };
   if (raw.suspended) {
     return {
       source: 'bcgame',
@@ -54,8 +54,10 @@ function normalizeSportsSlip(raw) {
   }
   const odds = raw.odds > 1.01 ? raw.odds : null;
   if (!odds) return null;
-  const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
   const kind = raw.sourceKind || raw.method || '';
+  if (kind === 'bc-api' || kind === 'sports-board-selected' || raw.method === 'api-cache') return null;
+  if (!raw.fromSlip && kind !== 'bc-direct-slip' && kind !== 'bc-native-slip' && kind !== 'sports-slip') return null;
+  const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
   const apiOnly = kind === 'bc-api' || raw.method === 'api-cache';
   const stake = !apiOnly && raw.stake > 0 ? raw.stake : null;
   const payout = !apiOnly && raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);

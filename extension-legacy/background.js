@@ -670,6 +670,7 @@ async function readBcSlipBg(tab) {
       if (!slip?.odds || slip.odds <= 1) continue;
       const kind = slip.sourceKind || '';
       if (kind === 'bc-api' || kind === 'sports-board-selected') continue;
+      if (!slip.fromSlip && kind !== 'bc-direct-slip' && kind !== 'sports-slip' && kind !== 'bc-native-slip') continue;
       if (!best || slip.odds > best.odds) best = slip;
     } catch (_) {}
   }
@@ -999,7 +1000,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.12] background loaded');
+console.log('[양방봇 v5.9.13] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();

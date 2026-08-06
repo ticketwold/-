@@ -49,7 +49,7 @@
   }
 
   function isEmptySlip(t) {
-    return /슬립이\s*비어|선택한\s*베팅\s*없|베팅을\s*선택|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty/i.test(t);
+    return /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty|betslip\s*is\s*empty/i.test(t);
   }
 
   const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
@@ -57,11 +57,22 @@
   function hasSelectionInSlip(text) {
     if (!text || isEmptySlip(text)) return false;
     const t = String(text).replace(/\s+/g, ' ').trim();
+
+    // 슬립 배당 + 0 USDT (예: 1.14 0 USDT) — 가장 신뢰
     if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return true;
-    if (/총\s*배당|total\s*odds/i.test(t) && /\d+\.\d{1,3}/.test(t) && /vs\.?|승자|winner/i.test(t)) return true;
+
+    const hasSlipChrome = /베팅\s*슬립|bet\s*slip|betslip|단일|조합|시스템/i.test(t);
+    const hasBetCta = /베팅하기|place\s*(a\s*)?bet|총\s*베팅|total\s*stake/i.test(t);
+    if (!hasSlipChrome && !hasBetCta) return false;
+
+    if ((/총\s*배당|total\s*odds/i.test(t)) && /\d+\.\d{1,3}/.test(t) && /vs\.?|승자|winner/i.test(t)) {
+      return true;
+    }
+
     const slipPart = t.split(/총\s*베팅|total\s*stake|베팅하기|place\s*(a\s*)?bet/i)[0] || t;
     if (slipPart.length > 900) return false;
-    const selBlocks = slipPart.match(/(?:승자|winner|핸디|handicap|맵)[^\n]{0,120}\d+\.\d{1,3}/gi) || [];
+
+    const selBlocks = slipPart.match(/(?:승자|winner|핸디|handicap|맵\s*핸디)[^\n]{0,120}\d+\.\d{1,3}/gi) || [];
     for (const block of selBlocks) {
       const m = block.match(/(\d+\.\d{1,3})\s*$/);
       if (m) {
@@ -69,13 +80,7 @@
         if (o && o >= 1.02 && o <= 50) return true;
       }
     }
-    if (/vs\.?/i.test(slipPart) && /\d+\.\d{1,3}/.test(slipPart)) {
-      const nums = [...slipPart.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-        .map((x) => parseOdds(x[1]))
-        .filter((o) => o && o >= 1.02 && o <= 50 && !CHIP.has(o));
-      if (nums.length === 1) return true;
-      if (nums.length >= 2 && /USDT/i.test(slipPart)) return true;
-    }
+
     return false;
   }
 
@@ -309,6 +314,9 @@
   window.__bcClearSlipCaches = clearStaleBcCaches;
 
   window.__bcProbeDirectSlip = function () {
+    if (isCartEmptyNow()) {
+      return { hasSlip: false, odds: 0, team: '', eventText: '', score: 0, cartEmpty: true };
+    }
     const slip = findSlipRoot();
     const r = slip ? extractFromSlip(slip) : null;
     const body = document.body?.innerText || '';

@@ -524,13 +524,7 @@ async function injectReadBcSports(tabId, frameId = 0) {
             const d = window.__bcReadDirectSlip();
             if (d?.empty) return { empty: true, cartEmpty: true };
             const packed = pack(d);
-            if (packed) return packed;
-          }
-          if (typeof window.__bcReadNativeSlip === 'function') {
-            const n = window.__bcReadNativeSlip();
-            if (n?.empty) return { empty: true, cartEmpty: true };
-            const p = pack(n?.ok ? n : n);
-            if (p && p.sourceKind !== 'bc-api' && p.sourceKind !== 'sports-board-selected') return p;
+            if (packed && packed.sourceKind === 'bc-direct-slip') return packed;
           }
         } catch (_) {}
         return null;
@@ -585,9 +579,14 @@ function coerceSlipCached(slip) {
   }
   const o = slipOdds(slip);
   if (!o || o <= 1) return null;
+  if (slip.source === 'bcgame' || slip.sourceKind) {
+    if (isStaleBcSource(slip)) return null;
+    if (!isCartSlip(slip) && !slip.fromPayout) return null;
+  }
   const norm = normalizeCartSlip(slip);
   if (norm) return norm;
-  return { ...slip, odds: o };
+  if (slip.fromSlip || slip.sourceKind === 'bc-direct-slip') return { ...slip, odds: o };
+  return null;
 }
 
 function getActiveBetOdds() {
@@ -618,12 +617,45 @@ function isStaleBcSource(slip) {
   return false;
 }
 
+async function probeBcCartEmptyFrame(tabId, frameId) {
+  try {
+    await ensureBcScript(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => {
+        if (typeof window.__bcProbeCartEmpty !== 'function') {
+          return { hasShell: false, empty: false };
+        }
+        const p = window.__bcProbeCartEmpty();
+        return {
+          hasShell: !!p.hasSlipShell,
+          empty: !!p.empty,
+          hasSelection: !!p.hasSelection
+        };
+      }
+    });
+    return results?.[0]?.result || { hasShell: false, empty: false };
+  } catch (_) {
+    return { hasShell: false, empty: false };
+  }
+}
+
 async function readBcSlipAllFrames(bcTab) {
   const order = await orderBcFrames(bcTab.id);
   const seen = new Set();
+
+  for (const frameId of order) {
+    if (seen.has(frameId)) continue;
+    seen.add(frameId);
+    await ensureBcScript(bcTab.id, frameId);
+    const probe = await probeBcCartEmptyFrame(bcTab.id, frameId);
+    if (probe.hasShell && probe.empty) return null;
+  }
+
   let best = null;
   let bestScore = -1;
-  let sawEmptyCart = false;
+  seen.clear();
 
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
@@ -631,16 +663,10 @@ async function readBcSlipAllFrames(bcTab) {
     await ensureBcScript(bcTab.id, frameId);
 
     const injected = await injectReadBcSports(bcTab.id, frameId);
-    if (injected?.empty || injected?.cartEmpty) {
-      sawEmptyCart = true;
-      continue;
-    }
-    if (injected?.odds > 1 && !isStaleBcSource(injected)) {
+    if (injected?.empty || injected?.cartEmpty) return null;
+    if (injected?.odds > 1 && injected.sourceKind === 'bc-direct-slip') {
       const sc = scoreBcSlip(injected);
-      if (injected.sourceKind === 'bc-direct-slip' && sc >= bestScore) {
-        best = injected;
-        bestScore = sc;
-      } else if (sc > bestScore) {
+      if (sc > bestScore) {
         bestScore = sc;
         best = injected;
       }
@@ -648,24 +674,17 @@ async function readBcSlipAllFrames(bcTab) {
 
     const res = await sendBc(bcTab.id, { type: 'READ_SLIP' }, frameId);
     const slip = res?.slip;
-    if (slip?.empty || slip?.cartEmpty) {
-      sawEmptyCart = true;
-      continue;
-    }
+    if (slip?.empty || slip?.cartEmpty) return null;
     if (!slip?.odds || slip.odds <= 1) continue;
     if (isStaleBcSource(slip)) continue;
     if (!isCartSlip(slip) && !slip.fromPayout) continue;
     const sc = scoreBcSlip(slip);
-    if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) {
-      best = slip;
-      bestScore = sc;
-    } else if (sc > bestScore) {
+    if (sc > bestScore) {
       bestScore = sc;
       best = slip;
     }
   }
 
-  if (sawEmptyCart) return null;
   return best;
 }
 
@@ -1181,14 +1200,11 @@ async function resolveBtiOddsForSync(btiTab) {
 }
 
 function resolveBcOddsForSync() {
-  if (cachedBc?.suspended && !(cachedBc?.odds > 1)) return null;
-  if (cachedBc?.odds > 1) {
-    if (cachedBc.fromPayout || isCartSlip(cachedBc)) return cachedBc.odds;
-    const norm = normalizeCartSlip(cachedBc);
-    if (norm?.odds > 1) return norm.odds;
-    return cachedBc.odds;
-  }
-  return null;
+  if (!cachedBc?.odds || cachedBc.odds <= 1) return null;
+  if (cachedBc.suspended && !(cachedBc.odds > 1)) return null;
+  if (isStaleBcSource(cachedBc)) return null;
+  if (!isCartSlip(cachedBc) && !cachedBc.fromPayout) return null;
+  return cachedBc.odds;
 }
 
 async function readBtiMarketStatus(btiTab) {
@@ -1379,34 +1395,24 @@ async function readBcSlip(bcTab) {
 
   await ensureBcScript(bcTab.id);
 
-  let slip = await readBcSlipAllFrames(bcTab);
-  if (!slip) {
+  const slip = await readBcSlipAllFrames(bcTab);
+  if (!slip?.odds || slip.odds <= 1 || slip.empty || slip.cartEmpty) {
     lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
     return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
   }
 
-  if (!slip?.fromPayout) {
-    const injected = await injectReadBc(bcTab.id);
-    if (injected?.fromPayout) slip = { ...slip, ...injected };
+  if (slip.suspended) {
+    lastStatus.bc = 'BC.Game: 배당 마감';
+    return { ...slip, odds: slip.odds > 1 ? slip.odds : null, suspended: true };
   }
 
-  if (slip?.fromPayout) {
-    lastStatus.bc = '';
-    return slip;
+  if (!isCartSlip(slip) && !slip.fromPayout) {
+    lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
+    return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
   }
 
-  if (slip?.odds > 1) {
-    lastStatus.bc = slip.needsStake ? 'BC.Game: 금액 입력 필요' : '';
-    return slip;
-  }
-
-  if (slip?.needsStake) {
-    lastStatus.bc = 'BC.Game: 금액 입력 후 배당 확인';
-    return slip;
-  }
-
-  lastStatus.bc = 'BC.Game: 스포츠 배당 클릭 또는 예측 팀 선택';
-  return slip || null;
+  lastStatus.bc = slip.needsStake ? 'BC.Game: 금액 입력 필요' : '';
+  return slip;
 }
 
 function slipOdds(slip) {
@@ -1428,7 +1434,9 @@ function slipSourceRank(slip) {
 }
 
 function mergeSlipCached(cached, fresh) {
+  if (fresh?.empty || fresh?.cartEmpty) return null;
   if (!fresh || !slipOdds(fresh)) return cached || null;
+  if (!isCartSlip(fresh) && !fresh.fromPayout) return cached || null;
   const freshOdds = slipOdds(fresh);
   if (!cached) return { ...fresh, odds: freshOdds };
   const freshTeam = fresh.teamLabel || fresh.eventText || fresh.selectionText || '';
@@ -1599,6 +1607,9 @@ async function probeBcFrame(tabId, frameId, url) {
         let sourceKind = '';
         if (typeof window.__bcProbeDirectSlip === 'function') {
           const d = window.__bcProbeDirectSlip();
+          if (d.cartEmpty) {
+            return { score: -1, slipOdds: 0, sourceKind: '', cartEmpty: true };
+          }
           score += d.score || 0;
           if (d.odds > 1) {
             slipOdds = d.odds;
@@ -2397,4 +2408,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.12 ${IS_PANEL ? '패널' : '팝업'} 로드 — 수동/자동배팅 수정`, 'info');
+log(`v5.9.13 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 빈카트 배당 재수정`, 'info');
