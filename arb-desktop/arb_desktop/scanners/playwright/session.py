@@ -21,6 +21,20 @@ except ImportError:
     setup_monitors = None  # type: ignore[misc, assignment]
 
 
+def _is_target_closed_error(exc: BaseException) -> bool:
+    if exc.__class__.__name__ == "TargetClosedError":
+        return True
+    message = str(exc).lower()
+    return "has been closed" in message or "target closed" in message
+
+
+async def _safe_close(coro_factory) -> None:
+    try:
+        await coro_factory()
+    except Exception as exc:
+        if not _is_target_closed_error(exc):
+            raise
+
 class BrowserSession:
     """공유 Playwright 세션 — 정식 Chrome persistent 프로필로 로그인·쿠키 유지."""
 
@@ -108,20 +122,21 @@ class BrowserSession:
         """dedicated 모드만 storage 백업 — existing 모드는 persistent 프로필 자체에 저장."""
         if settings.uses_existing_chrome_profile:
             return
-        if self._context and settings.persist_sessions:
-            backup = self.user_data_path / "storage-backup.json"
-            await self._context.storage_state(path=str(backup))
+        if not self._context or not settings.persist_sessions:
+            return
+        backup = self.user_data_path / "storage-backup.json"
+        await _safe_close(lambda: self._context.storage_state(path=str(backup)))  # type: ignore[union-attr]
 
     async def stop(self) -> None:
         await self.bti_rest.close()
         await self.sptpub_client.close()
         if self._context:
             await self.save_state()
-            await self._context.close()
+            await _safe_close(lambda: self._context.close())  # type: ignore[union-attr]
         if self._browser:
-            await self._browser.close()
+            await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
         if self._pw:
-            await self._pw.stop()
+            await _safe_close(lambda: self._pw.stop())  # type: ignore[union-attr]
         self._pw = self._browser = self._context = None
 
     async def wait_for_frames(self, page: Page, timeout_ms: int = 8000) -> None:

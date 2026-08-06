@@ -4,7 +4,10 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from arb_desktop.scanners.playwright.chrome_profile import default_chrome_user_data_dir
+from arb_desktop.scanners.playwright.chrome_profile import (
+    default_chrome_executable,
+    default_chrome_user_data_dir,
+)
 
 
 class Settings(BaseSettings):
@@ -32,10 +35,11 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser — 설치된 정식 Google Chrome + persistent 프로필
+    # Browser — 설치된 정식 Google Chrome + 기존 프로필 (기본)
     headless: bool = False
     chrome_channel: str = "chrome"
-    chrome_profile_mode: Literal["dedicated", "existing"] = "dedicated"
+    chrome_executable: Path = Field(default_factory=default_chrome_executable)
+    chrome_profile_mode: Literal["dedicated", "existing"] = "existing"
     chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
     chrome_profile_directory: str = "Default"
     chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"

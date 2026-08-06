@@ -6,11 +6,20 @@ from pathlib import Path
 
 PROFILE_LOCK_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 
-CHROME_CLOSE_MESSAGE = "기존 Chrome을 모두 종료한 뒤 다시 실행하세요."
+CHROME_CLOSE_MESSAGE = "모든 Chrome 창을 완전히 종료한 뒤 다시 실행하세요."
 
 
 class ChromeProfileError(RuntimeError):
     """Chrome 프로필 실행 전 검증 실패."""
+
+
+def default_chrome_executable() -> Path:
+    system = platform.system()
+    if system == "Windows":
+        return Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    if system == "Darwin":
+        return Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    return Path("/usr/bin/google-chrome")
 
 
 def default_chrome_user_data_dir() -> Path:
