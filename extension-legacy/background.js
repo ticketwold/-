@@ -909,8 +909,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'GET_SYNC_STATE') {
-    loadSyncState().then((state) => sendResponse({ ok: true, state }));
+  if (msg.type === 'STOP_ALL_AUTOMATION') {
+    saveSyncState({ autoSyncEnabled: false, autoBetRunning: false }).then(() => {
+      bgLastBcUsd = 0;
+      bgLastBcOdds = 0;
+      bgLastBtiKrw = 0;
+      bgLastBtiOdds = 0;
+      bgLastSyncAt = 0;
+      stopBgSyncLoop();
+      sendResponse({ ok: true });
+    });
     return true;
   }
 
@@ -962,7 +970,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.5] background loaded — BC.Game 실시간 금액 동기화');
+console.log('[양방봇 v5.9.6] background loaded — BC.Game 실시간 금액 동기화');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();

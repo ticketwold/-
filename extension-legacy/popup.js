@@ -1802,13 +1802,11 @@ async function initSyncFromStorage() {
     if (s.btiBet && $('btiBet')) $('btiBet').value = String(s.btiBet);
     if (s.autoBetRunning) {
       autoBetRunning = true;
-      $('autoBetStart').disabled = true;
-      $('autoBetStop').disabled = false;
       chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
     }
     if (s.autoSyncEnabled === false && !autoBetRunning) {
       autoSyncEnabled = false;
-      updateSyncButtons();
+      updateAutomationButtons();
       return;
     }
   } catch (_) {}
@@ -1823,12 +1821,23 @@ function enableAutoSync() {
   updateSyncButtons();
 }
 
-function updateSyncButtons() {
-  const stopBtn = $('syncStop');
-  const startBtn = $('syncAmountsBtn');
-  if (stopBtn) stopBtn.disabled = !autoSyncEnabled;
-  if (startBtn) startBtn.classList.toggle('primary', autoSyncEnabled);
+function isAutomationActive() {
+  return autoBetRunning || autoSyncEnabled;
 }
+
+function updateAutomationButtons() {
+  const syncStopBtn = $('syncStop');
+  const syncStartBtn = $('syncAmountsBtn');
+  const betStartBtn = $('autoBetStart');
+  const betStopBtn = $('autoBetStop');
+
+  if (syncStopBtn) syncStopBtn.disabled = !autoSyncEnabled;
+  if (syncStartBtn) syncStartBtn.classList.toggle('primary', autoSyncEnabled);
+  if (betStartBtn) betStartBtn.disabled = autoBetRunning;
+  if (betStopBtn) betStopBtn.disabled = !isAutomationActive();
+}
+
+const updateSyncButtons = updateAutomationButtons;
 
 function startSync() {
   enableAutoSync();
@@ -1850,7 +1859,7 @@ function stopSync() {
   }
   chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: false }).catch(() => {});
   persistSyncState({ autoSyncEnabled: false });
-  updateSyncButtons();
+  updateAutomationButtons();
   log('금액 동기화 정지', 'info');
 }
 
@@ -1861,9 +1870,8 @@ function startAutoBet() {
   lastStrikeAt = 0;
   lastHistoryKey = '';
   lastAutoBetHintAt = 0;
-  $('autoBetStart').disabled = true;
-  $('autoBetStop').disabled = false;
   enableAutoSync();
+  updateAutomationButtons();
   chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
   persistSyncState({ autoBetRunning: true });
   log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
@@ -1879,18 +1887,33 @@ function startAutoBet() {
 }
 
 function stopAutoBet() {
+  stopAllAutomation();
+}
+
+function stopAllAutomation() {
+  const wasBet = autoBetRunning;
+  const wasSync = autoSyncEnabled;
+
   autoBetRunning = false;
   strikePending = false;
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
-  $('autoBetStart').disabled = false;
-  $('autoBetStop').disabled = true;
+
+  autoSyncEnabled = false;
+  syncRunning = false;
+  syncPending = false;
+  bcSyncPending = false;
+  if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+  if (calcTimer) { clearInterval(calcTimer); calcTimer = null; }
+
   chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: false }).catch(() => {});
-  persistSyncState({ autoBetRunning: false });
-  if (!autoSyncEnabled && calcTimer) {
-    clearInterval(calcTimer);
-    calcTimer = null;
-  }
-  log('자동 배팅 정지', 'info');
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: false }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'STOP_ALL_AUTOMATION' }).catch(() => {});
+  persistSyncState({ autoSyncEnabled: false, autoBetRunning: false });
+  updateAutomationButtons();
+
+  if (wasBet && wasSync) log('자동 배팅·동기화 정지', 'info');
+  else if (wasBet) log('자동 배팅 정지', 'info');
+  else if (wasSync) log('금액 동기화 정지', 'info');
 }
 
 function renderSearchResults(data) {
@@ -1963,7 +1986,11 @@ $('syncAmountsBtn')?.addEventListener('click', () => {
 $('syncStart')?.addEventListener('click', startSync);
 $('syncStop')?.addEventListener('click', stopSync);
 $('autoBetStart')?.addEventListener('click', startAutoBet);
-$('autoBetStop')?.addEventListener('click', stopAutoBet);
+$('autoBetStop')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  stopAllAutomation();
+});
 $('clearHistoryBtn')?.addEventListener('click', clearHistory);
 $('searchStart')?.addEventListener('click', startSearch);
 $('searchStop')?.addEventListener('click', stopSearch);
@@ -2022,4 +2049,5 @@ setInterval(() => {
 loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
-log(`v5.9.5 ${IS_PANEL ? '패널' : '팝업'} 로드 — 실시간 BC 금액 동기화`, 'info');
+updateAutomationButtons();
+log(`v5.9.6 ${IS_PANEL ? '패널' : '팝업'} 로드 — 실시간 BC 금액 동기화`, 'info');

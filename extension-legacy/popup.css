@@ -61,6 +61,9 @@ header .sub { font-size: 11px; color: #888; margin-top: 2px; }
   border: 1px solid #333; background: #1e1e32; color: #fff;
 }
 .btn-row { display: flex; gap: 6px; margin: 10px 0; }
+.btn-row-wrap { flex-wrap: wrap; }
+.btn-row-wrap .btn { min-width: 0; flex: 1 1 120px; }
+.btn-row-wrap .btn.small { flex: 0 1 auto; min-width: 64px; }
 .btn {
   flex: 1; padding: 9px; border: none; border-radius: 6px;
   font-weight: bold; cursor: pointer; background: #333; color: #ccc;
@@ -69,7 +72,12 @@ header .sub { font-size: 11px; color: #888; margin-top: 2px; }
 .btn.primary { background: #ff4d6d; color: #fff; }
 .btn.danger { background: #e63946; color: #fff; }
 .btn.danger:hover { background: #ff4d5a; }
-.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.danger-outline {
+  background: #2a1520; color: #ff8fa3; border: 1px solid #e63946;
+}
+.btn.danger-outline:hover:not(:disabled) { background: #3a1a24; color: #fff; }
+.btn.danger-outline:not(:disabled) { cursor: pointer; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 .btn.small { flex: 0 0 auto; padding: 9px 14px; font-size: 12px; }
 .btn.link-btn {
   width: 100%; margin-top: 8px; background: transparent;
