@@ -9,7 +9,15 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
 from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
-from arb_desktop.scanners.playwright.profile_setup import ensure_automation_profile_ready
+from arb_desktop.scanners.playwright.profile_setup import PROFILE_SUBDIR, ensure_automation_profile_ready
+from arb_desktop.scanners.playwright.profile_verify import (
+    detect_actual_profile_path,
+    expected_profile_path,
+    forbid_source_user_data_for_launch,
+    launch_args_for_automation,
+    resolve_automation_user_data_dir,
+    verify_profile_path,
+)
 
 try:
     from arb_desktop.betslip.dom_runtime import setup_monitors
@@ -48,22 +56,45 @@ class BrowserSession:
         self.bti_origin: str | None = None
         self.bti_rest = BtiRestScanner()
         self.sptpub_client = SptpubV4Client()
-        self.automation_profile_dir: Path = settings.chrome_automation_profile_dir
+        self.automation_user_data_dir: Path = resolve_automation_user_data_dir(
+            settings.chrome_automation_profile_dir
+        )
+        self.profile_subdirectory: str = PROFILE_SUBDIR
 
     async def start(self) -> None:
         log_step("[STEP0] Prepare dedicated automation profile")
-        ensure_automation_profile_ready(self.automation_profile_dir)
-        self.automation_profile_dir.mkdir(parents=True, exist_ok=True)
+        ensure_automation_profile_ready(self.automation_user_data_dir)
+        forbid_source_user_data_for_launch(
+            self.automation_user_data_dir,
+            settings.chrome_source_user_data_dir,
+        )
+        self.automation_user_data_dir.mkdir(parents=True, exist_ok=True)
 
         log_step("[STEP1] Launch dedicated Chrome profile")
         self._pw = await async_playwright().start()
+
+        launch_args = launch_args_for_automation(self.automation_user_data_dir, self.profile_subdirectory)
         self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self.automation_profile_dir),
-            executable_path=str(settings.chrome_executable),
+            user_data_dir=str(self.automation_user_data_dir),
+            executable_path=str(settings.chrome_executable.resolve()),
             headless=settings.headless,
             viewport={"width": 1400, "height": 900},
+            args=launch_args,
         )
         self._browser = None
+
+        expected = expected_profile_path(self.automation_user_data_dir, self.profile_subdirectory)
+        actual = await detect_actual_profile_path(
+            self._context,
+            user_data_dir=self.automation_user_data_dir,
+            profile_subdir=self.profile_subdirectory,
+        )
+        verify_profile_path(
+            expected=expected,
+            actual=actual,
+            requested_user_data_dir=self.automation_user_data_dir,
+            requested_profile=self.profile_subdirectory,
+        )
 
         log_step("[STEP2] Open BC")
         log_step("[STEP3] Open x10")

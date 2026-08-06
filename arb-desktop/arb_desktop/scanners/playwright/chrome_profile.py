@@ -29,7 +29,7 @@ def default_chrome_user_data_dir() -> Path:
 
 
 def default_automation_profile_dir() -> Path:
-    return Path.home() / "arb-chrome-profile"
+    return (Path.home() / "arb-chrome-profile").resolve()
 
 
 def is_chrome_running() -> bool:
