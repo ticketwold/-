@@ -249,6 +249,20 @@ async function ensureBcScript(tabId, frameId = null) {
   }
 }
 
+async function injectScrapeBcBoard(tabId, frameId) {
+  try {
+    await ensureBcMainScripts(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => (typeof window.__bcScrapeBoard === 'function' ? window.__bcScrapeBoard() : null)
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function scanBcTabBoard(tab) {
   if (!tab?.id) return { matchups: [], cartFound: false };
   await ensureBcScript(tab.id);
@@ -258,26 +272,33 @@ async function scanBcTabBoard(tab) {
   let best = { matchups: [], cartFound: false, cartSlip: null, score: -1 };
 
   for (const frame of frames) {
+    let res = null;
     try {
-      const res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_BOARD' }, { frameId: frame.frameId });
-      if (!res) continue;
-      const count = res.matchups?.length || 0;
-      const hasCart = !!res.hasCart || !!res.cartSlip?.odds;
-      const isSports = res.source === 'sports-board' || res.source === 'sports-cart';
-      const frameScore = count * 100 + (hasCart ? 50 : 0) + scoreBcFrameUrl(frame.url) + (isSports ? 40 : 0);
-      if (frameScore > best.score) {
-        best = {
-          matchups: res.matchups || [],
-          cartFound: hasCart,
-          cartSlip: res.cartSlip?.odds ? res.cartSlip : best.cartSlip,
-          score: frameScore
-        };
-      }
-      if (hasCart && res.cartSlip?.odds) {
-        best.cartFound = true;
-        best.cartSlip = res.cartSlip;
-      }
+      res = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_BOARD' }, { frameId: frame.frameId });
     } catch (_) {}
+    if (!res?.matchups?.length) {
+      const injected = await injectScrapeBcBoard(tab.id, frame.frameId);
+      if (injected?.matchups?.length) {
+        res = { ...injected, source: injected.source || 'sports-board' };
+      }
+    }
+    if (!res) continue;
+    const count = res.matchups?.length || 0;
+    const hasCart = !!res.hasCart || !!res.cartSlip?.odds;
+    const isSports = res.source === 'sports-board' || res.source === 'sports-cart';
+    const frameScore = count * 100 + (hasCart ? 50 : 0) + scoreBcFrameUrl(frame.url) + (isSports ? 40 : 0);
+    if (frameScore > best.score) {
+      best = {
+        matchups: res.matchups || [],
+        cartFound: hasCart,
+        cartSlip: res.cartSlip?.odds ? res.cartSlip : best.cartSlip,
+        score: frameScore
+      };
+    }
+    if (hasCart && res.cartSlip?.odds) {
+      best.cartFound = true;
+      best.cartSlip = res.cartSlip;
+    }
   }
 
   return best;
@@ -560,9 +581,15 @@ async function runSearchOnce() {
   let btiSource = 'none';
   if (btiTab) {
     try {
+      await ensureBtiScript(btiTab.id);
       const btiRes = await getBtiLiveMatchups(btiTab.id);
       btiAll = btiRes.matchups || [];
       btiSource = btiRes.source || 'none';
+      if (!btiAll.length) {
+        const board = await scanBtiTabBoard({ id: btiTab.id, url: btiTab.url });
+        btiAll = btiMatchupsFromDom(board.events);
+        if (btiAll.length) btiSource = 'dom-retry';
+      }
     } catch (e) {
       console.warn('[BTI]', e.message);
     }
@@ -1030,7 +1057,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.13] background loaded');
+console.log('[양방봇 v5.9.32] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();

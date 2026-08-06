@@ -2728,18 +2728,36 @@ function renderSearchResults(data) {
   if (!data) return;
 
   const s = data.stats || {};
-  const btiSrc = s.btiSource === 'dom' ? ' · DOM' : (s.btiSource === 'api' ? ' · API' : '');
+  const btiSrc = (s.btiSource === 'dom' || s.btiSource === 'dom-retry') ? ' · DOM' : (s.btiSource === 'api' ? ' · API' : '');
   stats.textContent = `텐텐뱃 ${s.btiTotal || 0}경기${btiSrc} · BC ${s.bcTotal || 0}경기 · 매칭 ${s.matched || 0}건 (BTI ${s.btiTabFound ? 'O' : 'X'} / BC ${s.bcTabFound ? 'O' : 'X'})`;
-  if (!s.btiTotal && s.btiTabFound) {
-    stats.textContent += ' — 배당판이 보이는 10벳 스포츠 탭인지 확인';
+  if (!s.btiTabFound) {
+    stats.textContent += ' — 텐텐뱃(x10x10s) 스포츠 탭 필요';
+  } else if (!s.btiTotal) {
+    stats.textContent += ' — 텐텐뱃 배당판이 보이는지 확인';
+  }
+  if (!s.bcTabFound) {
+    stats.textContent += ' — BC.Game /sports/ 탭 필요';
+  } else if (!s.bcTotal) {
+    stats.textContent += ' — BC 라이브/프리매치 목록 열기';
   }
 
   el.innerHTML = '';
   const minP = parseFloat($('minProfit')?.value || '1');
-  const opps = (data.opportunities || []).filter((o) => parseFloat(o.profit) >= minP);
+  const allOpps = data.opportunities || [];
+  const opps = allOpps.filter((o) => parseFloat(o.profit) >= minP);
+
+  if (!allOpps.length && (s.btiTotal > 0 || s.bcTotal > 0)) {
+    el.innerHTML = '<div class="hint" style="padding:12px">경기는 읽혔지만 팀명 매칭 실패 — 같은 경기인지 확인</div>';
+    return;
+  }
 
   if (!opps.length) {
-    el.innerHTML = '<div class="hint" style="padding:12px">조건 충족 기회 없음 — 탭 열림/팀명 매칭 확인</div>';
+    const hint = !s.btiTabFound || !s.bcTabFound
+      ? '탭을 열고 서치를 다시 시작하세요'
+      : (!s.btiTotal || !s.bcTotal)
+        ? '양쪽 배당판에서 경기 목록이 보여야 합니다'
+        : '조건 충족 기회 없음 — 최소 수익률을 낮춰보세요';
+    el.innerHTML = `<div class="hint" style="padding:12px">${hint}</div>`;
     return;
   }
 
@@ -2870,4 +2888,4 @@ try {
     onTabNavigated(details.tabId, details.url || '', details.frameId);
   });
 } catch (_) {}
-log(`v5.9.31 ${IS_PANEL ? '패널' : '팝업'} 로드 — BetBy 슬립 DOM 강화`, 'info');
+log(`v5.9.32 ${IS_PANEL ? '패널' : '팝업'} 로드 — 라이브 서치 강화`, 'info');
