@@ -106,6 +106,25 @@ arb_desktop/
 `extension-legacy/`는 참고용으로 유지됩니다.  
 새 개발은 **`arb-desktop/`** 에서 진행합니다.
 
+## 라이브 검증 (API ↔ 화면)
+
+```bash
+python scripts/verify_bc_live.py
+# 또는: arb-verify-bc-live
+```
+
+BC sports **라이브** 탭에서 sptpub `/api/v4/live` 와 화면 배당을 비교합니다.
+
+```
+[EVENT MATCH]
+경기명: T1 vs Gen.G
+API odds: T1=2.150, Gen.G=1.720
+SCREEN odds: T1=2.150, Gen.G=1.720
+차이: T1=+0.000, Gen.G=+0.000
+```
+
+실패 시: event id 불일치 / team name 정규화 실패 / market type 불일치
+
 ## 향후
 
 - `native/` C++ 모듈로 대량 페어링 계산 가속
