@@ -1,0 +1,107 @@
+name: Build Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag suffix (e.g. 1.4.0)
+        required: true
+        default: "1.4.0"
+      upload_release:
+        description: Upload assets to GitHub Release
+        required: true
+        default: "true"
+  push:
+    tags:
+      - "arb-desktop-v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.event.inputs.version || github.ref_name && startsWith(github.ref_name, 'arb-desktop-v') && github.ref_name || 'arb-desktop-v1.4.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $raw = "${{ env.VERSION }}"
+          if ($raw -match 'arb-desktop-v(.+)') { $raw = $Matches[1] }
+          "APP_VERSION=$raw" >> $env:GITHUB_ENV
+          Write-Host "Building version $raw"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: arb-desktop/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./arb-desktop[dev]"
+
+      - name: Build ArbDesktop.exe
+        run: |
+          cd arb-desktop
+          python build_windows.py
+
+      - name: Verify bundle contents
+        shell: pwsh
+        run: |
+          $root = "arb-desktop/dist/ArbDesktop"
+          if (-not (Test-Path "$root/ArbDesktop.exe")) { throw "ArbDesktop.exe missing" }
+          if (-not (Test-Path "$root/chrome-bridge/manifest.json")) { throw "chrome-bridge missing" }
+          Get-ChildItem $root | Select-Object Name, Length
+
+      - name: Smoke test (launch exe)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File arb-desktop/scripts/smoke_test_windows.ps1
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $zip = "ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path "arb-desktop/dist/ArbDesktop/*" -DestinationPath $zip
+          Get-Item $zip | Format-List Name, Length
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer-out | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=${{ env.APP_VERSION }}" "arb-desktop/installer.iss"
+          Get-ChildItem installer-out
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArbDesktop-Windows-x64-v${{ env.APP_VERSION }}
+          path: |
+            ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip
+            installer-out/ArbDesktop-Setup-v${{ env.APP_VERSION }}.exe
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'push' || github.event.inputs.upload_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "arb-desktop-v${{ env.APP_VERSION }}"
+          $zip = "ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip"
+          $setup = "installer-out/ArbDesktop-Setup-v${{ env.APP_VERSION }}.exe"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $zip $setup --title "arb-desktop v${{ env.APP_VERSION }} (Windows build)" --notes "Windows portable ZIP + installer"
+          } else {
+            gh release upload $tag $zip $setup --clobber
+          }

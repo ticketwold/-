@@ -48,6 +48,14 @@ def main() -> int:
         "websockets.legacy",
         "--hidden-import",
         "websockets.legacy.server",
+        "--hidden-import",
+        "PyQt6.QtCore",
+        "--hidden-import",
+        "PyQt6.QtGui",
+        "--hidden-import",
+        "PyQt6.QtWidgets",
+        "--collect-submodules",
+        "websockets",
         str(ROOT / "arb_desktop" / "main.py"),
     ]
 
