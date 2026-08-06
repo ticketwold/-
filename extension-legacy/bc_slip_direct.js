@@ -58,16 +58,47 @@
     return false;
   }
 
+  function extractOuLine(text) {
+    const m = String(text || '').match(/(?:오버|언더|over|under)\s*([+-]?\d+(?:\.\d+)?)/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function isSameAsOuLine(num, ouLine) {
+    return ouLine != null && num != null && Math.abs(num - ouLine) < 0.02;
+  }
+
+  function parseOddsLoose(raw, ouLine) {
+    const s = String(raw || '').trim();
+    let o = parseOdds(s);
+    if (!o && /^(?:[2-9]|1[0-5])$/.test(s)) o = parseFloat(s);
+    if (!o) return null;
+    if (isSameAsOuLine(o, ouLine)) return null;
+    if (ouLine != null && o > 15) return null;
+    return o;
+  }
+
   function pickBestOddsCandidate(matches, block, isOu) {
+    const ouLine = isOu ? extractOuLine(block) : null;
     const candidates = [];
     for (const x of matches) {
-      const val = parseOdds(x[1], isOu ? 30 : 100);
+      const val = parseOddsLoose(x[1], ouLine) || parseOdds(x[1], isOu ? 15 : 100);
       if (!val || CHIP.has(val)) continue;
       const idx = x.index ?? block.indexOf(x[0]);
       const before = block.slice(Math.max(0, idx - 40), idx);
       if (isLikelyTotalLine(val, before)) continue;
-      if (isOu && val > 25) continue;
+      if (isSameAsOuLine(val, ouLine)) continue;
+      if (isOu && val > 15) continue;
       candidates.push({ val, idx });
+    }
+    if (!candidates.length && isOu) {
+      const intMatches = [...block.matchAll(/\b([2-9]|1[0-5])\b/g)];
+      for (const x of intMatches) {
+        const val = parseFloat(x[1]);
+        if (isSameAsOuLine(val, ouLine)) continue;
+        candidates.push({ val, idx: x.index ?? 0 });
+      }
     }
     if (!candidates.length) return null;
     if (isOu) {
@@ -243,12 +274,35 @@
   function extractOddsFromDom(slip) {
     const slipFull = slipText(slip);
     const ou = isOuMarket(slipFull);
+    const ouLine = extractOuLine(slipFull);
     const candidates = [];
+
+    const oddsSelectors = [
+      '[data-editor-id*="odds"]',
+      '[data-editor-id*="Odds"]',
+      '[data-editor-id*="coefficient"]',
+      '[data-editor-id*="Coefficient"]',
+      '[class*="odds"]',
+      '[class*="Odds"]',
+      '[class*="coeff"]',
+      '[class*="Coeff"]'
+    ];
+    for (const sel of oddsSelectors) {
+      for (const el of collectAll(sel, slip)) {
+        if (!visible(el)) continue;
+        const raw = (el.textContent || '').trim();
+        const o = parseOddsLoose(raw, ouLine) || parseOdds(raw, ou ? 15 : 100);
+        if (!o || CHIP.has(o)) continue;
+        if (isSameAsOuLine(o, ouLine)) continue;
+        candidates.push({ o, score: 200 });
+      }
+    }
+
     walk(slip, (el) => {
       if (el.nodeType !== 1 || !visible(el)) return;
       const raw = (el.textContent || '').trim();
-      if (!/^\d+\.\d{1,3}$/.test(raw)) return;
-      const o = parseOdds(raw, ou ? 30 : 100);
+      if (!/^\d+(?:\.\d{1,3})?$/.test(raw)) return;
+      const o = parseOddsLoose(raw, ouLine) || parseOdds(raw, ou ? 15 : 100);
       if (!o || CHIP.has(o)) return;
       const ctx = slipText(el.parentElement).slice(0, 200);
       if (!MARKET_HINT.test(ctx) && !/USDT/i.test(ctx)) return;
@@ -258,15 +312,22 @@
       }
       const before = ctx.slice(0, Math.max(0, ctx.indexOf(raw)));
       if (isLikelyTotalLine(o, before)) return;
-      if (ou && o > 25) return;
-      candidates.push(o);
+      if (isSameAsOuLine(o, ouLine)) return;
+      if (ou && o > 15) return;
+      let score = 50;
+      const cls = `${el.className || ''} ${el.parentElement?.className || ''}`;
+      if (/odds|coeff|price|decimal/i.test(cls)) score += 80;
+      if (el.getAttribute?.('data-editor-id')) score += 100;
+      candidates.push({ o, score });
     }, 0);
+
     if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score);
     if (ou) {
-      const typical = candidates.filter((n) => n >= 1.01 && n <= 15);
-      if (typical.length) return typical[typical.length - 1];
+      const typical = candidates.filter((c) => c.o >= 1.01 && c.o <= 15);
+      if (typical.length) return typical[0].o;
     }
-    return candidates[candidates.length - 1];
+    return candidates[0].o;
   }
 
   function extractMeta(text) {
@@ -317,14 +378,26 @@
       return { ok: false, suspended: true, reason: 'market-suspended', source: 'bcgame' };
     }
 
+    const meta = extractMeta(text);
+    const ou = meta.marketKind === 'ou' || isOuMarket(text);
+    const ouLine = extractOuLine(text);
+
     let odds = null;
     const stakeLine = text.match(/(\d+\.\d{1,3})\s+0(?:\.\d+)?\s*USDT/i);
-    if (stakeLine) odds = parseOdds(stakeLine[1]);
-    if (!odds) odds = extractOddsFromText(text);
-    if (!odds) odds = extractOddsFromDom(slip);
+    if (stakeLine) {
+      const o = parseOdds(stakeLine[1]);
+      if (o && !isSameAsOuLine(o, ouLine)) odds = o;
+    }
+    if (ou) {
+      if (!odds) odds = extractOddsFromDom(slip);
+      if (!odds) odds = extractOddsFromText(text);
+    } else {
+      if (!odds) odds = extractOddsFromText(text);
+      if (!odds) odds = extractOddsFromDom(slip);
+    }
+    if (isSameAsOuLine(odds, ouLine) || (ou && odds > 15)) odds = null;
     if (!odds) return null;
 
-    const meta = extractMeta(text);
     return {
       ok: true,
       source: 'bcgame',
@@ -336,6 +409,7 @@
       fromSlip: true,
       sourceKind: 'bc-direct-slip',
       marketKind: meta.marketKind,
+      ouLine: ouLine || undefined,
       method: 'direct-slip-panel'
     };
   }

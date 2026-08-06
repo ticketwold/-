@@ -59,6 +59,12 @@ function normalizeSportsSlip(raw) {
   const odds = raw.odds > 1.01 ? raw.odds : null;
   if (!odds) return null;
   const kind = raw.sourceKind || raw.method || '';
+  const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
+  const ouLineM = `${team} ${raw.eventText || ''}`.match(/(?:오버|언더|over|under)\s*([+-]?\d+(?:\.\d+)?)/i);
+  const ouLine = raw.ouLine || (ouLineM ? parseFloat(ouLineM[1]) : null);
+  const isOu = raw.marketKind === 'ou' || !!ouLineM;
+  if (isOu && ouLine != null && Math.abs(odds - ouLine) < 0.02) return null;
+  if (isOu && odds > 15) return null;
   if (kind === 'sports-board-selected' || raw.method === 'api-cache') return null;
   if (kind === 'bc-api' && !(raw.capturedAt && Date.now() - raw.capturedAt < 8000)) return null;
   if (!raw.fromSlip && kind !== 'bc-direct-slip' && kind !== 'bc-native-slip' && kind !== 'sports-slip' && kind !== 'bc-api-fresh' && kind !== 'bc-api') return null;
@@ -86,7 +92,8 @@ function normalizeSportsSlip(raw) {
     eventText: raw.eventText || '',
     homeTeam: raw.homeTeam || '',
     awayTeam: raw.awayTeam || '',
-    marketKind: raw.marketKind || 'ml'
+    marketKind: raw.marketKind || (isOu ? 'ou' : 'ml'),
+    ouLine: ouLine || undefined
   };
 }
 

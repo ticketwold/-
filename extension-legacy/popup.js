@@ -510,6 +510,12 @@ async function injectReadBcSports(tabId, frameId = 0) {
           if (!r || !(r.odds > 1.01 || (r.ok && r.odds > 1.01))) return null;
           const odds = r.odds;
           const team = r.teamLabel || r.selectionText || r.outcome || '';
+          const t = `${team} ${r.eventText || ''}`;
+          const ouLineM = t.match(/(?:오버|언더|over|under)\s*([+-]?\d+(?:\.\d+)?)/i);
+          const ouLine = r.ouLine || (ouLineM ? parseFloat(ouLineM[1]) : null);
+          const isOu = r.marketKind === 'ou' || !!ouLineM;
+          if (isOu && ouLine != null && Math.abs(odds - ouLine) < 0.02) return null;
+          if (isOu && odds > 15) return null;
           const stake = r.stake > 0 ? r.stake : null;
           const payout = r.payout > 0 ? r.payout : null;
           return {
@@ -526,7 +532,8 @@ async function injectReadBcSports(tabId, frameId = 0) {
             fromPayout: !!r.fromPayout || (stake > 0 && payout > stake),
             fromSlip: true,
             sourceKind: r.sourceKind || 'sports-slip',
-            marketKind: r.marketKind || 'ml'
+            marketKind: r.marketKind || (isOu ? 'ou' : 'ml'),
+            ouLine: ouLine || undefined
           };
         }
         try {
@@ -546,10 +553,8 @@ async function injectReadBcSports(tabId, frameId = 0) {
             const scraped = window.__bcScrapeOdds();
             if (scraped?.ok && scraped.odds > 1.01) {
               const kind = scraped.sourceKind || 'sports-slip';
-              if (kind !== 'sports-board-selected') {
-                const packed = pack({ ...scraped, fromSlip: true });
-                if (packed) return packed;
-              }
+              const packed = pack({ ...scraped, fromSlip: true });
+              if (packed && kind !== 'sports-board-selected') return packed;
             }
           }
           const api = window.__bcApiSlip;
@@ -609,8 +614,36 @@ function scoreBcSlip(slip) {
   return s;
 }
 
+function extractBcOuLine(slip) {
+  if (slip?.ouLine > 0) return slip.ouLine;
+  const t = `${slip?.teamLabel || ''} ${slip?.selectionText || ''} ${slip?.eventText || ''}`;
+  const m = t.match(/(?:오버|언더|over|under)\s*([+-]?\d+(?:\.\d+)?)/i);
+  return m ? parseFloat(m[1]) : null;
+}
+
+function isOuLineMistakenAsOdds(slip) {
+  if (!slip?.odds || slip.odds <= 1) return false;
+  const isOu = slip.marketKind === 'ou'
+    || /오버|언더|over|under|total|O\/U|합계/i.test(`${slip.teamLabel || ''} ${slip.selectionText || ''} ${slip.eventText || ''}`);
+  if (!isOu) return false;
+  const line = extractBcOuLine(slip);
+  if (line != null && Math.abs(slip.odds - line) < 0.02) return true;
+  if (slip.odds > 15) return true;
+  return false;
+}
+
+function sanitizeBcSlipOdds(slip) {
+  if (!slip) return slip;
+  if (isOuLineMistakenAsOdds(slip)) {
+    return { ...slip, odds: null, _ouLineRejected: true };
+  }
+  return slip;
+}
+
 function coerceSlipCached(slip) {
   if (!slip || slip.empty || slip.cartEmpty) return null;
+  slip = sanitizeBcSlipOdds(slip);
+  if (!slip?.odds || slip.odds <= 1) return null;
   if (slip.suspended) {
     return { ...slip, odds: slip.odds > 1 ? slip.odds : null, suspended: true };
   }
@@ -1270,7 +1303,7 @@ async function resolveBtiOddsForSync(btiTab) {
 function resolveBcOddsForSync() {
   if (bcCartEmptyConfirmed) return null;
   if (!cachedBc?.odds || cachedBc.odds <= 1) return null;
-  if (cachedBc.marketKind === 'ou' && cachedBc.odds > 25) return null;
+  if (isOuLineMistakenAsOdds(cachedBc)) return null;
   if (cachedBc.suspended && !(cachedBc.odds > 1)) return null;
   if (isStaleBcSource(cachedBc)) return null;
   if (!isCartSlip(cachedBc) && !cachedBc.fromPayout) return null;
@@ -1941,13 +1974,17 @@ async function syncBcAmountOnly(force = false, always = false) {
   if (!force && !always && !needsAmountSync(btiBet, btiOdds, polyO, polyUsd, false)) return null;
 
   bcSyncPending = true;
+  let polyRes = null;
   try {
-    const polyRes = await setBcAmount(found.bcTab, polyUsd);
+    polyRes = await setBcAmount(found.bcTab, polyUsd);
     if (isBcStakeCloseEnough(polyUsd, polyRes)) {
       lastSyncedBcUsd = polyUsd;
       lastSyncedBcOdds = polyO;
       lastBcSyncAt = Date.now();
       lastSyncedAt = Date.now();
+    } else if (always || force) {
+      const got = polyRes?.stake > 0 ? `$${polyRes.stake}` : '-';
+      log(`BC 금액 동기화 실패 — 목표 $${polyUsd.toFixed(2)}, 현재 ${got}`, 'err');
     }
     return polyRes;
   } finally {
@@ -2631,4 +2668,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.25 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC stake BetBy 입력`, 'info');
+log(`v5.9.26 ${IS_PANEL ? '패널' : '팝업'} 로드 — OU 라인≠배당`, 'info');
