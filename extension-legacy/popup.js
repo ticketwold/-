@@ -40,6 +40,7 @@ let lastBtiBoardFrame = null;
 let lastBtiFullScanAt = 0;
 let refreshPending = false;
 let refreshQueued = false;
+let bcCartEmptyConfirmed = false;
 let bcScriptReady = new Set();
 let btiScriptReady = new Set();
 let lastStatus = { bti: '', bc: '' };
@@ -287,13 +288,21 @@ function formatBtiMeta(slip) {
   return `${prefix}${label}`;
 }
 
-function updateSlipUI(bti, poly, arbBti = null) {
-  $('btiOdds').textContent = formatOdds(bti);
-  $('polyOdds').textContent = formatOdds(poly);
-  $('btiMeta').textContent = formatBtiMeta(bti);
-  $('polyMeta').textContent = formatBcMeta(poly);
+function getBcSlipForUi() {
+  if (bcCartEmptyConfirmed) return null;
+  const odds = resolveBcOddsForSync();
+  if (!odds || odds <= 1) return null;
+  return { ...cachedBc, odds };
+}
 
-  const polyO = poly?.odds > 1 ? poly.odds : null;
+function updateSlipUI(bti, poly, arbBti = null) {
+  const polyUi = getBcSlipForUi();
+  $('btiOdds').textContent = formatOdds(bti);
+  $('polyOdds').textContent = formatOdds(polyUi);
+  $('btiMeta').textContent = formatBtiMeta(bti);
+  $('polyMeta').textContent = formatBcMeta(polyUi);
+
+  const polyO = polyUi?.odds > 1 ? polyUi.odds : null;
   const btiO = bti?.odds > 1 ? bti.odds : null;
   const profit = (btiO && polyO) ? calcProfit(btiO, polyO) : null;
   const profitEl = $('profit');
@@ -315,8 +324,8 @@ function updateSlipUI(bti, poly, arbBti = null) {
       hint.textContent = '자동배팅 가동 중 — 수익 조건 충족 시 즉시 배팅';
     }
   } else if (!bti?.odds) hint.textContent = lastStatus.bti || '텐텐뱃: x10x10s 슬립/배당판 확인';
-  else if (!poly?.odds) hint.textContent = lastStatus.bc || 'BC.Game: 슬립/배당 확인';
-  else if (poly?.needsStake) hint.textContent = shouldSyncAmounts() ? '금액 자동 입력 중...' : '금액 입력 시 당첨금 기준 배당';
+  else if (!polyUi?.odds) hint.textContent = lastStatus.bc || 'BC.Game: 슬립/배당 확인';
+  else if (polyUi?.needsStake) hint.textContent = shouldSyncAmounts() ? '금액 자동 입력 중...' : '금액 입력 시 당첨금 기준 배당';
   else if (profit !== null && profit >= getMinProfit()) {
     if (syncRunning) hint.textContent = `수익 구간 — 금액 동기화 중 (${profit.toFixed(2)}%)`;
     else hint.textContent = `수익 구간 충족 (${profit.toFixed(2)}%) — 자동 배팅 시작 가능`;
@@ -330,14 +339,14 @@ function updateSlipUI(bti, poly, arbBti = null) {
     const btiBet = getBtiBet();
     const rate = getUsdRate();
     const polyStakeCalc = calcPolyBetUsd(btiBet, btiO, polyO, rate);
-    const polyStakePage = poly?.stake > 0 ? poly.stake : null;
+    const polyStakePage = polyUi?.stake > 0 ? polyUi.stake : null;
     const polyStake = polyStakeCalc;
     $('calcBti').textContent = `${btiBet.toLocaleString()}원`;
     $('calcPoly').textContent = `$${polyStake.toFixed(2)}`;
 
     const btiTotalKrw = calcBtiTotalPayoutKrw(btiBet, btiO);
-    const polyTotalUsd = (poly?.fromPayout && poly?.payout)
-      ? poly.payout
+    const polyTotalUsd = (polyUi?.fromPayout && polyUi?.payout)
+      ? polyUi.payout
       : calcPolyTotalPayoutUsd(polyStake, polyO);
     const polyTotalKrw = usdToKrw(polyTotalUsd, rate);
     const totalInvest = calcTotalInvestKrw(btiBet, polyStake, rate);
@@ -641,6 +650,19 @@ async function probeBcCartEmptyFrame(tabId, frameId) {
   } catch (_) {
     return { hasShell: false, empty: false };
   }
+}
+
+async function probeBcCartEmptyAnyFrame(bcTab) {
+  if (!bcTab?.id) return false;
+  const order = await orderBcFrames(bcTab.id);
+  const seen = new Set();
+  for (const frameId of order) {
+    if (seen.has(frameId)) continue;
+    seen.add(frameId);
+    const probe = await probeBcCartEmptyFrame(bcTab.id, frameId);
+    if (probe.hasShell && probe.empty) return true;
+  }
+  return false;
 }
 
 async function readBcSlipAllFrames(bcTab) {
@@ -1202,6 +1224,7 @@ async function resolveBtiOddsForSync(btiTab) {
 }
 
 function resolveBcOddsForSync() {
+  if (bcCartEmptyConfirmed) return null;
   if (!cachedBc?.odds || cachedBc.odds <= 1) return null;
   if (cachedBc.suspended && !(cachedBc.odds > 1)) return null;
   if (isStaleBcSource(cachedBc)) return null;
@@ -1426,10 +1449,18 @@ async function readBtiSlip(btiTab) {
 async function readBcSlip(bcTab) {
   if (!bcTab?.id) {
     lastStatus.bc = 'BC.Game: 탭 없음 — bc.game/sports 열기';
+    bcCartEmptyConfirmed = false;
     return null;
   }
 
   await ensureBcScript(bcTab.id);
+
+  if (await probeBcCartEmptyAnyFrame(bcTab)) {
+    bcCartEmptyConfirmed = true;
+    lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
+    return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
+  }
+  bcCartEmptyConfirmed = false;
 
   const slip = await readBcSlipAllFrames(bcTab);
   if (!slip?.odds || slip.odds <= 1 || slip.empty || slip.cartEmpty) {
@@ -1501,10 +1532,12 @@ function applySlipUpdate(source, slip, opts = {}) {
   }
   if (source === 'bcgame') {
     if (opts.cartEmpty || slip?.empty || slip?.cartEmpty || !slip) {
+      bcCartEmptyConfirmed = true;
       cachedBc = null;
     } else if (slip.suspended) {
       cachedBc = { ...slip, odds: slip.odds > 1 ? slip.odds : null, suspended: true };
     } else {
+      bcCartEmptyConfirmed = false;
       const coerced = coerceSlipCached(slip);
       if (coerced) cachedBc = coerced;
     }
@@ -1531,9 +1564,15 @@ async function refreshSlips() {
       if (cartCheck.cartEmpty && !bti?.odds && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
     }
 
-    if (poly?.empty || poly?.cartEmpty) {
+    if (found.bcTab?.id && await probeBcCartEmptyAnyFrame(found.bcTab)) {
+      bcCartEmptyConfirmed = true;
+      cachedBc = null;
+      lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
+    } else if (poly?.empty || poly?.cartEmpty) {
+      bcCartEmptyConfirmed = true;
       cachedBc = null;
     } else {
+      bcCartEmptyConfirmed = false;
       cachedBc = coerceSlipCached(poly);
     }
     cachedBti = coerceSlipCached(bti);
@@ -2476,4 +2515,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.15 ${IS_PANEL ? '패널' : '팝업'} 로드 — 자동배팅 버튼 상태 동기화`, 'info');
+log(`v5.9.16 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 빈카트 배당 표시 수정`, 'info');

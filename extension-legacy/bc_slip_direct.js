@@ -49,14 +49,21 @@
   }
 
   function isEmptySlip(t) {
-    return /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty|betslip\s*is\s*empty/i.test(t);
+    return /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|베팅금액을\s*입력|베팅\s*옵션을\s*클릭|클릭하신\s*후.*베팅|옵션을\s*클릭하신\s*후|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty|betslip\s*is\s*empty/i.test(t);
   }
+
+  function isEmptySlipPrompt(t) {
+    return /베팅금액을\s*입력|베팅\s*옵션을\s*클릭|클릭하신\s*후|옵션을\s*클릭하신\s*후|예약\s*코드\s*입력/i.test(t);
+  }
+
+  const SPORT_LABEL = /^(basketball|football|soccer|tennis|baseball|hockey|volleyball|esports|e-?sports|농구|축구|야구|테니스|배구|e스포츠)$/i;
 
   const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
 
   function hasSelectionInSlip(text) {
     if (!text || isEmptySlip(text)) return false;
     const t = String(text).replace(/\s+/g, ' ').trim();
+    if (isEmptySlipPrompt(t)) return false;
 
     // 슬립 배당 + 0 USDT (예: 1.14 0 USDT) — 가장 신뢰
     if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return true;
@@ -64,10 +71,6 @@
     const hasSlipChrome = /베팅\s*슬립|bet\s*slip|betslip|단일|조합|시스템/i.test(t);
     const hasBetCta = /베팅하기|place\s*(a\s*)?bet|총\s*베팅|total\s*stake/i.test(t);
     if (!hasSlipChrome && !hasBetCta) return false;
-
-    if ((/총\s*배당|total\s*odds/i.test(t)) && /\d+\.\d{1,3}/.test(t) && /vs\.?|승자|winner/i.test(t)) {
-      return true;
-    }
 
     const slipPart = t.split(/총\s*베팅|total\s*stake|베팅하기|place\s*(a\s*)?bet/i)[0] || t;
     if (slipPart.length > 900) return false;
@@ -245,6 +248,8 @@
 
     const winM = text.match(/(?:승자|winner)[^\dA-Za-z가-힣]{0,40}([A-Za-z0-9가-힣][A-Za-z0-9 .'\-]{2,40})/i);
     if (winM) teamLabel = winM[1].trim();
+
+    if (teamLabel && SPORT_LABEL.test(teamLabel)) teamLabel = '';
 
     if (!teamLabel && eventText) {
       const parts = eventText.split(/\s+vs\.?\s+/i);
