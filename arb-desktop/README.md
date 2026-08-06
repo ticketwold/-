@@ -125,6 +125,31 @@ SCREEN odds: T1=2.150, Gen.G=1.720
 
 실패 시: event id 불일치 / team name 정규화 실패 / market type 불일치
 
+## BetSlip 검증 (배팅카트 DOM)
+
+전체 경기/API 스캔 대신 **배팅카트에 담긴 항목만** 읽는 BetSlip-first 검증 도구입니다.
+
+```bash
+python scripts/verify_betslip.py
+# 또는: arb-verify-betslip
+```
+
+BC.Game / x10x10s 각각 배팅카트에 항목 1개를 담으면 아래 형식으로 출력됩니다:
+
+```
+[BETSLIP]
+site: BC.Game
+event: Team A vs Team B
+selection: Team B
+odds: 1.95
+status: active
+stake: 10
+```
+
+- 배팅카트 컨테이너 내부 DOM만 탐색 (페이지 전체 숫자 스캔 금지)
+- suspended/정지/closed 상태는 배당으로 인식하지 않음
+- 기본 드라이런 — 실제 배팅 버튼 자동 클릭 없음
+
 ## 향후
 
 - `native/` C++ 모듈로 대량 페어링 계산 가속
