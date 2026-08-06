@@ -39,9 +39,44 @@
     return (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
-  function parseOdds(s) {
+  function parseOdds(s, max = 100) {
     const n = parseFloat(String(s || '').replace(/,/g, '').trim());
-    return Number.isFinite(n) && n > 1.01 && n < 100 ? n : null;
+    return Number.isFinite(n) && n > 1.01 && n < max ? n : null;
+  }
+
+  function isOuMarket(text) {
+    return /오버|언더|over|under|total|O\/U|합계|득점/i.test(text || '');
+  }
+
+  function isLikelyTotalLine(num, beforeText) {
+    if (num == null) return false;
+    const ctx = String(beforeText || '').slice(-48);
+    if (!/오버|언더|over|under|total|O\/U|합계/i.test(ctx)) return false;
+    // 오버 37.5 / under 2.5 — 라인 숫자 (배당 아님)
+    if (num >= 4.5) return true;
+    if (num >= 2 && num <= 4.5 && /\.\d$/.test(String(num))) return true;
+    return false;
+  }
+
+  function pickBestOddsCandidate(matches, block, isOu) {
+    const candidates = [];
+    for (const x of matches) {
+      const val = parseOdds(x[1], isOu ? 30 : 100);
+      if (!val || CHIP.has(val)) continue;
+      const idx = x.index ?? block.indexOf(x[0]);
+      const before = block.slice(Math.max(0, idx - 40), idx);
+      if (isLikelyTotalLine(val, before)) continue;
+      if (isOu && val > 25) continue;
+      candidates.push({ val, idx });
+    }
+    if (!candidates.length) return null;
+    if (isOu) {
+      const typical = candidates.filter((c) => c.val >= 1.01 && c.val <= 15);
+      if (typical.length) return typical[typical.length - 1].val;
+    }
+    const low = candidates.filter((c) => c.val < 30);
+    if (low.length) return low[low.length - 1].val;
+    return candidates[0].val;
   }
 
   function isHistoryPanel(t) {
@@ -187,38 +222,33 @@
       if (o) return o;
     }
 
-    m = text.match(/(?:승자|winner|맵\s*핸디캡|핸디캡|handicap|map\s*handicap|오버|언더|over|under|total|O\/U)[^\d]{0,120}(\d+\.\d{1,3})/i);
-    if (m) {
-      const o = parseOdds(m[1]);
-      if (o) return o;
+    const ou = isOuMarket(text);
+
+    // 승자/핸디만 — 숫자가 배당인 경우가 많음 (OU는 라인과 혼동)
+    if (!ou) {
+      m = text.match(/(?:승자|winner|맵\s*핸디캡|핸디캡|handicap|map\s*handicap)[^\d]{0,120}(\d+\.\d{1,3})/i);
+      if (m) {
+        const o = parseOdds(m[1]);
+        if (o) return o;
+      }
     }
 
     const block = text.split(/총\s*베팅|베팅하기|place\s*(a\s*)?bet|BC\.?\s*GAME/i)[0] || text;
-    const nums = [...block.matchAll(/\b(\d+\.\d{1,3})\b/g)]
-      .map((x) => parseOdds(x[1]))
-      .filter((o) => o && !CHIP.has(o));
-
-    if (nums.length === 1) return nums[0];
-    if (nums.length > 1) {
-      const nearUsdt = block.match(/(\d+\.\d{1,3})(?:\s+0)?\s*USDT/i);
-      if (nearUsdt) {
-        const o = parseOdds(nearUsdt[1]);
-        if (o) return o;
-      }
-      const low = nums.filter((n) => n < 30);
-      if (low.length) return low[low.length - 1];
-      return nums[0];
-    }
+    const allMatches = [...block.matchAll(/\b(\d+\.\d{1,3})\b/g)];
+    const picked = pickBestOddsCandidate(allMatches, block, ou);
+    if (picked) return picked;
     return null;
   }
 
   function extractOddsFromDom(slip) {
-    let found = null;
+    const slipFull = slipText(slip);
+    const ou = isOuMarket(slipFull);
+    const candidates = [];
     walk(slip, (el) => {
-      if (found || el.nodeType !== 1 || !visible(el)) return;
+      if (el.nodeType !== 1 || !visible(el)) return;
       const raw = (el.textContent || '').trim();
       if (!/^\d+\.\d{1,3}$/.test(raw)) return;
-      const o = parseOdds(raw);
+      const o = parseOdds(raw, ou ? 30 : 100);
       if (!o || CHIP.has(o)) return;
       const ctx = slipText(el.parentElement).slice(0, 200);
       if (!MARKET_HINT.test(ctx) && !/USDT/i.test(ctx)) return;
@@ -226,9 +256,17 @@
         const btn = el.closest('button');
         if (btn && /^(10|20|50|100|300)$/.test((btn.textContent || '').replace(/\s/g, ''))) return;
       }
-      found = o;
+      const before = ctx.slice(0, Math.max(0, ctx.indexOf(raw)));
+      if (isLikelyTotalLine(o, before)) return;
+      if (ou && o > 25) return;
+      candidates.push(o);
     }, 0);
-    return found;
+    if (!candidates.length) return null;
+    if (ou) {
+      const typical = candidates.filter((n) => n >= 1.01 && n <= 15);
+      if (typical.length) return typical[typical.length - 1];
+    }
+    return candidates[candidates.length - 1];
   }
 
   function extractMeta(text) {
@@ -251,9 +289,12 @@
     const winM = text.match(/(?:승자|winner)[^\dA-Za-z가-힣]{0,40}([A-Za-z0-9가-힣][A-Za-z0-9 .'\-]{2,40})/i);
     if (winM) teamLabel = winM[1].trim();
 
+    const ouM = text.match(/((?:오버|언더|over|under)\s*[+-]?\d+(?:\.\d+)?)/i);
+    if (ouM) teamLabel = ouM[1].replace(/\s+/g, ' ').trim();
+
     if (teamLabel && SPORT_LABEL.test(teamLabel)) teamLabel = '';
 
-    if (!teamLabel && eventText) {
+    if (!teamLabel && eventText && !ouM) {
       const parts = eventText.split(/\s+vs\.?\s+/i);
       teamLabel = (parts[1] || parts[0] || '').trim();
     }

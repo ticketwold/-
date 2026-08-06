@@ -1268,6 +1268,7 @@ async function resolveBtiOddsForSync(btiTab) {
 function resolveBcOddsForSync() {
   if (bcCartEmptyConfirmed) return null;
   if (!cachedBc?.odds || cachedBc.odds <= 1) return null;
+  if (cachedBc.marketKind === 'ou' && cachedBc.odds > 25) return null;
   if (cachedBc.suspended && !(cachedBc.odds > 1)) return null;
   if (isStaleBcSource(cachedBc)) return null;
   if (!isCartSlip(cachedBc) && !cachedBc.fromPayout) return null;
@@ -2593,4 +2594,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.22 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 배당 읽기 강화`, 'info');
+log(`v5.9.23 ${IS_PANEL ? '패널' : '팝업'} 로드 — OU 라인/배당 구분`, 'info');
