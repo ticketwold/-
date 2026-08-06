@@ -33,6 +33,8 @@ class AsyncWorker(QObject):
     status = pyqtSignal(str)
     error = pyqtSignal(str)
     ready = pyqtSignal()
+    bridge_token = pyqtSignal(str)
+    bridge_status = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -45,7 +47,11 @@ class AsyncWorker(QObject):
         asyncio.set_event_loop(self._loop)
         try:
             self._coordinator = Coordinator(on_tick=lambda t: self.tick.emit(t))
+            self._coordinator.set_bridge_status_handler(
+                lambda s: self.bridge_status.emit(s)
+            )
             self._loop.run_until_complete(self._coordinator.start())
+            self.bridge_token.emit(self._coordinator.bridge_token)
             self.ready.emit()
             self._loop.run_forever()
         except Exception as exc:
@@ -78,12 +84,30 @@ class AsyncWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("양방 배팅 데스크톱 v1.0.2 (BetSlip-first)")
-        self.resize(1100, 720)
+        self.setWindowTitle("양방 배팅 데스크톱 v1.3.0 (Chrome Bridge)")
+        self.resize(1100, 760)
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+
+        # Bridge connection status
+        bridge_box = QVBoxLayout()
+        self.lbl_bridge = QLabel("Chrome Bridge: DISCONNECTED")
+        self.lbl_bc_tab = QLabel("BC.Game tab: NOT FOUND")
+        self.lbl_x10_tab = QLabel("x10x10s tab: NOT FOUND")
+        self.lbl_bc_slip = QLabel("BC BetSlip: EMPTY")
+        self.lbl_x10_slip = QLabel("x10 BetSlip: EMPTY")
+        for lbl in (
+            self.lbl_bridge,
+            self.lbl_bc_tab,
+            self.lbl_x10_tab,
+            self.lbl_bc_slip,
+            self.lbl_x10_slip,
+        ):
+            lbl.setFont(QFont("Consolas", 10))
+            bridge_box.addWidget(lbl)
+        layout.addLayout(bridge_box)
 
         # Header metrics
         metrics = QHBoxLayout()
@@ -132,7 +156,7 @@ class MainWindow(QMainWindow):
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("브라우저 초기화 중… (x10x10s + BC.Game 탭이 열립니다)")
+        self.status.showMessage("Chrome Bridge 서버 시작 중… (기존 Chrome 탭 유지)")
 
         # Async worker thread
         self._thread = QThread()
@@ -140,9 +164,11 @@ class MainWindow(QMainWindow):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.bootstrap)
         self._worker.ready.connect(self._on_ready)
+        self._worker.bridge_token.connect(self._on_bridge_token)
         self._worker.tick.connect(self._on_tick)
         self._worker.status.connect(self.status.showMessage)
         self._worker.error.connect(self._on_error)
+        self._worker.bridge_status.connect(self._on_bridge_status)
 
         self.btn_start.clicked.connect(self._start)
         self.btn_stop.clicked.connect(self._stop)
@@ -151,9 +177,25 @@ class MainWindow(QMainWindow):
 
         self._thread.start()
 
+    def _on_bridge_token(self, token: str) -> None:
+        if token:
+            print(f"[BRIDGE] Token: {token}", flush=True)
+
     def _on_ready(self) -> None:
-        self.status.showMessage("준비 완료 — 양쪽 사이트에 로그인 후 스캔 시작")
+        self.status.showMessage("준비 완료 — Chrome에서 BC.Game / x10x10s 탭을 열고 확장프로그램 연결")
         self.btn_start.setEnabled(True)
+
+    def _on_bridge_status(self, status) -> None:
+        lines = status.format_lines()
+        labels = [
+            self.lbl_bridge,
+            self.lbl_bc_tab,
+            self.lbl_x10_tab,
+            self.lbl_bc_slip,
+            self.lbl_x10_slip,
+        ]
+        for lbl, line in zip(labels, lines, strict=True):
+            lbl.setText(line)
 
     def _on_error(self, msg: str) -> None:
         self.status.showMessage(f"오류: {msg}")

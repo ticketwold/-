@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arb-desktop"
-version = "1.2.1"
+version = "1.3.0"
 description = "양방 배팅 데스크톱 — WebSocket/Network → Playwright → OCR 다중 감지"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ dependencies = [
   "PyQt6>=6.7",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
+  "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,7 @@ arb-verify-bc-live = "arb_desktop.validation.verify_bc_live:main"
 arb-verify-betslip = "arb_desktop.betslip.verify_betslip:main"
 arb-verify-betslips = "arb_desktop.betslip.verify_betslips:main"
 arb-run-auto-betslip = "arb_desktop.betslip.run_auto:main"
+arb-run-bridge = "arb_desktop.betslip.run_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

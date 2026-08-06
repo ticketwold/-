@@ -3,21 +3,36 @@ from __future__ import annotations
 from arb_desktop.betslip.matcher import apply_network_verification, calculate_arbitrage, check_slip_pair
 from arb_desktop.betslip.models import BetSlipScanResult
 from arb_desktop.betslip.readers.dom import read_bc_betslip, read_bti_betslip
+from arb_desktop.bridge.connection_manager import ConnectionManager
+from arb_desktop.bridge.session import BridgeSession
 from arb_desktop.config import settings
-from arb_desktop.scanners.playwright.session import BrowserSession
 
 
 class BetSlipScanner:
-    """BetSlip-first 메인 스캐너 — 배팅카트 DOM만 읽습니다."""
+    """BetSlip-first 메인 스캐너 — Bridge 또는 (비활성) Playwright DOM."""
 
-    def __init__(self, session: BrowserSession) -> None:
+    def __init__(
+        self,
+        session: BridgeSession | None = None,
+        *,
+        manager: ConnectionManager | None = None,
+    ) -> None:
         self._session = session
+        self._manager = manager or (session.manager if session else None)
         self._bc_network_odds: float | None = None
         self._bti_network_odds: float | None = None
 
     async def scan(self, *, debug: bool = False, cart_wait_sec: float = 30.0) -> BetSlipScanResult:
-        bc = await read_bc_betslip(self._session.bc_page, debug=debug)
-        bti = await read_bti_betslip(self._session.bti_page, debug=debug, wait_sec=cart_wait_sec)
+        if self._manager:
+            bc = self._manager.get_bc_read()
+            bti = self._manager.get_bti_read()
+        else:
+            from arb_desktop.scanners.playwright.session import BrowserSession
+
+            if not isinstance(self._session, BrowserSession):
+                raise RuntimeError("Bridge 연결이 없습니다. Chrome Bridge 확장프로그램을 연결하세요.")
+            bc = await read_bc_betslip(self._session.bc_page, debug=debug)
+            bti = await read_bti_betslip(self._session.bti_page, debug=debug, wait_sec=cart_wait_sec)
 
         match = check_slip_pair(bc, bti)
         match = apply_network_verification(

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "arb Chrome Bridge",
+  "version": "1.0.0",
+  "description": "BC.Game / x10x10s BetSlip bridge for arb-desktop",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "*://*.bc.game/*",
+    "*://bc.game/*",
+    "*://*.x10x10s.com/*",
+    "*://x10x10s.com/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.bc.game/*", "*://bc.game/*"],
+      "js": ["frame_scanner.js", "content_bc.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.x10x10s.com/*", "*://x10x10s.com/*"],
+      "js": ["frame_scanner.js", "content_x10.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "arb Chrome Bridge"
+  }
+}

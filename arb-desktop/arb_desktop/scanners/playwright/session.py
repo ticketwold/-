@@ -61,57 +61,10 @@ class BrowserSession:
         self.profile_directory: str = settings.chrome_profile_directory
 
     async def start(self) -> None:
-        validate_launch_allowed(self.user_data_dir, self.profile_directory)
-
-        log_step("[STEP1] Launch Chrome profile")
-        try:
-            self._pw = await async_playwright().start()
-            launch_args = launch_args_for_profile(self.profile_directory)
-            log_step("[DEBUG] before launch_persistent_context")
-            try:
-                self._context = await asyncio.wait_for(
-                    self._pw.chromium.launch_persistent_context(
-                        user_data_dir=str(self.user_data_dir),
-                        executable_path=str(settings.chrome_executable.resolve()),
-                        headless=settings.headless,
-                        viewport={"width": 1400, "height": 900},
-                        args=launch_args,
-                    ),
-                    timeout=LAUNCH_PERSISTENT_CONTEXT_TIMEOUT_SEC,
-                )
-            except (asyncio.TimeoutError, TimeoutError):
-                log_step("[ERROR] launch_persistent_context timeout")
-                await self.stop()
-                raise SystemExit(1) from None
-            log_step("[DEBUG] after launch_persistent_context")
-            self._browser = None
-
-            expected = expected_profile_path(self.user_data_dir, self.profile_directory)
-            actual = await detect_actual_profile_path(
-                self._context,
-                user_data_dir=self.user_data_dir,
-                profile_subdir=self.profile_directory,
-            )
-            verify_profile_path(
-                expected=expected,
-                actual=actual,
-                requested_user_data_dir=self.user_data_dir,
-                requested_profile=self.profile_directory,
-            )
-        except Exception:
-            await self.stop()
-            raise
-
-        log_step("[STEP2] Open BC")
-        log_step("[STEP3] Open x10")
-        self.bti_page, self.bc_page = await self._open_site_pages()
-
-        await self.bc_page.goto(settings.bc_sports_url, wait_until="domcontentloaded", timeout=30_000)
-        await self.bti_page.goto(settings.bti_wrapper_url, wait_until="domcontentloaded", timeout=30_000)
-        await self.wait_for_frames(self.bti_page, timeout_ms=15_000)
-        await self._sync_bti_session()
-        if setup_monitors and self.bc_page and self.bti_page:
-            await setup_monitors(self.bc_page, self.bti_page)
+        raise RuntimeError(
+            "BrowserSession(Playwright) is disabled. "
+            "Use Chrome Bridge mode: python scripts/run_bridge.py or arb-desktop UI."
+        )
 
     async def _open_site_pages(self) -> tuple[Page, Page]:
         if not self._context:

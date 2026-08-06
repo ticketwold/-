@@ -3,11 +3,6 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from arb_desktop.scanners.playwright.chrome_profile import (
-    default_chrome_executable,
-    default_chrome_user_data_dir,
-)
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ARB_", env_file=".env", extra="ignore")
@@ -34,10 +29,16 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser — Chrome User Data + Default 프로필
+    # Chrome Bridge (기존 Chrome 탭 + 확장프로그램)
+    use_chrome_bridge: bool = True
+    bridge_host: str = "127.0.0.1"
+    bridge_port: int = 18765
+    bridge_token: str = ""
+
+    # Legacy browser settings (Playwright — 비활성화됨)
     headless: bool = False
-    chrome_executable: Path = Field(default_factory=default_chrome_executable)
-    chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
+    chrome_executable: Path = Field(default_factory=lambda: Path())
+    chrome_user_data_dir: Path = Field(default_factory=lambda: Path())
     chrome_profile_directory: str = "Default"
 
     # BTI API
