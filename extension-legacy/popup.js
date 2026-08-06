@@ -19,6 +19,11 @@ let lastStrikeAt = 0;
 let lastSyncedBtiKrw = 0;
 let lastSyncedBcUsd = 0;
 let lastSyncedAt = 0;
+let lastSyncedBtiOdds = 0;
+let lastSyncedBcOdds = 0;
+let lastBcSyncAt = 0;
+let lastBcStakeFrameId = null;
+let bcSyncPending = false;
 let cachedBti = null;
 let cachedBc = null;
 let lastBtiFrame = null;
@@ -30,6 +35,7 @@ let refreshQueued = false;
 let bcScriptReady = new Set();
 let btiScriptReady = new Set();
 let lastStatus = { bti: '', bc: '' };
+const SYNC_STATE_KEY = 'syncState';
 const HISTORY_KEY = 'calcHistory';
 const HISTORY_MAX = 100;
 let historyEntries = [];
@@ -210,6 +216,7 @@ function applyUsdtRate(rate) {
     hint.textContent = `${formatRateSource(cachedUsdtSource)} ${Math.round(rate.krw).toLocaleString()}원${t ? ` · ${t}` : ''}`;
   }
   updateSlipUI(cachedBti, cachedBc);
+  persistSyncState({ usdRate: rate.krw });
 }
 
 async function refreshBithumbRate() {
@@ -1113,21 +1120,17 @@ function resolveBcOddsForSync() {
 async function ensureBcStakeScripts(tabId) {
   const frames = await getAllFrames(tabId);
   const frameIds = [...new Set([0, ...frames.map((f) => f.frameId)])];
+  const files = ['bc_slip_direct.js', 'bc_stake_set.js', 'bc_slip_read.js'];
   for (const frameId of frameIds) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
-        files: ['bc_stake_set.js'],
-        world: 'MAIN'
-      });
-    } catch (_) {}
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
-        files: ['bc_slip_read.js'],
-        world: 'MAIN'
-      });
-    } catch (_) {}
+    for (const file of files) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          files: [file],
+          world: 'MAIN'
+        });
+      } catch (_) {}
+    }
   }
 }
 
@@ -1254,7 +1257,7 @@ function applySlipUpdate(source, slip, opts = {}) {
     if (opts.cartEmpty) {
       if (!cachedBti || cachedBti.fromSlip || isCartSlip(cachedBti)) cachedBti = null;
     } else if (slipOdds(slip)) {
-      cachedBti = mergeSlipCached(cachedBti, slip);
+      cachedBti = { ...slip, odds: slipOdds(slip) };
     }
   }
   if (source === 'bcgame') {
@@ -1496,23 +1499,38 @@ async function setBcAmount(bcTab, amountUsd) {
   const probes = await Promise.all(order.slice(0, 12).map((frameId) => probeBcStakeFrame(bcTab.id, frameId)));
   probes.sort((a, b) => (b.score || 0) - (a.score || 0));
 
+  const tryOrder = [];
+  if (lastBcStakeFrameId != null) tryOrder.push(lastBcStakeFrameId);
   for (const probe of probes) {
-    if ((probe.score || 0) < 40 && !probe.hasSlip && !probe.hasInput) continue;
-    const res = await setBcStakeMain(bcTab.id, probe.frameId, amountUsd);
-    if (res?.ok) return { ...res, frameId: probe.frameId };
-    if (res?.partial || res?.stake > 0) lastRes = { ...res, frameId: probe.frameId };
+    if (!tryOrder.includes(probe.frameId)) tryOrder.push(probe.frameId);
   }
-
-  for (const probe of probes) {
-    const res = await sendBc(bcTab.id, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, probe.frameId);
-    if (res?.ok) return res;
-    if (res?.stake > 0 || res?.partial) lastRes = res;
-  }
-
   for (const frameId of order) {
-    const res = await setBcStakeMain(bcTab.id, frameId, amountUsd);
-    if (res?.ok) return res;
-    if (res?.stake > 0) lastRes = res;
+    if (!tryOrder.includes(frameId)) tryOrder.push(frameId);
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const frameId of tryOrder) {
+      const probe = probes.find((p) => p.frameId === frameId) || {};
+      if (attempt === 0 && (probe.score || 0) < 20 && !probe.hasSlip && !probe.hasInput && frameId !== lastBcStakeFrameId) continue;
+      const res = await setBcStakeMain(bcTab.id, frameId, amountUsd);
+      if (res?.ok) {
+        lastBcStakeFrameId = frameId;
+        return { ...res, frameId };
+      }
+      if (res?.partial || res?.stake > 0) {
+        lastRes = { ...res, frameId };
+        lastBcStakeFrameId = frameId;
+      }
+    }
+
+    for (const frameId of tryOrder.slice(0, 8)) {
+      const res = await sendBc(bcTab.id, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, frameId);
+      if (res?.ok) {
+        lastBcStakeFrameId = frameId;
+        return res;
+      }
+      if (res?.stake > 0 || res?.partial) lastRes = res;
+    }
   }
 
   return lastRes || { ok: false, reason: '금액 입력 실패 — BC 배팅카트 열고 슬립 선택' };
@@ -1520,6 +1538,48 @@ async function setBcAmount(bcTab, amountUsd) {
 
 function shouldSyncAmounts() {
   return autoSyncEnabled || syncRunning || autoBetRunning;
+}
+
+function needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force = false) {
+  if (force) return true;
+  if (Math.abs(lastSyncedBtiKrw - btiBet) >= 100) return true;
+  if (Math.abs(lastSyncedBcUsd - polyUsd) >= 0.01) return true;
+  if (Math.abs((lastSyncedBtiOdds || 0) - btiOdds) >= 0.006) return true;
+  if (Math.abs((lastSyncedBcOdds || 0) - polyO) >= 0.006) return true;
+  if (Date.now() - lastBcSyncAt > 700) return true;
+  if (Date.now() - lastSyncedAt > 1200) return true;
+  return false;
+}
+
+async function syncBcAmountOnly(force = false) {
+  if (!shouldSyncAmounts() || bcSyncPending) return null;
+  const found = await findTabs();
+  if (!found.bcTab?.id) return null;
+
+  const polyO = resolveBcOddsForSync();
+  const btiOdds = await resolveBtiOddsForSync(found.btiTab);
+  if (!polyO || !btiOdds || btiOdds <= 1) return null;
+
+  const btiBet = getBtiBet();
+  if (!btiBet) return null;
+
+  const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
+  if (!needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force)) return null;
+
+  bcSyncPending = true;
+  try {
+    const polyRes = await setBcAmount(found.bcTab, polyUsd);
+    const polyOk = polyRes?.ok || polyRes?.partial;
+    if (polyOk) {
+      lastSyncedBcUsd = polyUsd;
+      lastSyncedBcOdds = polyO;
+      lastBcSyncAt = Date.now();
+      lastSyncedAt = Date.now();
+    }
+    return polyRes;
+  } finally {
+    bcSyncPending = false;
+  }
 }
 
 function scheduleSyncAmounts() {
@@ -1553,9 +1613,7 @@ async function syncAmounts(force = false) {
 
   await refreshBithumbRate();
   const polyUsd = calcPolyBetUsd(btiBet, btiOdds, polyO, getUsdRate());
-  const btiChanged = Math.abs(lastSyncedBtiKrw - btiBet) >= 100;
-  const polyChanged = Math.abs(lastSyncedBcUsd - polyUsd) >= 0.02;
-  if (!force && !btiChanged && !polyChanged && Date.now() - lastSyncedAt < 2500) {
+  if (!needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force)) {
     updateSlipUI(cachedBti, cachedBc);
     return;
   }
@@ -1569,13 +1627,18 @@ async function syncAmounts(force = false) {
     const btiOk = btiRes?.ok;
     const polyOk = polyRes?.ok || polyRes?.partial;
     if (btiOk || polyOk) {
-      const changed = btiChanged || polyChanged;
+      const changed = needsAmountSync(btiBet, btiOdds, polyO, polyUsd, true);
       if (btiOk) lastSyncedBtiKrw = btiBet;
-      if (polyOk) lastSyncedBcUsd = polyUsd;
+      if (polyOk) {
+        lastSyncedBcUsd = polyUsd;
+        lastSyncedBcOdds = polyO;
+        lastBcSyncAt = Date.now();
+      }
+      lastSyncedBtiOdds = btiOdds;
       lastSyncedAt = Date.now();
       setTimeout(() => refreshSlips().then(() => {
         updateSlipUI(cachedBti, cachedBc);
-      }), 250);
+      }), 150);
       if (changed || force) {
         const profit = calcProfit(btiOdds, polyO);
         log(`금액 동기화 — 텐텐뱃 ${btiBet.toLocaleString()}원 · BC $${polyUsd.toFixed(2)} · 수익률 ${profit != null ? profit.toFixed(2) : '-'}%`, 'info');
@@ -1584,7 +1647,9 @@ async function syncAmounts(force = false) {
       const reasons = [];
       if (!btiOk) reasons.push(`텐텐뱃: ${btiRes?.reason || '실패'}`);
       if (!polyOk) reasons.push(`BC: ${polyRes?.reason || '실패'}`);
-      if (reasons.length) log(`금액 동기화: ${reasons.join(' / ')}`, 'err');
+      if (reasons.length && (force || Date.now() - lastSyncedAt > 5000)) {
+        log(`금액 동기화: ${reasons.join(' / ')}`, 'err');
+      }
     }
   } finally {
     syncPending = false;
@@ -1687,10 +1752,11 @@ let lastPollRefreshAt = 0;
 async function pollLoop() {
   if (!shouldSyncAmounts()) return;
   const now = Date.now();
-  if (now - lastPollRefreshAt > 2000) {
+  if (now - lastPollRefreshAt > 900) {
     lastPollRefreshAt = now;
     await refreshSlips();
   }
+  await syncBcAmountOnly();
   scheduleSyncAmounts();
   scheduleAutoBetCheck();
 }
@@ -1699,6 +1765,9 @@ function onOddsChanged(msg) {
   const opts = { cartEmpty: !!msg.cartEmpty };
   if (msg.source === 'bti') applySlipUpdate('bti', msg.slip, opts);
   if (msg.source === 'bcgame') applySlipUpdate('bcgame', msg.slip, opts);
+  lastSyncedBcOdds = 0;
+  lastSyncedBtiOdds = 0;
+  syncBcAmountOnly(true);
   scheduleSyncAmounts();
   if (autoBetRunning) scheduleAutoBetCheck();
 }
@@ -1710,9 +1779,55 @@ function onBtiStakeChanged(msg) {
   scheduleSyncAmounts();
 }
 
+function persistSyncState(extra = {}) {
+  chrome.storage.local.get(SYNC_STATE_KEY, (data) => {
+    const cur = data[SYNC_STATE_KEY] || {};
+    chrome.storage.local.set({
+      [SYNC_STATE_KEY]: {
+        ...cur,
+        autoSyncEnabled,
+        autoBetRunning,
+        btiBet: getBtiBet(),
+        usdRate: getUsdRate(),
+        ...extra
+      }
+    });
+  });
+}
+
+async function initSyncFromStorage() {
+  try {
+    const data = await chrome.storage.local.get(SYNC_STATE_KEY);
+    const s = data[SYNC_STATE_KEY] || {};
+    if (s.btiBet && $('btiBet')) $('btiBet').value = String(s.btiBet);
+    if (s.autoBetRunning) {
+      autoBetRunning = true;
+      $('autoBetStart').disabled = true;
+      $('autoBetStop').disabled = false;
+      chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
+    }
+    if (s.autoSyncEnabled === false && !autoBetRunning) {
+      autoSyncEnabled = false;
+      updateSyncButtons();
+      return;
+    }
+  } catch (_) {}
+  enableAutoSync();
+}
+
 function enableAutoSync() {
   autoSyncEnabled = true;
-  if (!calcTimer) calcTimer = setInterval(pollLoop, 400);
+  if (!calcTimer) calcTimer = setInterval(pollLoop, 250);
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: true }).catch(() => {});
+  persistSyncState();
+  updateSyncButtons();
+}
+
+function updateSyncButtons() {
+  const stopBtn = $('syncStop');
+  const startBtn = $('syncAmountsBtn');
+  if (stopBtn) stopBtn.disabled = !autoSyncEnabled;
+  if (startBtn) startBtn.classList.toggle('primary', autoSyncEnabled);
 }
 
 function startSync() {
@@ -1726,12 +1841,17 @@ function startSync() {
 function stopSync() {
   autoSyncEnabled = false;
   syncRunning = false;
+  syncPending = false;
+  bcSyncPending = false;
   if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
   if (!autoBetRunning && calcTimer) {
     clearInterval(calcTimer);
     calcTimer = null;
   }
-  log('자동 동기화 정지', 'info');
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: false }).catch(() => {});
+  persistSyncState({ autoSyncEnabled: false });
+  updateSyncButtons();
+  log('금액 동기화 정지', 'info');
 }
 
 function startAutoBet() {
@@ -1743,8 +1863,10 @@ function startAutoBet() {
   lastAutoBetHintAt = 0;
   $('autoBetStart').disabled = true;
   $('autoBetStop').disabled = false;
-  log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
   enableAutoSync();
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
+  persistSyncState({ autoBetRunning: true });
+  log(`자동 배팅 시작 — 수익 ${getMinProfit()}% 이상 시 동시 즉시 배팅`, 'info');
   refreshSlips().then(async () => {
     const found = await findTabs();
     const polyO = resolveBcOddsForSync();
@@ -1758,10 +1880,13 @@ function startAutoBet() {
 
 function stopAutoBet() {
   autoBetRunning = false;
+  strikePending = false;
   if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
   $('autoBetStart').disabled = false;
   $('autoBetStop').disabled = true;
-  if (!autoBetRunning && !autoSyncEnabled && calcTimer) {
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: false }).catch(() => {});
+  persistSyncState({ autoBetRunning: false });
+  if (!autoSyncEnabled && calcTimer) {
     clearInterval(calcTimer);
     calcTimer = null;
   }
@@ -1813,10 +1938,11 @@ function startSearch() {
 }
 
 function stopSearch() {
-  chrome.runtime.sendMessage({ type: 'STOP_SEARCH' }, () => {
+  chrome.runtime.sendMessage({ type: 'STOP_SEARCH' }, (res) => {
     $('searchStart').disabled = false;
     $('searchStop').disabled = true;
-    log('서치 정지', 'info');
+    if (res?.ok !== false) log('서치 정지', 'info');
+    else log('서치 정지 요청', 'info');
   });
 }
 
@@ -1847,7 +1973,14 @@ $('refreshBtn')?.addEventListener('click', () => { refreshSlips(); log('새로�
 ['slipMinProfit', 'minProfit', 'btiBet'].forEach((id) => {
   $(id)?.addEventListener('input', () => {
     updateSlipUI(cachedBti, cachedBc);
-    if (shouldSyncAmounts()) scheduleSyncAmounts();
+    if (id === 'btiBet') {
+      lastSyncedBtiKrw = 0;
+      persistSyncState();
+    }
+    if (shouldSyncAmounts()) {
+      scheduleSyncAmounts();
+      syncBcAmountOnly(true);
+    }
   });
 });
 
@@ -1888,6 +2021,5 @@ setInterval(() => {
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 startBithumbRateLoop();
-enableAutoSync();
-refreshSlips().then(() => scheduleSyncAmounts());
-log(`v5.9.0 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC.Game 전용 (Polymarket 제거)`, 'info');
+initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
+log(`v5.9.5 ${IS_PANEL ? '패널' : '팝업'} 로드 — 실시간 BC 금액 동기화`, 'info');

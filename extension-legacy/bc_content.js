@@ -60,9 +60,10 @@ function normalizeSportsSlip(raw) {
     fromPayout,
     fromSlip: true,
     sourceKind: raw.sourceKind || 'sports-slip',
+    eventText: raw.eventText || '',
     homeTeam: raw.homeTeam || '',
     awayTeam: raw.awayTeam || '',
-    marketKind: 'ml'
+    marketKind: raw.marketKind || 'ml'
   };
 }
 

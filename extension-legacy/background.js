@@ -597,6 +597,231 @@ function broadcast(msg) {
   chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
+const SYNC_STATE_KEY = 'syncState';
+let bgSyncTimer = null;
+let bgSyncPending = false;
+let bgLastBcUsd = 0;
+let bgLastBcOdds = 0;
+let bgLastBtiKrw = 0;
+let bgLastBtiOdds = 0;
+let bgLastSyncAt = 0;
+let bgLastBcStakeFrameId = null;
+
+async function loadSyncState() {
+  const data = await chrome.storage.local.get(SYNC_STATE_KEY);
+  return data[SYNC_STATE_KEY] || {
+    autoSyncEnabled: false,
+    autoBetRunning: false,
+    btiBet: 10000,
+    usdRate: 1400
+  };
+}
+
+async function saveSyncState(partial) {
+  const cur = await loadSyncState();
+  await chrome.storage.local.set({ [SYNC_STATE_KEY]: { ...cur, ...partial } });
+}
+
+function shouldBgSync(state) {
+  return !!(state?.autoSyncEnabled || state?.autoBetRunning);
+}
+
+async function isPanelOpen() {
+  if (panelWindowId == null) return false;
+  try {
+    await chrome.windows.get(panelWindowId);
+    return true;
+  } catch (_) {
+    panelWindowId = null;
+    return false;
+  }
+}
+
+async function readBtiSlipBg(tabId) {
+  await ensureBtiScript(tabId);
+  const frames = await getAllTabFrames(tabId);
+  let best = null;
+  for (const frame of frames) {
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'READ_SLIP' }, { frameId: frame.frameId });
+      const slip = res?.slip;
+      if (slip?.odds > 1 && (!best || slip.odds > best.odds)) best = slip;
+    } catch (_) {}
+  }
+  return best;
+}
+
+async function readBcSlipBg(tab) {
+  if (!tab?.id) return null;
+  const board = await scanBcTabBoard(tab);
+  if (board.cartSlip?.odds > 1) return board.cartSlip;
+
+  await ensureBcScript(tab.id);
+  const frames = await getAllTabFrames(tab.id);
+  frames.sort((a, b) => scoreBcFrameUrl(b.url) - scoreBcFrameUrl(a.url));
+  let best = null;
+  for (const frame of frames) {
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: 'READ_SLIP' }, { frameId: frame.frameId });
+      const slip = res?.slip;
+      if (slip?.odds > 1 && (!best || slip.odds > best.odds)) best = slip;
+    } catch (_) {}
+  }
+  return best;
+}
+
+async function probeBcStakeFrameBg(tabId, frameId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: () => (typeof window.__bcProbeStakeFrame === 'function' ? window.__bcProbeStakeFrame() : null)
+    });
+    return { frameId, ...(results?.[0]?.result || {}) };
+  } catch (_) {
+    return { frameId, score: 0 };
+  }
+}
+
+async function setBcStakeMainBg(tabId, frameId, amountUsd) {
+  try {
+    await ensureBcMainScripts(tabId, frameId);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: 'MAIN',
+      func: (amount) => {
+        const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
+        const trySet = (fn) => {
+          if (typeof fn !== 'function') return null;
+          const res = fn(rounded);
+          if (res?.ok || res?.partial || (res?.stake > 0 && Math.abs(res.stake - rounded) < Math.max(0.2, rounded * 0.08))) {
+            return res;
+          }
+          return res?.stake > 0 ? res : null;
+        };
+        return trySet(window.__bcSetStake) || trySet(window.__bcSetStakeNative) || { ok: false, reason: 'stake-handler-missing' };
+      },
+      args: [amountUsd]
+    });
+    return results?.[0]?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function setBcStakeBg(tabId, amountUsd) {
+  const frames = await getAllTabFrames(tabId);
+  const order = [...new Set([0, ...frames.map((f) => f.frameId)])];
+  const probes = await Promise.all(order.slice(0, 12).map((frameId) => probeBcStakeFrameBg(tabId, frameId)));
+  probes.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+  const tryOrder = [];
+  if (bgLastBcStakeFrameId != null) tryOrder.push(bgLastBcStakeFrameId);
+  for (const probe of probes) {
+    if (!tryOrder.includes(probe.frameId)) tryOrder.push(probe.frameId);
+  }
+  for (const frameId of order) {
+    if (!tryOrder.includes(frameId)) tryOrder.push(frameId);
+  }
+
+  let lastRes = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const frameId of tryOrder) {
+      const probe = probes.find((p) => p.frameId === frameId) || {};
+      if (attempt === 0 && (probe.score || 0) < 20 && !probe.hasSlip && !probe.hasInput && frameId !== bgLastBcStakeFrameId) continue;
+      const res = await setBcStakeMainBg(tabId, frameId, amountUsd);
+      if (res?.ok) {
+        bgLastBcStakeFrameId = frameId;
+        return res;
+      }
+      if (res?.partial || res?.stake > 0) {
+        lastRes = res;
+        bgLastBcStakeFrameId = frameId;
+      }
+    }
+
+    for (const frameId of tryOrder.slice(0, 8)) {
+      try {
+        const res = await chrome.tabs.sendMessage(tabId, { type: 'SET_BC_AMOUNT', amount: amountUsd, force: true }, { frameId });
+        if (res?.ok) {
+          bgLastBcStakeFrameId = frameId;
+          return res;
+        }
+        if (res?.stake > 0 || res?.partial) lastRes = res;
+      } catch (_) {}
+    }
+  }
+  return lastRes;
+}
+
+function bgNeedsAmountSync(btiBet, btiOdds, bcOdds, polyUsd, force = false) {
+  if (force) return true;
+  if (Math.abs(bgLastBtiKrw - btiBet) >= 100) return true;
+  if (Math.abs(bgLastBcUsd - polyUsd) >= 0.01) return true;
+  if (Math.abs((bgLastBtiOdds || 0) - btiOdds) >= 0.006) return true;
+  if (Math.abs((bgLastBcOdds || 0) - bcOdds) >= 0.006) return true;
+  if (Date.now() - bgLastSyncAt > 700) return true;
+  return false;
+}
+
+async function bgSyncTick(force = false) {
+  if (bgSyncPending) return;
+  if (await isPanelOpen()) return;
+
+  const state = await loadSyncState();
+  if (!shouldBgSync(state)) return;
+
+  bgSyncPending = true;
+  try {
+    const btiTab = await pickBtiTab();
+    const bcTab = await findBcTab();
+    if (!btiTab?.id || !bcTab?.id) return;
+
+    const [btiSlip, bcSlip] = await Promise.all([
+      readBtiSlipBg(btiTab.id),
+      readBcSlipBg(bcTab)
+    ]);
+    const btiOdds = btiSlip?.odds;
+    const bcOdds = bcSlip?.odds;
+    if (!btiOdds || !bcOdds || btiOdds <= 1 || bcOdds <= 1) return;
+
+    const btiBet = state.btiBet || 10000;
+    const rate = state.usdRate || 1400;
+    const polyUsd = calcPolyBetUsd(btiBet, btiOdds, bcOdds, rate);
+    if (!bgNeedsAmountSync(btiBet, btiOdds, bcOdds, polyUsd, force)) return;
+
+    const res = await setBcStakeBg(bcTab.id, polyUsd);
+    if (res?.ok || res?.partial) {
+      bgLastBcUsd = polyUsd;
+      bgLastBcOdds = bcOdds;
+      bgLastBtiOdds = btiOdds;
+      bgLastBtiKrw = btiBet;
+      bgLastSyncAt = Date.now();
+    }
+  } finally {
+    bgSyncPending = false;
+  }
+}
+
+function startBgSyncLoop() {
+  if (bgSyncTimer) return;
+  bgSyncTimer = setInterval(() => { bgSyncTick().catch(() => {}); }, 500);
+  bgSyncTick(true).catch(() => {});
+}
+
+function stopBgSyncLoop() {
+  if (bgSyncTimer) {
+    clearInterval(bgSyncTimer);
+    bgSyncTimer = null;
+  }
+}
+
+async function updateBgSyncLoop() {
+  const state = await loadSyncState();
+  if (shouldBgSync(state)) startBgSyncLoop();
+  else stopBgSyncLoop();
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'START_SEARCH') {
     if (searchRunning) { sendResponse({ ok: true, msg: '이미 실행 중' }); return true; }
@@ -662,7 +887,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'ODDS_CHANGED' || msg.type === 'BTI_STAKE_CHANGED') {
     broadcast(msg);
+    bgLastBcOdds = 0;
+    bgLastBtiOdds = 0;
+    bgSyncTick(true).catch(() => {});
     return false;
+  }
+
+  if (msg.type === 'SET_AUTO_SYNC') {
+    saveSyncState({ autoSyncEnabled: !!msg.enabled }).then(() => {
+      updateBgSyncLoop();
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (msg.type === 'SET_AUTO_BET') {
+    saveSyncState({ autoBetRunning: !!msg.enabled }).then(() => {
+      updateBgSyncLoop();
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (msg.type === 'GET_SYNC_STATE') {
+    loadSyncState().then((state) => sendResponse({ ok: true, state }));
+    return true;
   }
 
   if (msg.type === 'GET_USDT_RATE') {
@@ -713,7 +962,11 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.0] background loaded — BC.Game 전용');
+console.log('[양방봇 v5.9.5] background loaded — BC.Game 실시간 금액 동기화');
+
+loadSyncState().then((state) => {
+  if (shouldBgSync(state)) startBgSyncLoop();
+});
 
 chrome.alarms.create('bithumb-rate', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {

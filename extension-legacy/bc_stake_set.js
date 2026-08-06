@@ -168,12 +168,13 @@
     let bestScore = -1;
     walkDeep(scope, (node) => {
       if (node.nodeType !== 1 || !visible(node)) return;
-      const t = slipText(node);
+      const t = slipText(node).replace(/\u00a0/g, ' ');
       if (!/\d+(?:\.\d+)?\s*USDT/i.test(t)) return;
       if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') return;
       if (t.length > 40) return;
       let score = 10;
       if (/^0(?:\.\d+)?\s*USDT$/i.test(t)) score += 80;
+      if (/^0(?:\.\d+)?$/i.test(t) && /USDT/i.test(node.parentElement?.textContent || '')) score += 70;
       if (node.closest?.('[class*="slip"], [class*="Slip"], [class*="counter"], [class*="Counter"], [class*="stake"], [class*="Stake"]')) score += 50;
       if (node.getAttribute?.('role') === 'spinbutton') score += 60;
       if (score > bestScore) {
