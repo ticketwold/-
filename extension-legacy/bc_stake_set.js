@@ -88,7 +88,7 @@
         if (/USDT/i.test(t)) score += 60;
         if (collectAll('input, textarea, [contenteditable="true"], [role="textbox"], [role="spinbutton"]', el).length) score += 40;
         if (/예상\s*당첨|potential\s*win|total\s*stake|총\s*베팅/i.test(t)) score += 30;
-        if (/vs\.?|승자|winner/i.test(t)) score += 20;
+        if (/vs\.?|승자|winner|오버|언더|over|under|total/i.test(t)) score += 20;
         if (score > bestScore) {
           bestScore = score;
           best = el;
@@ -258,11 +258,12 @@
   function clickPresetChip(slip, amount) {
     if (!slip) return 0;
     const presets = [10, 20, 50, 100, 300];
-    const target = presets.find((p) => p >= amount) || presets[presets.length - 1];
+    const exact = presets.find((p) => Math.abs(p - amount) < 0.06);
+    if (!exact) return 0;
     for (const btn of collectAll('button, [role="button"], div[class*="chip"], span[class*="chip"]', slip)) {
       if (!visible(btn)) continue;
       const t = (btn.textContent || '').replace(/\s+/g, '').trim();
-      if (t === String(target) || t === `+${target}` || t === `$${target}` || t === `${target}USDT`) {
+      if (t === String(exact) || t === `+${exact}` || t === `$${exact}` || t === `${exact}USDT`) {
         try { btn.click(); } catch (_) {}
         return 1;
       }
@@ -296,8 +297,8 @@
     if (!inp && target <= 50) {
       clickPresetChip(slip, target);
       const st = readStake(slip);
-      if (st > 0 && Math.abs(st - target) < Math.max(0.2, target * 0.15)) {
-        return { ok: true, stake: st, target, method: 'preset-chip-early', hasSlip: !!slip };
+      if (st > 0 && Math.abs(st - target) < 0.06) {
+        return { ok: true, stake: st, target, method: 'preset-chip-exact', hasSlip: !!slip };
       }
     }
 
@@ -306,12 +307,7 @@
     setFieldValue(inp, target);
     let stake = readStake(slip);
 
-    if (!stake || Math.abs(stake - target) > 0.15) {
-      clickPresetChip(slip, target);
-      stake = readStake(slip);
-    }
-
-    if (!stake || Math.abs(stake - target) > 0.15) {
+    if (!stake || Math.abs(stake - target) > 0.12) {
       setFieldValue(inp, target);
       stake = readStake(slip);
     }

@@ -642,8 +642,10 @@ function getActiveBetOdds() {
 }
 
 function amountsSyncedForBet(btiBet, polyUsd) {
-  return Math.abs(lastSyncedBtiKrw - btiBet) < 100
-    && Math.abs(lastSyncedBcUsd - polyUsd) < 0.05;
+  if (Math.abs(lastSyncedBtiKrw - btiBet) >= 100) return false;
+  if (Math.abs(lastSyncedBcUsd - polyUsd) >= 0.05) return false;
+  if (cachedBc?.stake > 0 && Math.abs(cachedBc.stake - polyUsd) >= 0.05) return false;
+  return true;
 }
 
 function isStaleBcSource(slip) {
@@ -1275,6 +1277,27 @@ function resolveBcOddsForSync() {
   return cachedBc.odds;
 }
 
+function resolveBcOddsForAmountSync() {
+  const direct = resolveBcOddsForSync();
+  if (direct > 1) return direct;
+  const slip = cachedBc;
+  if (!slip || bcCartEmptyConfirmed) return null;
+  if (slip.fromPayout && slip.stake > 0 && slip.payout > slip.stake) {
+    const o = Math.round((slip.payout / slip.stake) * 1000) / 1000;
+    if (o > 1.01 && o <= 25) return o;
+  }
+  if (slip.odds > 1.01 && slip.odds <= 25 && (isCartSlip(slip) || slip.fromPayout)) return slip.odds;
+  return null;
+}
+
+function isBcStakeCloseEnough(targetUsd, res) {
+  if (!res) return false;
+  const stake = res.stake > 0 ? res.stake : 0;
+  const tol = Math.max(0.12, targetUsd * 0.04);
+  if (res.ok && stake > 0 && Math.abs(stake - targetUsd) <= tol) return true;
+  return stake > 0 && Math.abs(stake - targetUsd) <= tol;
+}
+
 async function readBtiMarketStatus(btiTab) {
   if (!btiTab?.id) return { open: false };
   const frameIds = [
@@ -1855,11 +1878,11 @@ async function setBcAmount(bcTab, amountUsd) {
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const frameId of tryOrder) {
       const probe = probes.find((p) => p.frameId === frameId) || {};
-      if (attempt === 0 && (probe.score || 0) < 20 && !probe.hasSlip && !probe.hasInput && frameId !== lastBcStakeFrameId) continue;
+      if (attempt === 0 && !probe.hasInput && !probe.hasSlip && (probe.score || 0) < 8 && frameId !== lastBcStakeFrameId) continue;
       const res = await setBcStakeMain(bcTab.id, frameId, amountUsd);
-      if (res?.ok) {
+      if (isBcStakeCloseEnough(amountUsd, res)) {
         lastBcStakeFrameId = frameId;
-        return { ...res, frameId };
+        return { ...res, ok: true, frameId };
       }
       if (res?.partial || res?.stake > 0) {
         lastRes = { ...res, frameId };
@@ -1887,6 +1910,7 @@ function needsAmountSync(btiBet, btiOdds, polyO, polyUsd, force = false) {
   if (force) return true;
   if (Math.abs(lastSyncedBtiKrw - btiBet) >= 100) return true;
   if (Math.abs(lastSyncedBcUsd - polyUsd) >= 0.01) return true;
+  if (cachedBc?.stake > 0 && Math.abs(cachedBc.stake - polyUsd) >= 0.05) return true;
   if (Math.abs((lastSyncedBtiOdds || 0) - btiOdds) >= 0.006) return true;
   if (Math.abs((lastSyncedBcOdds || 0) - polyO) >= 0.006) return true;
   if (Date.now() - lastBcSyncAt > 700) return true;
@@ -1900,7 +1924,7 @@ async function syncBcAmountOnly(force = false, always = false) {
   const found = await findTabs();
   if (!found.bcTab?.id) return null;
 
-  const polyO = resolveBcOddsForSync();
+  const polyO = resolveBcOddsForAmountSync();
   const btiOdds = await resolveBtiOddsForSync(found.btiTab);
   if (!polyO || !btiOdds || btiOdds <= 1) return null;
 
@@ -1913,8 +1937,7 @@ async function syncBcAmountOnly(force = false, always = false) {
   bcSyncPending = true;
   try {
     const polyRes = await setBcAmount(found.bcTab, polyUsd);
-    const polyOk = polyRes?.ok || polyRes?.partial;
-    if (polyOk) {
+    if (isBcStakeCloseEnough(polyUsd, polyRes)) {
       lastSyncedBcUsd = polyUsd;
       lastSyncedBcOdds = polyO;
       lastBcSyncAt = Date.now();
@@ -1961,7 +1984,7 @@ async function syncAmounts(force = false) {
     return;
   }
 
-  const polyO = resolveBcOddsForSync();
+  const polyO = resolveBcOddsForAmountSync();
   const btiOdds = await resolveBtiOddsForSync(found.btiTab);
   if (!polyO || !btiOdds || btiOdds <= 1) {
     if (force) log(`동기화 대기 — 텐텐뱃 ${btiOdds?.toFixed(3) || '-'} · BC ${polyO?.toFixed(3) || '-'}`, 'err');
@@ -1984,8 +2007,8 @@ async function syncAmounts(force = false) {
       setBtiAmount(found.btiTab, btiBet),
       setBcAmount(found.bcTab, polyUsd)
     ]);
+    const polyOk = isBcStakeCloseEnough(polyUsd, polyRes);
     const btiOk = btiRes?.ok;
-    const polyOk = polyRes?.ok || polyRes?.partial;
     if (btiOk || polyOk) {
       const changed = needsAmountSync(btiBet, btiOdds, polyO, polyUsd, true);
       if (btiOk) lastSyncedBtiKrw = btiBet;
@@ -2188,6 +2211,10 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
   log(`${label} — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${bcOLabel()} · ${btiBet.toLocaleString()}원 / $${polyUsd.toFixed(2)}`, 'info');
 
   try {
+    if (!amountsReady) {
+      await syncAmounts(true);
+    }
+
     const [btiRes, polyRes] = await Promise.all([
       placeBtiBet(found.btiTab, btiBet, btiOdds, hint),
       placeBcBet(found.bcTab, polyUsd, {
@@ -2250,8 +2277,7 @@ async function pollLoop() {
     await refreshSlips();
   }
   if (shouldSyncAmounts()) {
-    await syncBcAmountOnly();
-    scheduleSyncAmounts();
+    await syncAmounts();
   }
   if (isAutoBetLooping()) scheduleAutoBetCheck();
 }
@@ -2594,4 +2620,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.23 ${IS_PANEL ? '패널' : '팝업'} 로드 — OU 라인/배당 구분`, 'info');
+log(`v5.9.24 ${IS_PANEL ? '패널' : '팝업'} 로드 — 금액 동기화`, 'info');
