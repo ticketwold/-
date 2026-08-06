@@ -31,6 +31,7 @@ def create_bridge_runtime(
     token: str | None = None,
     on_status_change=None,
     on_slip_update=None,
+    on_debug=None,
 ) -> BridgeRuntime:
     bridge_token = token or settings.bridge_token or secrets.token_urlsafe(24)
     settings.bridge_token = bridge_token
@@ -38,6 +39,7 @@ def create_bridge_runtime(
         token=bridge_token,
         on_status_change=on_status_change,
         on_slip_update=on_slip_update,
+        on_debug=on_debug,
     )
     server = BridgeWebSocketServer(
         manager,
@@ -49,7 +51,7 @@ def create_bridge_runtime(
 
 
 def print_bridge_startup_info(runtime: BridgeRuntime) -> None:
-    print("=== arb-desktop Chrome Bridge v1.3.0 ===", flush=True)
+    print("=== arb-desktop Chrome Bridge v1.3.1 ===", flush=True)
     print(f"WebSocket: ws://{settings.bridge_host}:{settings.bridge_port}/", flush=True)
     print(f"Token: {runtime.manager.token}", flush=True)
     print("", flush=True)

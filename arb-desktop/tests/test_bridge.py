@@ -57,7 +57,35 @@ def test_slip_update_parses_items() -> None:
     assert manager.bc_betslip == "active"
 
 
-def test_status_format_block() -> None:
+def test_slip_update_prefers_non_empty() -> None:
+    manager = ConnectionManager(token="secret")
+    empty = manager.apply_slip_update(
+        SlipUpdateMessage(
+            site="bc",
+            result={"ok": False, "empty": True, "items": [], "reason": "no-slip-root"},
+        )
+    )
+    assert empty is not None
+    filled = manager.apply_slip_update(
+        SlipUpdateMessage(
+            site="bc",
+            result={
+                "ok": True,
+                "empty": False,
+                "items": [{"event": "A vs B", "selection": "A", "odds": 1.9, "status": "active"}],
+            },
+        )
+    )
+    assert filled is not None
+    assert manager.bc_slip and manager.bc_slip.first
+    assert manager.bc_slip.first.event == "A vs B"
+    ignored = manager.apply_slip_update(
+        SlipUpdateMessage(
+            site="bc",
+            result={"ok": False, "empty": True, "items": [], "reason": "no-slip-root"},
+        )
+    )
+    assert ignored is None
     manager = ConnectionManager(token="secret")
     block = manager.status().format_block()
     assert "Chrome Bridge: DISCONNECTED" in block

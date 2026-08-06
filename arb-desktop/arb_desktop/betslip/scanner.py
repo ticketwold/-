@@ -3,9 +3,11 @@ from __future__ import annotations
 from arb_desktop.betslip.matcher import apply_network_verification, calculate_arbitrage, check_slip_pair
 from arb_desktop.betslip.models import BetSlipScanResult
 from arb_desktop.betslip.readers.dom import read_bc_betslip, read_bti_betslip
-from arb_desktop.bridge.connection_manager import ConnectionManager
-from arb_desktop.bridge.session import BridgeSession
 from arb_desktop.config import settings
+
+if False:  # TYPE_CHECKING-style import guard without circular import at runtime
+    from arb_desktop.bridge.connection_manager import ConnectionManager
+    from arb_desktop.bridge.session import BridgeSession
 
 
 class BetSlipScanner:
@@ -13,9 +15,9 @@ class BetSlipScanner:
 
     def __init__(
         self,
-        session: BridgeSession | None = None,
+        session: "BridgeSession | None" = None,
         *,
-        manager: ConnectionManager | None = None,
+        manager: "ConnectionManager | None" = None,
     ) -> None:
         self._session = session
         self._manager = manager or (session.manager if session else None)

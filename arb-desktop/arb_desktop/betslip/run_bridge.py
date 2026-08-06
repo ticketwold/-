@@ -64,6 +64,49 @@ def _print_match(bc: BetSlipReadResult, bti: BetSlipReadResult) -> None:
         print("\n[READY] dry-run — Bet 버튼 자동 클릭 없음", flush=True)
 
 
+def _print_debug(payload: dict) -> None:
+    block = str(payload.get("block") or payload.get("type") or "DEBUG").upper()
+    if block == "FRAME SCAN":
+        print("[FRAME SCAN]", flush=True)
+        print(f"site: {payload.get('site', '-')}", flush=True)
+        print(f"tab_id: {payload.get('tab_id', '-')}", flush=True)
+        print(f"frame_id: {payload.get('frame_id', '-')}", flush=True)
+        print(f"frame_url: {payload.get('frame_url', '-')}", flush=True)
+        print(f"selector: {payload.get('selector', '-')}", flush=True)
+        print(f"match_count: {payload.get('match_count', 0)}", flush=True)
+        print(f"sample_text: {payload.get('sample_text', '')}", flush=True)
+        return
+    if block == "FRAME DEBUG":
+        print("[FRAME DEBUG]", flush=True)
+        print(f"site: {payload.get('site', '-')}", flush=True)
+        print(f"frame_url: {payload.get('frame_url', '-')}", flush=True)
+        print(f"frame_depth: {payload.get('frame_depth', '-')}", flush=True)
+        print(f"document_ready: {payload.get('document_ready', '-')}", flush=True)
+        print(f"body_text_length: {payload.get('body_text_length', 0)}", flush=True)
+        diag = payload.get("diagnostics") or {}
+        if diag.get("betslip_selection_count") is not None:
+            print(f"betslip_selection_count: {diag['betslip_selection_count']}", flush=True)
+        if diag.get("slip_root_count") is not None:
+            print(f"slip_root_count: {diag['slip_root_count']}", flush=True)
+        return
+    if block == "SLIP ROOT FOUND":
+        print("[SLIP ROOT FOUND]", flush=True)
+        print(f"site: {payload.get('site', '-')}", flush=True)
+        print(f"frame_url: {payload.get('frame_url', '-')}", flush=True)
+        print(f"selector: {payload.get('selector', '-')}", flush=True)
+        print(f"text: {payload.get('text', '')}", flush=True)
+        return
+    if block == "SLIP ITEM":
+        print("[SLIP ITEM]", flush=True)
+        print(f"event: {payload.get('event', '')}", flush=True)
+        print(f"market: {payload.get('market', '')}", flush=True)
+        print(f"selection: {payload.get('selection', '')}", flush=True)
+        print(f"odds: {payload.get('odds', '')}", flush=True)
+        print(f"stake: {payload.get('stake', '')}", flush=True)
+        print(f"status: {payload.get('status', '')}", flush=True)
+        return
+
+
 async def run(*, once: bool = False, interval: float = 2.0) -> int:
     last_status: BridgeStatus | None = None
 
@@ -85,7 +128,11 @@ async def run(*, once: bool = False, interval: float = 2.0) -> int:
             if not bc.empty:
                 _print_match(bc, read)
 
-    runtime = create_bridge_runtime(on_status_change=on_status, on_slip_update=on_slip)
+    runtime = create_bridge_runtime(
+        on_status_change=on_status,
+        on_slip_update=on_slip,
+        on_debug=_print_debug,
+    )
     print_bridge_startup_info(runtime)
 
     await runtime.start()

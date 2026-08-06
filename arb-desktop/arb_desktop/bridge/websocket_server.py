@@ -96,6 +96,9 @@ class BridgeWebSocketServer:
         if msg_type == "slip_update":
             self._manager.apply_slip_update(SlipUpdateMessage.model_validate(data))
             return
+        if msg_type == "bridge_debug":
+            self._manager.apply_debug(data)
+            return
         if msg_type == "hello":
             await self.request_status()
 

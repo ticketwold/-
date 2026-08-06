@@ -23,6 +23,7 @@ class ConnectionManager:
     token: str
     on_status_change: Callable[[BridgeStatus], None] | None = None
     on_slip_update: Callable[[str, BetSlipReadResult], None] | None = None
+    on_debug: Callable[[dict[str, Any]], None] | None = None
     bridge_connected: bool = False
     bc_tab: str = "not_found"
     x10_tab: str = "not_found"
@@ -60,10 +61,16 @@ class ConnectionManager:
         self.x10_betslip = message.x10_betslip
         self._notify_status()
 
-    def apply_slip_update(self, message: SlipUpdateMessage) -> BetSlipReadResult:
+    def apply_slip_update(self, message: SlipUpdateMessage) -> BetSlipReadResult | None:
+        site_key = "bc" if message.site == "bc" else "x10"
         site = "bc" if message.site == "bc" else "bti"
         read = _result_to_read(site, message.result, frame_url=message.frame_url)
-        if message.site == "bc":
+
+        current = self.bc_slip if site_key == "bc" else self.x10_slip
+        if not _should_replace_slip(current, read):
+            return None
+
+        if site_key == "bc":
             self.bc_slip = read
             self.bc_tab = "found"
             self.bc_betslip = "active" if read.first and read.first.status.value == "ACTIVE" else "empty"
@@ -71,10 +78,15 @@ class ConnectionManager:
             self.x10_slip = read
             self.x10_tab = "found"
             self.x10_betslip = "active" if read.first and read.first.status.value == "ACTIVE" else "empty"
+
         self._notify_status()
         if self.on_slip_update:
             self.on_slip_update(site, read)
         return read
+
+    def apply_debug(self, payload: dict[str, Any]) -> None:
+        if self.on_debug:
+            self.on_debug(payload)
 
     def get_bc_read(self) -> BetSlipReadResult:
         return self.bc_slip or _empty_read("bc")
@@ -89,6 +101,29 @@ class ConnectionManager:
             and status.bc_tab == tab_state_from_raw("found")
             and status.x10_tab == tab_state_from_raw("found")
         )
+
+
+def _slip_score(read: BetSlipReadResult | None) -> int:
+    if not read:
+        return 0
+    if not read.empty and read.first:
+        score = 100
+        if read.first.odds:
+            score += 10
+        if read.first.event:
+            score += 5
+        if read.first.selection:
+            score += 5
+        return score
+    if read.reason == "no-slip-root":
+        return 1
+    if read.reason == "empty-slip":
+        return 2
+    return 3
+
+
+def _should_replace_slip(current: BetSlipReadResult | None, new: BetSlipReadResult) -> bool:
+    return _slip_score(new) >= _slip_score(current)
 
 
 def _empty_read(site: str) -> BetSlipReadResult:
