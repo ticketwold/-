@@ -11,6 +11,8 @@ from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.betslip.matcher import check_slip_pair, calculate_arbitrage, apply_network_verification
 from arb_desktop.betslip.models import BetSlipScanResult
 from arb_desktop.config import settings
+from arb_desktop.scanners.playwright.chrome_profile import ChromeProfileError
+from arb_desktop.scanners.playwright.cli_browser import add_browser_arguments, apply_browser_arguments
 from arb_desktop.scanners.playwright.session import BrowserSession
 
 
@@ -90,7 +92,12 @@ async def run_verify(
     session = BrowserSession()
 
     print("=== BetSlip 검증 도구 (드라이런) ===", flush=True)
-    print(f"Chrome 프로필: {settings.chrome_profile_dir}", flush=True)
+    print(f"profile_mode={settings.chrome_profile_mode}", flush=True)
+    if settings.uses_existing_chrome_profile:
+        print(f"Chrome User Data: {settings.chrome_user_data_dir}", flush=True)
+        print(f"Chrome profile: {settings.chrome_profile_directory}", flush=True)
+    else:
+        print(f"전용 프로필: {settings.chrome_profile_dir}", flush=True)
     print("1. 정식 Google Chrome에서 BC.Game / x10x10s 탭이 열립니다.", flush=True)
     print("2. 필요 시 각 사이트에 직접 로그인하세요 (세션은 프로필에 보존).", flush=True)
     print("3. 양쪽 사이트에 각각 항목 1개를 배팅카트에 담으세요.", flush=True)
@@ -100,7 +107,11 @@ async def run_verify(
     print(f"   x10x10s 카트 대기: 최대 {cart_wait_sec:.0f}s", flush=True)
     print("", flush=True)
 
-    await session.start()
+    try:
+        await session.start()
+    except ChromeProfileError as exc:
+        print(f"[ERROR] {exc}", flush=True)
+        return 1
 
     try:
         await wait_for_enter(">>> Enter를 눌러 배팅카트 스캔... ")
@@ -138,6 +149,7 @@ async def run_verify(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="BC.Game / x10x10s BetSlip 검증 (드라이런)")
+    add_browser_arguments(parser)
     parser.add_argument("--keep-open", type=int, default=30, help="종료 전 브라우저 유지(초)")
     parser.add_argument("--no-keep-open", action="store_true", help="검증 후 즉시 종료")
     parser.add_argument("--watch", action="store_true", help="스캔 후 변경 감지 모드")
@@ -146,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cart-wait", type=float, default=30.0, help="x10x10s 카트 대기(초)")
     args = parser.parse_args(argv)
 
+    apply_browser_arguments(args)
     keep_open = 0 if args.no_keep_open else args.keep_open
     return asyncio.run(
         run_verify(

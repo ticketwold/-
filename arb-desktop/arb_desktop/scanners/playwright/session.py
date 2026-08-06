@@ -9,6 +9,11 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
 from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
+from arb_desktop.scanners.playwright.chrome_profile import (
+    launch_args_for_mode,
+    resolve_chrome_user_data_dir,
+    validate_existing_profile_launch,
+)
 
 try:
     from arb_desktop.betslip.dom_runtime import setup_monitors
@@ -28,18 +33,30 @@ class BrowserSession:
         self.bti_origin: str | None = None
         self.bti_rest = BtiRestScanner()
         self.sptpub_client = SptpubV4Client()
-        self.profile_dir: Path = settings.chrome_profile_dir
+        self.profile_mode: str = settings.chrome_profile_mode
+        self.user_data_path: Path = self._resolve_user_data_path()
+        self.profile_directory: str = settings.chrome_profile_directory
+
+    def _resolve_user_data_path(self) -> Path:
+        if settings.uses_existing_chrome_profile:
+            return resolve_chrome_user_data_dir(settings.chrome_user_data_dir)
+        return settings.chrome_profile_dir
 
     async def start(self) -> None:
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
-        self._pw = await async_playwright().start()
+        if settings.uses_existing_chrome_profile:
+            validate_existing_profile_launch(self.user_data_path, self.profile_directory)
+        else:
+            self.user_data_path.mkdir(parents=True, exist_ok=True)
 
-        # launch_persistent_context: 전용 프로필에 쿠키·세션 자동 보존 (storage.json 불필요)
+        launch_args = launch_args_for_mode(self.profile_mode, self.profile_directory)
+
+        self._pw = await async_playwright().start()
         self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self.profile_dir),
+            user_data_dir=str(self.user_data_path),
             channel=settings.chrome_channel,
             headless=settings.headless,
             viewport={"width": 1400, "height": 900},
+            args=launch_args,
         )
         self._browser = None
 
@@ -88,9 +105,11 @@ class BrowserSession:
             self.bti_rest.set_session(origin, jar)
 
     async def save_state(self) -> None:
-        """persistent 프로필 백업용 storage export (선택)."""
+        """dedicated 모드만 storage 백업 — existing 모드는 persistent 프로필 자체에 저장."""
+        if settings.uses_existing_chrome_profile:
+            return
         if self._context and settings.persist_sessions:
-            backup = self.profile_dir / "storage-backup.json"
+            backup = self.user_data_path / "storage-backup.json"
             await self._context.storage_state(path=str(backup))
 
     async def stop(self) -> None:

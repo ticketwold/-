@@ -1,6 +1,10 @@
 from pathlib import Path
+from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from arb_desktop.scanners.playwright.chrome_profile import default_chrome_user_data_dir
 
 
 class Settings(BaseSettings):
@@ -28,16 +32,23 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser — 설치된 정식 Google Chrome + 전용 persistent 프로필
+    # Browser — 설치된 정식 Google Chrome + persistent 프로필
     headless: bool = False
     chrome_channel: str = "chrome"
+    chrome_profile_mode: Literal["dedicated", "existing"] = "dedicated"
+    chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
+    chrome_profile_directory: str = "Default"
     chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
     persist_sessions: bool = True
 
     @property
     def user_data_dir(self) -> Path:
-        """하위 호환 — chrome_profile_dir와 동일."""
+        """하위 호환 — dedicated 모드 전용 프로필 경로."""
         return self.chrome_profile_dir
+
+    @property
+    def uses_existing_chrome_profile(self) -> bool:
+        return self.chrome_profile_mode == "existing"
 
     # BTI API
     bti_market_types: str = "ML0,HC0,OU0"

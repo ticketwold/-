@@ -35,6 +35,7 @@ class AutoBetPipeline:
         self._scanner = BetSlipScanner(session)
         self._locator_cache = StableLocatorCache(max_retries=settings.auto_retry_max)
         self._lock: BetSlipLock | None = None
+        self._debug = False
 
     async def _overlay(self, stage: ExecutionStage, scan: BetSlipScanResult | None, lock_ok: str = "OK") -> None:
         state = OverlayState(stage=stage.value, lock_ok=lock_ok, dom_ok="OK", network_ok="OK")
@@ -57,7 +58,7 @@ class AutoBetPipeline:
     async def _scan(self) -> tuple[BetSlipScanResult, float]:
         t0 = perf_counter()
         await setup_monitors(self._session.bc_page, self._session.bti_page)
-        scan = await self._scanner.scan(debug=False, cart_wait_sec=0)
+        scan = await self._scanner.scan(debug=self._debug, cart_wait_sec=0)
         ms = (perf_counter() - t0) * 1000
         return scan, ms
 
@@ -78,7 +79,8 @@ class AutoBetPipeline:
             arb = calculate_arbitrage(bc.first, bti.first)
         return BetSlipScanResult(bc=bc, bti=bti, match=match, arbitrage=arb)
 
-    async def run(self, *, enable_input: bool = True) -> PipelineResult:
+    async def run(self, *, enable_input: bool = True, debug: bool = False) -> PipelineResult:
+        self._debug = debug
         total_start = perf_counter()
         latency = StageLatency()
 

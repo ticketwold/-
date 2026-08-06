@@ -7,6 +7,8 @@ import sys
 from arb_desktop.betslip.auto_pipeline import AutoBetPipeline
 from arb_desktop.betslip.execution_models import ExecutionStage
 from arb_desktop.config import settings
+from arb_desktop.scanners.playwright.chrome_profile import ChromeProfileError
+from arb_desktop.scanners.playwright.cli_browser import add_browser_arguments, apply_browser_arguments
 from arb_desktop.scanners.playwright.session import BrowserSession
 
 
@@ -32,26 +34,43 @@ def _print_result(result) -> None:
         print(f"  {line}", flush=True)
 
 
-async def run(*, input_stakes: bool) -> int:
+def _print_browser_info() -> None:
+    print("=== Auto BetSlip Pipeline v1.0.5 ===", flush=True)
+    print(f"dry_run={settings.dry_run} live_execution={settings.live_execution_enabled}", flush=True)
+    print(f"profile_mode={settings.chrome_profile_mode}", flush=True)
+    if settings.uses_existing_chrome_profile:
+        print(f"Chrome User Data: {settings.chrome_user_data_dir}", flush=True)
+        print(f"Chrome profile: {settings.chrome_profile_directory}", flush=True)
+    else:
+        print(f"전용 프로필: {settings.chrome_profile_dir}", flush=True)
+    print("", flush=True)
+    if settings.uses_existing_chrome_profile:
+        print("1. 기존 Chrome을 모두 종료한 뒤 실행하세요.", flush=True)
+        print("2. 정식 Google Chrome이 기존 프로필로 열립니다 (BC.Game / x10x10s 탭).", flush=True)
+    else:
+        print("1. 정식 Google Chrome이 열립니다 (BC.Game / x10x10s 탭).", flush=True)
+        print("2. 첫 실행 시 각 사이트에 직접 로그인하세요 (자동 로그인 없음).", flush=True)
+    print("3. 양쪽 배팅카트에 항목을 담은 뒤 Enter → SCAN~READY 파이프라인 실행", flush=True)
+    print("4. 기본 READY에서 종료 (Bet 버튼 자동 클릭 없음)", flush=True)
+    print("", flush=True)
+
+
+async def run(*, input_stakes: bool, debug: bool) -> int:
     session = BrowserSession()
     pipeline = AutoBetPipeline(session)
 
-    print("=== Auto BetSlip Pipeline v1.0.4 ===", flush=True)
-    print(f"dry_run={settings.dry_run} live_execution={settings.live_execution_enabled}", flush=True)
-    print(f"Chrome 프로필: {settings.chrome_profile_dir}", flush=True)
-    print("", flush=True)
-    print("1. 정식 Google Chrome이 열립니다 (BC.Game / x10x10s 탭).", flush=True)
-    print("2. 첫 실행 시 각 사이트에 직접 로그인하세요 (자동 로그인 없음).", flush=True)
-    print("3. 로그인·세션은 전용 프로필에 저장되어 다음 실행부터 재사용됩니다.", flush=True)
-    print("4. 양쪽 배팅카트에 항목을 담은 뒤 Enter → SCAN~READY 파이프라인 실행", flush=True)
-    print("5. 기본 READY에서 종료 (Bet 버튼 자동 클릭 없음)", flush=True)
-    print("", flush=True)
+    _print_browser_info()
 
-    await session.start()
+    try:
+        await session.start()
+    except ChromeProfileError as exc:
+        print(f"[ERROR] {exc}", flush=True)
+        return 1
+
     result = None
     try:
         await wait_for_enter(">>> 로그인·카트 준비 완료 후 Enter로 파이프라인 시작... ")
-        result = await pipeline.run(enable_input=input_stakes and not settings.dry_run)
+        result = await pipeline.run(enable_input=input_stakes and not settings.dry_run, debug=debug)
         _print_result(result)
 
         if result.stage == ExecutionStage.READY and settings.live_execution_enabled:
@@ -64,14 +83,17 @@ async def run(*, input_stakes: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="BetSlip 자동배팅 파이프라인 v1.0.4")
+    parser = argparse.ArgumentParser(description="BetSlip 자동배팅 파이프라인 v1.0.5")
+    add_browser_arguments(parser)
     parser.add_argument("--input", action="store_true", help="드라이런 해제 시 stake 자동 입력")
     parser.add_argument("--live", action="store_true", help="Live execution 플래그 (Bet 클릭은 여전히 수동)")
+    parser.add_argument("--debug", action="store_true", help="BetSlip 스캔 디버그 로그")
     args = parser.parse_args(argv)
 
+    apply_browser_arguments(args)
     if args.live:
         settings.live_execution_enabled = True
-    return asyncio.run(run(input_stakes=args.input))
+    return asyncio.run(run(input_stakes=args.input, debug=args.debug))
 
 
 if __name__ == "__main__":
