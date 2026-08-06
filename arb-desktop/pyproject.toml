@@ -23,6 +23,7 @@ dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.5"]
 
 [project.scripts]
 arb-desktop = "arb_desktop.main:main"
+arb-verify-bc-live = "arb_desktop.validation.verify_bc_live:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
