@@ -335,6 +335,9 @@
   function buildX10DebugSnapshot(frameDepth) {
     const roots = findX10SlipRoots();
     const selectorHits = scanX10DebugSelectors();
+    const bestRoot = roots[0] || null;
+    const stake = bestRoot ? readX10Stake(bestRoot) : null;
+    const oddsProbe = bestRoot ? extractX10OddsFromRoot(bestRoot, stake) : { odds: null, candidates: [] };
     return {
       site: "x10",
       frame_url: location.href,
@@ -353,8 +356,12 @@
       slip_inner_text: getX10SlipInnerText(roots),
       selector_hits: selectorHits,
       selector_scans: selectorHits,
+      odds_candidates: oddsProbe.candidates,
+      extracted_odds: oddsProbe.odds,
     };
   }
+
+  function findX10SlipRoots() {
     const roots = [];
     const seen = new Set();
     for (const sel of X10_SELECTOR_CANDIDATES) {
@@ -374,27 +381,6 @@
     return roots;
   }
 
-  function getX10SlipCards(root) {
-    const cards = [];
-    const seen = new Set();
-    for (const sel of [
-      '[class*="betslip_fe_BetSecondary_bet"]',
-      '[class*="BetSecondary_bet"]',
-      '[class*="betInformation"]',
-    ]) {
-      for (const el of root.querySelectorAll(sel)) {
-        if (seen.has(el) || !visible(el)) continue;
-        const cn = String(el.className || "");
-        if (/wrapper|counter|badge|PlaceBet|Tab/i.test(cn)) continue;
-        const txt = text(el);
-        if (txt.length < 8 || txt.length > 900) continue;
-        seen.add(el);
-        cards.push(el);
-      }
-    }
-    return cards;
-  }
-
   function readX10Stake(root) {
     const input = root.querySelector(
       'input#counter, input[class*="CounterSecondary_input"], input[class*="counter__input"], input[placeholder*="베팅"], input'
@@ -405,22 +391,69 @@
     return Number.isFinite(v) && v > 0 ? v : null;
   }
 
-  function readX10Odds(card) {
-    if (SUSPENDED_RE.test(text(card))) return null;
-    for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="price"], [class*="Price"]')) {
-      const n = parseOdds(sp.textContent);
-      if (n) return n;
+  const X10_CHIP_AMOUNTS = new Set([10, 20, 50, 100, 300, 1000, 10000, 100000, 500000, 0.2]);
+
+  function x10ExcludeReason(val, leafText, context, stake) {
+    if (!Number.isFinite(val)) return "not-a-number";
+    if (val <= 1.01 || val >= 100) return "out-of-range";
+    if (stake != null && Math.abs(val - stake) < 0.001) return "stake-input";
+    if (X10_CHIP_AMOUNTS.has(val)) return "chip-button";
+    if (Number.isInteger(val) && val >= 1000) return "large-integer";
+    const blob = `${leafText} ${context}`;
+    if (/당첨\s*예상금액|예상\s*금액|expected\s*payout/i.test(blob)) return "payout-context";
+    if (/잔액|balance/i.test(blob)) return "balance-context";
+    if (/\+\s*[\d,]+/.test(leafText)) return "chip-button";
+    if (/^\d{1,2}$/.test(leafText)) return "score-or-inning";
+    if (!/\./.test(leafText) && val < 10) return "small-integer";
+    return "";
+  }
+
+  function collectX10LeafTexts(root) {
+    const leaves = [];
+    walk(root, (node) => {
+      if (node.nodeType !== 1 || !visible(node)) return;
+      const elementChildren = [...node.children].filter((ch) => ch.nodeType === 1);
+      if (elementChildren.length > 0) return;
+      const raw = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!raw || raw.length > 32) return;
+      leaves.push({ node, text: raw });
+    }, 0);
+    return leaves;
+  }
+
+  function extractX10OddsFromRoot(root, stake) {
+    const candidates = [];
+    const context = text(root);
+    if (SUSPENDED_RE.test(context)) {
+      return { odds: null, candidates: [{ value: null, text: "", excluded: true, exclude_reason: "suspended", selected: false }] };
     }
-    const m = text(card).match(/@\s*(\d+(?:\.\d{1,4})?)/);
-    if (m) return parseOdds(m[1]);
-    for (const sp of card.querySelectorAll("span, div, b, strong")) {
-      const t = (sp.textContent || "").trim();
-      if (/^\d+\.\d{2,3}$/.test(t)) {
-        const n = parseOdds(t);
-        if (n) return n;
+
+    for (const leaf of collectX10LeafTexts(root)) {
+      const normalized = leaf.text.replace(/,/g, "");
+      const m = normalized.match(/^@?\s*(\d+(?:\.\d{1,4})?)$/);
+      if (!m) continue;
+      const val = parseFloat(m[1]);
+      const parentText = text(leaf.node.parentElement || root);
+      const reason = x10ExcludeReason(val, leaf.text, `${parentText} ${context}`, stake);
+      candidates.push({
+        value: val,
+        text: leaf.text,
+        excluded: Boolean(reason),
+        exclude_reason: reason || "",
+        selected: false,
+      });
+    }
+
+    let odds = null;
+    for (let i = candidates.length - 1; i >= 0; i -= 1) {
+      if (!candidates[i].excluded) {
+        odds = candidates[i].value;
+        candidates[i].selected = true;
+        break;
       }
     }
-    return null;
+
+    return { odds, candidates };
   }
 
   function readX10Slip() {
@@ -441,40 +474,67 @@
     }
 
     for (const root of roots) {
-      const cards = getX10SlipCards(root);
-      if (!cards.length) continue;
-      const card = cards[cards.length - 1];
-      const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
-      const selection = titleEls[0] ? titleEls[0].textContent.trim() : "";
-      const market = titleEls[1] ? titleEls[1].textContent.trim() : "";
-      const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
-      const event = eventEl ? eventEl.textContent.trim() : "";
-      const suspended = SUSPENDED_RE.test(text(card));
-      const odds = suspended ? null : readX10Odds(card);
-      if (!event && !selection) continue;
+      const rootText = text(root);
+      const suspended = SUSPENDED_RE.test(rootText);
+      const stake = readX10Stake(root);
+      const { odds, candidates } = extractX10OddsFromRoot(root, stake);
 
-      return {
-        ok: true,
-        empty: false,
-        items: [
-          {
-            event,
-            market,
-            selection,
-            odds,
-            status: suspended ? "suspended" : odds ? "active" : "odds_missing",
-            stake: readX10Stake(root),
-            container_selector: selectorHint(card),
-          },
-        ],
-        source: "dom",
-        frame_url: location.href,
-        container_selector: selectorHint(root),
-        slip_root_found: "YES",
-        slip_inner_text: slipInnerText,
-        selector_hits: selectorHits,
-      };
+      if (suspended) {
+        return {
+          ok: true,
+          empty: false,
+          items: [
+            {
+              event: "",
+              market: "",
+              selection: "",
+              odds: null,
+              status: "suspended",
+              stake,
+              container_selector: selectorHint(root),
+            },
+          ],
+          source: "dom",
+          frame_url: location.href,
+          container_selector: selectorHint(root),
+          slip_root_found: "YES",
+          slip_inner_text: slipInnerText,
+          selector_hits: selectorHits,
+          odds_candidates: candidates,
+          extracted_odds: null,
+        };
+      }
+
+      if (odds != null) {
+        return {
+          ok: true,
+          empty: false,
+          items: [
+            {
+              event: "",
+              market: "",
+              selection: "",
+              odds,
+              status: "active",
+              stake,
+              container_selector: selectorHint(root),
+            },
+          ],
+          source: "dom",
+          frame_url: location.href,
+          container_selector: selectorHint(root),
+          slip_root_found: "YES",
+          slip_inner_text: slipInnerText,
+          selector_hits: selectorHits,
+          odds_candidates: candidates,
+          extracted_odds: odds,
+        };
+      }
     }
+
+    const lastRoot = roots[0];
+    const lastStake = lastRoot ? readX10Stake(lastRoot) : null;
+    const lastProbe = lastRoot ? extractX10OddsFromRoot(lastRoot, lastStake) : { odds: null, candidates: [] };
 
     return {
       ok: true,
@@ -482,10 +542,12 @@
       items: [],
       reason: "empty-slip",
       frame_url: location.href,
-      container_selector: selectorHint(roots[0]),
+      container_selector: lastRoot ? selectorHint(lastRoot) : "",
       slip_root_found: "YES",
       slip_inner_text: slipInnerText,
       selector_hits: selectorHits,
+      odds_candidates: lastProbe.candidates,
+      extracted_odds: null,
     };
   }
 

@@ -112,7 +112,9 @@
           ...meta(),
           ...snapshot,
           reason: result?.reason || "",
-          slip_root_found: snapshot.slip_root_found || (result?.slip_root_found || "NO"),
+          slip_root_found: snapshot.slip_root_found || result?.slip_root_found || "NO",
+          odds_candidates: result?.odds_candidates || snapshot.odds_candidates || [],
+          extracted_odds: result?.extracted_odds ?? snapshot.extracted_odds ?? null,
         });
         sendDebug("SLIP ROOT FOUND", {
           ...meta(),

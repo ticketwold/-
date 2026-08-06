@@ -32,6 +32,7 @@ class X10DebugPanel(QWidget):
         self.lbl_body_text_length = QLabel("—")
         self.lbl_reason = QLabel("—")
         self.lbl_slip_root = QLabel("—")
+        self.lbl_extracted_odds = QLabel("—")
         for lbl in (
             self.lbl_frame_url,
             self.lbl_document_location,
@@ -40,6 +41,7 @@ class X10DebugPanel(QWidget):
             self.lbl_body_text_length,
             self.lbl_reason,
             self.lbl_slip_root,
+            self.lbl_extracted_odds,
         ):
             lbl.setFont(self._mono)
             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -51,6 +53,17 @@ class X10DebugPanel(QWidget):
         meta_form.addRow("body text length", self.lbl_body_text_length)
         meta_form.addRow("slip reason", self.lbl_reason)
         meta_form.addRow("SLIP ROOT FOUND", self.lbl_slip_root)
+        meta_form.addRow("extracted odds", self.lbl_extracted_odds)
+
+        odds_box = QGroupBox("배당 후보 / 제외 이유")
+        odds_layout = QVBoxLayout(odds_box)
+        self.tbl_odds = QTableWidget(0, 4)
+        self.tbl_odds.setHorizontalHeaderLabels(["text", "value", "excluded", "exclude_reason"])
+        self.tbl_odds.horizontalHeader().setStretchLastSection(True)
+        self.tbl_odds.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_odds.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tbl_odds.setFont(self._mono)
+        odds_layout.addWidget(self.tbl_odds)
 
         selector_box = QGroupBox("selector별 match_count")
         selector_layout = QVBoxLayout(selector_box)
@@ -72,6 +85,7 @@ class X10DebugPanel(QWidget):
 
         root = QVBoxLayout(self)
         root.addWidget(meta_box)
+        root.addWidget(odds_box)
         root.addWidget(selector_box, 1)
         root.addWidget(text_box, 1)
 
@@ -94,8 +108,12 @@ class X10DebugPanel(QWidget):
         else:
             self.lbl_slip_root.setStyleSheet("")
 
+        extracted = payload.get("extracted_odds")
+        self.lbl_extracted_odds.setText("—" if extracted is None else str(extracted))
+
         hits = payload.get("selector_hits") or payload.get("selector_scans") or []
         self._fill_selector_table(hits)
+        self._fill_odds_table(payload.get("odds_candidates") or [])
 
         inner = str(payload.get("slip_inner_text") or payload.get("text") or "")
         self.txt_slip_inner.setPlainText(inner[:1000])
@@ -103,9 +121,8 @@ class X10DebugPanel(QWidget):
     def update_from_slip_raw(self, raw: dict[str, Any] | None) -> None:
         if not raw:
             return
-        merged = dict(raw)
-        if "selector_hits" in merged or "slip_inner_text" in merged:
-            self.update_from_payload(merged)
+        if any(k in raw for k in ("selector_hits", "slip_inner_text", "odds_candidates", "extracted_odds")):
+            self.update_from_payload(raw)
 
     def _fill_selector_table(self, hits: list[dict[str, Any]]) -> None:
         self.tbl_selectors.setRowCount(len(hits))
@@ -118,3 +135,21 @@ class X10DebugPanel(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.tbl_selectors.setItem(row, col, item)
         self.tbl_selectors.resizeColumnsToContents()
+
+    def _fill_odds_table(self, candidates: list[dict[str, Any]]) -> None:
+        self.tbl_odds.setRowCount(len(candidates))
+        for row, cand in enumerate(candidates):
+            selected = " *" if cand.get("selected") else ""
+            values = (
+                str(cand.get("text") or "") + selected,
+                str(cand.get("value", "")),
+                str(cand.get("excluded", "")),
+                str(cand.get("exclude_reason") or ""),
+            )
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if cand.get("selected"):
+                    item.setBackground(Qt.GlobalColor.darkGreen)
+                self.tbl_odds.setItem(row, col, item)
+        self.tbl_odds.resizeColumnsToContents()
