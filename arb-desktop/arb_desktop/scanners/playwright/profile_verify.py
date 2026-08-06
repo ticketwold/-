@@ -9,37 +9,14 @@ from playwright.async_api import BrowserContext, Page
 
 from arb_desktop.scanners.playwright.chrome_profile import ChromeProfileError
 
-AUTOMATION_PROFILE_SUBDIR = "Default"
+DEFAULT_PROFILE_SUBDIR = "Default"
 
 
-def resolve_automation_user_data_dir(path: Path) -> Path:
-    return Path(path).expanduser().resolve()
+def expected_profile_path(user_data_dir: Path, profile_subdir: str = DEFAULT_PROFILE_SUBDIR) -> Path:
+    return Path(user_data_dir).expanduser().resolve() / profile_subdir
 
 
-def expected_profile_path(user_data_dir: Path, profile_subdir: str = AUTOMATION_PROFILE_SUBDIR) -> Path:
-    return resolve_automation_user_data_dir(user_data_dir) / profile_subdir
-
-
-def forbid_source_user_data_for_launch(
-    automation_user_data_dir: Path,
-    source_user_data_dir: Path,
-) -> None:
-    automation = resolve_automation_user_data_dir(automation_user_data_dir)
-    source = resolve_automation_user_data_dir(source_user_data_dir)
-    if automation == source:
-        raise ChromeProfileError(
-            "자동화 user_data_dir가 원본 Chrome User Data와 같습니다. launch가 거부되었습니다."
-        )
-    try:
-        automation.relative_to(source)
-        raise ChromeProfileError(
-            "자동화 user_data_dir가 원본 Chrome User Data 하위 경로입니다. launch가 거부되었습니다."
-        )
-    except ValueError:
-        pass
-
-
-def launch_args_for_automation(profile_subdir: str = AUTOMATION_PROFILE_SUBDIR) -> list[str]:
+def launch_args_for_profile(profile_subdir: str = DEFAULT_PROFILE_SUBDIR) -> list[str]:
     return [
         f"--profile-directory={profile_subdir}",
         "--no-first-run",
@@ -81,8 +58,8 @@ async def read_profile_path_from_version_page(page: Page) -> str:
     raise ChromeProfileError("chrome://version에서 Profile Path를 읽지 못했습니다.")
 
 
-def read_profile_path_from_processes(user_data_dir: Path, profile_subdir: str = AUTOMATION_PROFILE_SUBDIR) -> str:
-    resolved_user_data = resolve_automation_user_data_dir(user_data_dir)
+def read_profile_path_from_processes(user_data_dir: Path, profile_subdir: str = DEFAULT_PROFILE_SUBDIR) -> str:
+    resolved_user_data = Path(user_data_dir).expanduser().resolve()
     command_lines = _collect_chrome_command_lines()
     for cmd in command_lines:
         user_data_match = re.search(r'--user-data-dir=(?:"([^"]+)"|([^\s"]+))', cmd, re.I)
@@ -141,7 +118,7 @@ async def detect_actual_profile_path(
     context: BrowserContext,
     *,
     user_data_dir: Path,
-    profile_subdir: str = AUTOMATION_PROFILE_SUBDIR,
+    profile_subdir: str = DEFAULT_PROFILE_SUBDIR,
 ) -> str:
     page = context.pages[0] if context.pages else await context.new_page()
     try:
@@ -171,4 +148,4 @@ def verify_profile_path(
     print("[PROFILE ERROR]", flush=True)
     print(f"expected: {expected}", flush=True)
     print(f"actual: {actual or '-'}", flush=True)
-    raise ChromeProfileError("자동화 프로필 경로 검증 실패")
+    raise ChromeProfileError("프로필 경로 검증 실패")

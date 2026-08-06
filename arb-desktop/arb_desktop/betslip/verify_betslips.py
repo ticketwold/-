@@ -91,8 +91,9 @@ async def run_verify(
     session = BrowserSession()
 
     print("=== BetSlip 검증 도구 (드라이런) ===", flush=True)
-    print(f"Automation profile: {settings.chrome_automation_profile_dir}", flush=True)
-    print("1. 자동화 전용 Chrome에서 BC.Game / x10x10s 탭이 열립니다.", flush=True)
+    print(f"User Data: {settings.chrome_user_data_dir}", flush=True)
+    print(f"Profile: {settings.chrome_profile_directory}", flush=True)
+    print("1. Chrome을 완전히 종료한 뒤 실행하세요.", flush=True)
     print("2. 필요 시 각 사이트에 직접 로그인하세요 (세션은 프로필에 보존).", flush=True)
     print("3. 양쪽 사이트에 각각 항목 1개를 배팅카트에 담으세요.", flush=True)
     print("4. Enter를 누르면 배팅카트만 스캔합니다.", flush=True)

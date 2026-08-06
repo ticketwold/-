@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from arb_desktop.scanners.playwright.chrome_profile import is_chrome_running
+from arb_desktop.scanners.playwright.chrome_profile import (
+    default_chrome_user_data_dir,
+    is_chrome_running,
+)
 
 
 def test_is_chrome_running_windows_true():
@@ -16,7 +17,9 @@ def test_is_chrome_running_windows_true():
         assert is_chrome_running() is True
 
 
-def test_default_automation_profile_dir():
-    from arb_desktop.scanners.playwright.chrome_profile import default_automation_profile_dir
-
-    assert default_automation_profile_dir() == Path.home() / "arb-chrome-profile"
+def test_default_chrome_user_data_dir_windows():
+    with patch("platform.system", return_value="Windows"), patch(
+        "pathlib.Path.home", return_value=Path(r"C:\Users\user")
+    ):
+        path = default_chrome_user_data_dir()
+        assert str(path).replace("\\", "/").endswith("user/AppData/Local/Google/Chrome/User Data")
