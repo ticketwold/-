@@ -84,19 +84,26 @@ function maybeForwardSlip(site, result, meta) {
 }
 
 function maybeForwardDebug(message) {
-  const parts = [
-    message.block || "",
-    message.site || "",
-    message.frame_url || "",
-    message.selector || "",
-    String(message.match_count ?? ""),
-    message.sample_text || "",
-    message.event || "",
-    message.selection || "",
-    String(message.odds ?? ""),
-    message.reason || "",
-  ];
-  const key = parts.join("|");
+  let key;
+  if (message.block === "X10 DEBUG") {
+    const bucket = Math.floor(Date.now() / 1500);
+    key = ["X10 DEBUG", message.frame_url || "", String(message.frame_depth ?? ""), bucket].join("|");
+  } else {
+    const parts = [
+      message.block || "",
+      message.site || "",
+      message.frame_url || "",
+      message.selector || "",
+      String(message.match_count ?? ""),
+      message.sample_text || "",
+      message.event || "",
+      message.selection || "",
+      String(message.odds ?? ""),
+      message.reason || "",
+      message.found || "",
+    ];
+    key = parts.join("|");
+  }
   if (lastDebugKeys.has(key)) return;
   lastDebugKeys.add(key);
   if (lastDebugKeys.size > 5000) {

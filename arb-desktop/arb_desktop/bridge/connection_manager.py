@@ -31,6 +31,7 @@ class ConnectionManager:
     x10_betslip: str = "empty"
     bc_slip: BetSlipReadResult | None = None
     x10_slip: BetSlipReadResult | None = None
+    last_x10_debug: dict[str, Any] | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def status(self) -> BridgeStatus:
@@ -85,8 +86,13 @@ class ConnectionManager:
         return read
 
     def apply_debug(self, payload: dict[str, Any]) -> None:
+        if str(payload.get("site") or "").lower() in {"x10", "bti"}:
+            self.last_x10_debug = payload
         if self.on_debug:
             self.on_debug(payload)
+
+    def get_x10_debug(self) -> dict[str, Any] | None:
+        return self.last_x10_debug
 
     def get_bc_read(self) -> BetSlipReadResult:
         return self.bc_slip or _empty_read("bc")

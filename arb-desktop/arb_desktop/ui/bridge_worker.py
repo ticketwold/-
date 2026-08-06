@@ -18,6 +18,7 @@ class BridgeWorker(QObject):
     bridge_status = pyqtSignal(object)
     bridge_token = pyqtSignal(str)
     slip_updated = pyqtSignal(str, object)
+    x10_debug = pyqtSignal(object)
     watch_state = pyqtSignal(str, object, str)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
@@ -95,14 +96,52 @@ class BridgeWorker(QObject):
                 "slip updated",
                 f"{label}|{status}|{odds}|slip updated",
             )
+            if site == "bti" and read.raw:
+                reason = read.reason or read.raw.get("reason") or ""
+                found = read.raw.get("slip_root_found") or "?"
+                inner = str(read.raw.get("slip_inner_text") or "")[:1000]
+                hits = read.raw.get("selector_hits") or []
+                hit_summary = ", ".join(
+                    f"{h.get('selector')}={h.get('match_count', 0)}" for h in hits[:6]
+                )
+                self.log_message.emit(
+                    "X10DBG",
+                    reason or status,
+                    found,
+                    str(len(hits)),
+                    inner[:120] or hit_summary,
+                    f"X10DBG|{reason}|{found}|{hit_summary}",
+                )
+                self.x10_debug.emit(read.raw)
             self.slip_updated.emit(site, read)
             if self._watching:
                 asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
+
+        def on_debug(payload: dict[str, Any]) -> None:
+            site = str(payload.get("site") or "").lower()
+            block = str(payload.get("block") or "").upper()
+            if site != "x10" and site != "bti":
+                return
+            if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN"}:
+                self.x10_debug.emit(payload)
+            if block == "X10 DEBUG":
+                inner = str(payload.get("slip_inner_text") or "")[:1000]
+                found = payload.get("slip_root_found") or payload.get("found") or "?"
+                reason = payload.get("reason") or ""
+                self.log_message.emit(
+                    "X10DBG",
+                    reason,
+                    str(found),
+                    str(payload.get("body_text_length", "")),
+                    inner[:120],
+                    f"X10DBG|{reason}|{found}|{payload.get('frame_url', '')}",
+                )
 
         self._runtime = create_bridge_runtime(
             token=self._app_settings.bridge_token,
             on_status_change=on_status,
             on_slip_update=on_slip,
+            on_debug=on_debug,
         )
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()

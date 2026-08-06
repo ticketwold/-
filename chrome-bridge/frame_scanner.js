@@ -33,6 +33,23 @@
     '[class*="betInformation"]',
   ];
 
+  const X10_DEBUG_SELECTORS = [
+    ".bet-slip-item",
+    ".bet-slip",
+    ".bet-slip-container",
+    '[data-editor-id]',
+    '[class*="slip" i]',
+    '[class*="coupon" i]',
+    '[class*="betslip" i]',
+    '[class*="bet-slip" i]',
+    '[class*="betcart" i]',
+    '[class*="bet-cart" i]',
+    '[class*="ticket" i]',
+    '[class*="selection" i]',
+    '[class*="betInformation"]',
+    '[class*="betslip_fe"]',
+  ];
+
   function visible(el) {
     if (!el) return false;
     const r = el.getBoundingClientRect?.();
@@ -299,7 +316,45 @@
     };
   }
 
-  function findX10SlipRoots() {
+  function getX10SlipInnerText(roots) {
+    const root = roots?.[0];
+    if (!root) {
+      try {
+        return (document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 1000);
+      } catch (_err) {
+        return "";
+      }
+    }
+    return text(root).slice(0, 1000);
+  }
+
+  function scanX10DebugSelectors() {
+    return scanSelectors(X10_DEBUG_SELECTORS);
+  }
+
+  function buildX10DebugSnapshot(frameDepth) {
+    const roots = findX10SlipRoots();
+    const selectorHits = scanX10DebugSelectors();
+    return {
+      site: "x10",
+      frame_url: location.href,
+      document_location: location.href,
+      frame_depth: frameDepth,
+      document_ready: document.readyState || "unknown",
+      body_text_length: (() => {
+        try {
+          return (document.body?.innerText || document.body?.textContent || "").length;
+        } catch (_err) {
+          return 0;
+        }
+      })(),
+      slip_root_found: roots.length ? "YES" : "NO",
+      slip_root_count: roots.length,
+      slip_inner_text: getX10SlipInnerText(roots),
+      selector_hits: selectorHits,
+      selector_scans: selectorHits,
+    };
+  }
     const roots = [];
     const seen = new Set();
     for (const sel of X10_SELECTOR_CANDIDATES) {
@@ -370,6 +425,8 @@
 
   function readX10Slip() {
     const roots = findX10SlipRoots();
+    const selectorHits = scanX10DebugSelectors();
+    const slipInnerText = getX10SlipInnerText(roots);
     if (!roots.length) {
       return {
         ok: false,
@@ -377,7 +434,9 @@
         items: [],
         reason: "no-slip-root",
         frame_url: location.href,
-        selector_hits: scanSelectors(X10_SELECTOR_CANDIDATES),
+        slip_root_found: "NO",
+        slip_inner_text: slipInnerText,
+        selector_hits: selectorHits,
       };
     }
 
@@ -411,6 +470,9 @@
         source: "dom",
         frame_url: location.href,
         container_selector: selectorHint(root),
+        slip_root_found: "YES",
+        slip_inner_text: slipInnerText,
+        selector_hits: selectorHits,
       };
     }
 
@@ -421,7 +483,9 @@
       reason: "empty-slip",
       frame_url: location.href,
       container_selector: selectorHint(roots[0]),
-      selector_hits: scanSelectors(X10_SELECTOR_CANDIDATES),
+      slip_root_found: "YES",
+      slip_inner_text: slipInnerText,
+      selector_hits: selectorHits,
     };
   }
 
@@ -437,13 +501,9 @@
     };
   }
 
-  function diagnoseX10Frame() {
-    return {
-      site: "x10",
-      frame_url: location.href,
-      selector_scans: scanSelectors(X10_SELECTOR_CANDIDATES),
-      slip_root_count: findX10SlipRoots().length,
-    };
+  function diagnoseX10Frame(frameDepth) {
+    const depth = Number.isFinite(frameDepth) ? frameDepth : 0;
+    return buildX10DebugSnapshot(depth);
   }
 
   global.ArbFrameScanner = {
@@ -451,6 +511,7 @@
     scanSelectors,
     diagnoseBcFrame,
     diagnoseX10Frame,
+    buildX10DebugSnapshot,
     readBcSlip,
     readX10Slip,
   };

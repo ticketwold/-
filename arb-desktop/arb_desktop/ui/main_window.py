@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +37,7 @@ from arb_desktop.ui.log_window import LogWindow
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.setup_wizard import SetupWizard
 from arb_desktop.ui.watch_engine import WatchMetrics
+from arb_desktop.ui.x10_debug_panel import X10DebugPanel
 
 
 def _chrome_bridge_dir() -> Path:
@@ -60,13 +62,21 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
 
-        root.addWidget(self._build_connection_group())
-        root.addWidget(self._build_settings_group())
-        root.addWidget(self._build_live_group())
-        root.addWidget(self._build_state_group())
-        root.addWidget(self._build_buttons_group())
-        root.addWidget(self._build_log_preview())
+        dashboard = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard)
+        dashboard_layout.addWidget(self._build_connection_group())
+        dashboard_layout.addWidget(self._build_settings_group())
+        dashboard_layout.addWidget(self._build_live_group())
+        dashboard_layout.addWidget(self._build_state_group())
+        dashboard_layout.addWidget(self._build_buttons_group())
+        dashboard_layout.addWidget(self._build_log_preview())
+        self.tabs.addTab(dashboard, "메인")
+
+        self.x10_debug_panel = X10DebugPanel()
+        self.tabs.addTab(self.x10_debug_panel, "Debug (x10)")
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
@@ -81,6 +91,7 @@ class MainWindow(QMainWindow):
         self._worker.bridge_status.connect(self._on_bridge_status)
         self._worker.bridge_token.connect(self._on_bridge_token)
         self._worker.slip_updated.connect(self._on_slip_updated)
+        self._worker.x10_debug.connect(self._on_x10_debug)
         self._worker.watch_state.connect(self._on_watch_state)
         self._worker.log_message.connect(self._on_worker_log)
 
@@ -315,7 +326,12 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Chrome Bridge 연결 대기 중…")
 
     def _on_slip_updated(self, site: str, read) -> None:
+        if site == "bti" and getattr(read, "raw", None):
+            self.x10_debug_panel.update_from_slip_raw(read.raw)
         self._update_preview_calc(read_bc=(site == "bc"), read_bti=(site == "bti"), read=read)
+
+    def _on_x10_debug(self, payload: dict) -> None:
+        self.x10_debug_panel.update_from_payload(payload)
 
     def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
         self.lbl_engine_state.setText(state)

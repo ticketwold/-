@@ -105,9 +105,26 @@
       tab_id: null,
     });
 
-    function runDiagnostics() {
+    function runDiagnostics(result) {
+      if (site === "x10" && scanner.buildX10DebugSnapshot) {
+        const snapshot = scanner.buildX10DebugSnapshot(frameDepth);
+        sendDebug("X10 DEBUG", {
+          ...meta(),
+          ...snapshot,
+          reason: result?.reason || "",
+          slip_root_found: snapshot.slip_root_found || (result?.slip_root_found || "NO"),
+        });
+        sendDebug("SLIP ROOT FOUND", {
+          ...meta(),
+          found: snapshot.slip_root_found || "NO",
+          selector: result?.container_selector || "",
+          text: (result?.slip_inner_text || snapshot.slip_inner_text || "").slice(0, 240),
+        });
+        return;
+      }
+
       const diag =
-        site === "bc" ? scanner.diagnoseBcFrame() : scanner.diagnoseX10Frame();
+        site === "bc" ? scanner.diagnoseBcFrame() : scanner.diagnoseX10Frame(frameDepth);
 
       sendDebug("FRAME DEBUG", {
         ...meta(),
@@ -133,12 +150,17 @@
 
       const key = resultKey(result);
       const debugKey = `${key}|${bodyTextLength()}`;
-      if (!force && key === lastKey) return;
+      if (!force && key === lastKey) {
+        if (site === "x10") {
+          runDiagnostics(result);
+        }
+        return;
+      }
       lastKey = key;
 
       if (force || debugKey !== lastDebugKey) {
         lastDebugKey = debugKey;
-        runDiagnostics();
+        runDiagnostics(result);
       }
 
       if (!result.empty && result.items?.length) {
