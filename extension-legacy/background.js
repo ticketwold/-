@@ -210,7 +210,7 @@ async function findBcTab() {
 }
 
 async function ensureBcMainScripts(tabId, frameId = null) {
-  const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js'];
+  const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js', 'bc_place_bet.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null

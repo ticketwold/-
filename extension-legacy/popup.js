@@ -31,6 +31,7 @@ let lastSyncedBtiOdds = 0;
 let lastSyncedBcOdds = 0;
 let lastBcSyncAt = 0;
 let lastBcStakeFrameId = null;
+let lastBcPlaceFail = null;
 let bcSyncPending = false;
 let cachedBti = null;
 let cachedBc = null;
@@ -464,7 +465,7 @@ async function ensureBtiScript(tabId, frameId) {
 async function ensureBcScript(tabId, frameId = null) {
   const key = frameId != null ? `${tabId}:${frameId}` : String(tabId);
   if (bcScriptReady.has(key)) return;
-  const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js'];
+  const mainFiles = ['bc_slip_direct.js', 'bc_api_hook.js', 'bc_sports_scrape.js', 'bc_board_scrape.js', 'bc_stake_set.js', 'bc_place_bet.js'];
   for (const file of mainFiles) {
     try {
       const target = frameId != null
@@ -1626,26 +1627,22 @@ async function ensureBtiSlip(btiTab, hint = {}) {
 async function placeBcSportsBetMain(tabId, frameId, amountUsd) {
   try {
     await ensureBcScript(tabId, frameId);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        files: ['bc_place_bet.js'],
+        world: 'MAIN'
+      });
+    } catch (_) {}
     const results = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       world: 'MAIN',
       func: async (amount) => {
         const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
-        const settle = (ms) => new Promise((r) => setTimeout(r, ms));
-        if (typeof window.__bcSetStake === 'function') {
-          try {
-            const stakeRes = await Promise.resolve(window.__bcSetStake(rounded));
-            if (!stakeRes?.ok && !stakeRes?.partial) {
-              await settle(80);
-              await Promise.resolve(window.__bcSetStake(rounded));
-            }
-            await settle(120);
-          } catch (_) {}
-        }
         if (typeof window.__bcPlaceSportsBet === 'function') {
           return await window.__bcPlaceSportsBet(rounded);
         }
-        return null;
+        return { success: false, reason: 'no-place-handler' };
       },
       args: [amountUsd]
     });
@@ -1669,6 +1666,7 @@ async function placeBcBet(bcTab, amountUsd, opts = {}) {
   for (const frameId of tryFrames.slice(0, 10)) {
     const res = await placeBcSportsBetMain(bcTab.id, frameId, amountUsd);
     if (res?.success) return res;
+    lastBcPlaceFail = res;
   }
 
   for (const frameId of tryFrames.slice(0, 8)) {
@@ -1679,9 +1677,11 @@ async function placeBcBet(bcTab, amountUsd, opts = {}) {
       teamHint: cachedBc?.teamLabel || ''
     }, frameId);
     if (res?.success) return res;
+    lastBcPlaceFail = res;
   }
 
-  return { success: false, reason: 'BC.Game 스포츠 배팅 실패 — 배팅카트·금액 확인' };
+  const detail = lastBcPlaceFail?.reason || lastBcPlaceFail?.fill?.reason || '';
+  return { success: false, reason: detail ? `BC 배팅 실패 — ${detail}` : 'BC.Game 스포츠 배팅 실패 — 배팅카트·금액 확인' };
 }
 
 async function probeBcFrame(tabId, frameId, url) {
@@ -2550,4 +2550,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.18 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 배팅 프레임·재시도 수정`, 'info');
+log(`v5.9.19 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 배팅 엔진 v2`, 'info');
