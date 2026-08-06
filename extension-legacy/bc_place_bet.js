@@ -1,5 +1,5 @@
 (function () {
-  window.__bcPlaceBetVer = 3;
+  window.__bcPlaceBetVer = 4;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -218,13 +218,14 @@
       if (pageBetSuccess()) return { ok: true, reason: 'success-text' };
       if (slipLooksEmpty()) return { ok: true, reason: 'slip-cleared' };
       await clickConfirmDialogs();
-      await sleep(120);
+      await sleep(60);
     }
     if (slipLooksEmpty()) return { ok: true, reason: 'slip-cleared-late' };
     return { ok: false, reason: 'confirm-timeout' };
   }
 
-  async function placeSportsBet(amountUsd) {
+  async function placeSportsBet(amountUsd, opts = {}) {
+    const skipFill = !!opts.skipFill;
     const target = Math.max(0.01, Math.round(amountUsd * 100) / 100);
     const placeBtnEarly = findBetslipPlaceBetButton();
     const slip = findSlipRoot();
@@ -233,18 +234,18 @@
     }
 
     let fillRes = null;
-    if (typeof window.__bcSetStake === 'function') {
+    if (!skipFill && typeof window.__bcSetStake === 'function') {
       try {
         fillRes = await Promise.resolve(window.__bcSetStake(target));
         if (!fillRes?.ok && !fillRes?.partial) {
-          await sleep(100);
+          await sleep(35);
           fillRes = await Promise.resolve(window.__bcSetStake(target));
         }
       } catch (e) {
         fillRes = { ok: false, reason: String(e) };
       }
     }
-    await sleep(200);
+    await sleep(skipFill ? 15 : 50);
 
     let btn = findBetslipPlaceBetButton();
     if (!btn) btn = findPlaceBetButton(slip);
@@ -265,7 +266,7 @@
     robustClick(btn);
     const innerSpan = btn.querySelector?.('span');
     if (innerSpan) robustClick(innerSpan);
-    await sleep(200);
+    await sleep(60);
     await clickConfirmDialogs();
 
     const waited = await waitForBetResult(4500);
@@ -282,7 +283,7 @@
     const btn2 = findPlaceBetButton(slip) || findPlaceBetButton(null);
     if (btn2 && !btn2.disabled) {
       robustClick(btn2);
-      await sleep(250);
+      await sleep(100);
       await clickConfirmDialogs();
       const waited2 = await waitForBetResult(3500);
       if (waited2.ok) {

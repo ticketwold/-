@@ -1034,9 +1034,11 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
       return { success: false, reason: '슬립 카드 없음 — 준비 단계 실패' };
     }
 
-    const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 1500 : 3000);
-    if (!stable.ready && targetOdds && !hint.skipEnsure) {
-      return { success: false, reason: stable.reason || '슬립 배당 미확정' };
+    if (!hint.skipStable) {
+      const stable = await waitSlipStable(targetOdds, hint.skipEnsure ? 400 : 3000);
+      if (!stable.ready && targetOdds && !hint.skipEnsure) {
+        return { success: false, reason: stable.reason || '슬립 배당 미확정' };
+      }
     }
 
     // ── 기준점 검증 (위치 변경 버그 방어) ──
@@ -1072,9 +1074,12 @@ async function placeBtiBet(amount, targetLine, lineTolerance, targetOdds, hint =
     input.dispatchEvent(new Event('change', { bubbles: true }));
     input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
 
+    const fastBet = !!(hint.skipStable || hint.skipEnsure);
+    const betPollMs = fastBet ? 18 : 50;
+    const betPollMax = fastBet ? 18 : 30;
     let betBtn = null;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < betPollMax; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, betPollMs));
       betBtn = findBtiBetButton();
       if (betBtn && !betBtn.disabled) break;
     }
