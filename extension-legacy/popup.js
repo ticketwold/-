@@ -1631,6 +1631,17 @@ async function placeBcSportsBetMain(tabId, frameId, amountUsd) {
       world: 'MAIN',
       func: async (amount) => {
         const rounded = Math.max(0.01, Math.round(amount * 100) / 100);
+        const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+        if (typeof window.__bcSetStake === 'function') {
+          try {
+            const stakeRes = await Promise.resolve(window.__bcSetStake(rounded));
+            if (!stakeRes?.ok && !stakeRes?.partial) {
+              await settle(80);
+              await Promise.resolve(window.__bcSetStake(rounded));
+            }
+            await settle(120);
+          } catch (_) {}
+        }
         if (typeof window.__bcPlaceSportsBet === 'function') {
           return await window.__bcPlaceSportsBet(rounded);
         }
@@ -1647,27 +1658,30 @@ async function placeBcSportsBetMain(tabId, frameId, amountUsd) {
 async function placeBcBet(bcTab, amountUsd, opts = {}) {
   if (!bcTab?.id) return { success: false, reason: 'BC.Game 탭 없음' };
   await ensureBcScript(bcTab.id);
-  const frames = await getAllFrames(bcTab.id);
-  const order = [0, ...frames.map((f) => f.frameId).filter((id) => id !== 0)];
-  const seen = new Set();
-
-  const sportsPromises = [];
-  for (const frameId of order) {
-    if (seen.has(frameId)) continue;
-    seen.add(frameId);
-    sportsPromises.push(placeBcSportsBetMain(bcTab.id, frameId, amountUsd));
+  const stakeFrame = opts.frameId ?? lastBcStakeFrameId;
+  const ordered = await orderBcFrames(bcTab.id);
+  const tryFrames = [];
+  if (stakeFrame != null) tryFrames.push(stakeFrame);
+  for (const frameId of ordered) {
+    if (!tryFrames.includes(frameId)) tryFrames.push(frameId);
   }
-  const sportsResults = await Promise.all(sportsPromises);
-  const sportsHit = sportsResults.find((r) => r?.success);
-  if (sportsHit) return sportsHit;
 
-  const res = await sendBc(bcTab.id, {
-    type: 'PLACE_BET',
-    amount: amountUsd,
-    skipFill: !!opts.skipFill,
-    teamHint: cachedBc?.teamLabel || ''
-  });
-  return res || { success: false, reason: '응답 없음' };
+  for (const frameId of tryFrames.slice(0, 10)) {
+    const res = await placeBcSportsBetMain(bcTab.id, frameId, amountUsd);
+    if (res?.success) return res;
+  }
+
+  for (const frameId of tryFrames.slice(0, 8)) {
+    const res = await sendBc(bcTab.id, {
+      type: 'PLACE_BET',
+      amount: amountUsd,
+      skipFill: !!opts.skipFill,
+      teamHint: cachedBc?.teamLabel || ''
+    }, frameId);
+    if (res?.success) return res;
+  }
+
+  return { success: false, reason: 'BC.Game 스포츠 배팅 실패 — 배팅카트·금액 확인' };
 }
 
 async function probeBcFrame(tabId, frameId, url) {
@@ -2100,6 +2114,20 @@ async function manualBet() {
   }
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function placeBcBetWithRetry(bcTab, amountUsd, bcStakeRes) {
+  const frameId = bcStakeRes?.frameId ?? lastBcStakeFrameId;
+  const stakeOk = !!(bcStakeRes?.ok || bcStakeRes?.partial || (bcStakeRes?.stake > 0));
+  let res = await placeBcBet(bcTab, amountUsd, { skipFill: stakeOk, frameId });
+  if (res?.success) return res;
+  await delay(220);
+  res = await placeBcBet(bcTab, amountUsd, { skipFill: false, frameId });
+  return res;
+}
+
 async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}) {
   if (strikePending) return { ok: false, reason: 'busy' };
   strikePending = true;
@@ -2113,7 +2141,7 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
   log(`${label} — 텐텐뱃 ${btiOdds.toFixed(3)} · BC ${bcOLabel()} · ${btiBet.toLocaleString()}원 / $${polyUsd.toFixed(2)}`, 'info');
 
   try {
-    await Promise.all([
+    const [, bcStakeRes] = await Promise.all([
       setBtiAmount(found.btiTab, btiBet),
       setBcAmount(found.bcTab, polyUsd)
     ]);
@@ -2121,28 +2149,42 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb, opts = {}
     lastSyncedBcUsd = polyUsd;
     lastSyncedAt = Date.now();
 
+    if (bcStakeRes?.ok || bcStakeRes?.partial) {
+      await delay(180);
+    }
+
     const [btiRes, polyRes] = await Promise.all([
       placeBtiBet(found.btiTab, btiBet, btiOdds, hint),
-      placeBcBet(found.bcTab, polyUsd, { skipFill: true })
+      placeBcBetWithRetry(found.bcTab, polyUsd, bcStakeRes)
     ]);
 
-    if (btiRes?.success || polyRes?.success) {
+    let finalPolyRes = polyRes;
+    if (!finalPolyRes?.success) {
+      await delay(200);
+      const retry = await placeBcBet(found.bcTab, polyUsd, {
+        skipFill: false,
+        frameId: bcStakeRes?.frameId ?? lastBcStakeFrameId
+      });
+      if (retry?.success) finalPolyRes = retry;
+    }
+
+    if (btiRes?.success || finalPolyRes?.success) {
       lastStrikeAt = Date.now();
       const parts = [];
       if (btiRes?.success) parts.push('텐텐뱃');
-      if (polyRes?.success) parts.push('BC');
+      if (finalPolyRes?.success) parts.push('BC');
       log(`${label} 완료 — ${parts.join(' + ')}`, 'ok');
       if (isAutoBetEngaged()) {
         stopAutoBetOnly(true);
         log('자동 배팅 정지', 'info');
       }
-      return { ok: true, btiRes, polyRes };
+      return { ok: true, btiRes, polyRes: finalPolyRes };
     }
     const parts = [];
     if (!btiRes?.success) parts.push(`텐텐뱃: ${btiRes?.reason || '실패'}`);
-    if (!polyRes?.success) parts.push(`BC: ${polyRes?.reason || '실패'}`);
+    if (!finalPolyRes?.success) parts.push(`BC: ${finalPolyRes?.reason || '실패'}`);
     log(`${label} 실패 — ${parts.join(' / ')}`, 'err');
-    return { ok: false, btiRes, polyRes };
+    return { ok: false, btiRes, polyRes: finalPolyRes };
   } finally {
     strikePending = false;
     updateManualBetButton();
@@ -2508,4 +2550,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.17 ${IS_PANEL ? '패널' : '팝업'} 로드 — 수동배팅·금액동기화 수정`, 'info');
+log(`v5.9.18 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 배팅 프레임·재시도 수정`, 'info');
