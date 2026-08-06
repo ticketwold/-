@@ -970,7 +970,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.6] background loaded — BC.Game 실시간 금액 동기화');
+console.log('[양방봇 v5.9.7] background loaded — 배당 마감 자동배팅 일시정지');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();

@@ -170,9 +170,16 @@
     return { teamLabel, eventText, marketKind };
   }
 
+  function isSlipSuspended(text) {
+    return /suspend|suspended|마감|closed|locked|unavailable|정지된|정지됨|베팅\s*마감|betting\s*(is\s*)?closed|일시\s*정지/i.test(text);
+  }
+
   function extractFromSlip(slip) {
     const text = slipText(slip);
     if (!text || isEmptySlip(text)) return null;
+    if (isSlipSuspended(text)) {
+      return { ok: false, suspended: true, reason: 'market-suspended', source: 'bcgame' };
+    }
 
     let odds = extractOddsFromText(text);
     if (!odds) odds = extractOddsFromDom(slip);

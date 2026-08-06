@@ -1808,8 +1808,29 @@ function searchBtiOdds(query) {
   return { ...board, query, hits, hitCount: hits.length, slip: readBtiOdds() };
 }
 
+function readBtiMarketStatus() {
+  const cards = getRealSlipCards();
+  if (!cards.length) return { open: false, empty: true, suspended: false };
+  let suspended = false;
+  for (const card of cards) {
+    if (isSlipCardSuspended(card)) {
+      suspended = true;
+      continue;
+    }
+    const slip = parseSlipFromCard(card);
+    if (slip?.odds > 1.01) {
+      return { open: true, suspended: false, odds: slip.odds };
+    }
+  }
+  return { open: false, suspended, reason: suspended ? 'suspended' : 'no-odds' };
+}
+
 // popup / background 요청에 응답
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'READ_BTI_MARKET_STATUS') {
+    sendResponse(readBtiMarketStatus());
+    return false;
+  }
   if (msg.type === 'READ_SLIP') {
     sendResponse({ slip: readBtiOdds(msg.hint || {}) });
     return false;

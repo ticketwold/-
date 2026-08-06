@@ -21,7 +21,7 @@ function readMainWorldSlipRaw() {
     script.textContent = `(function(){
       var r=null;
       try{
-        if(typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&(d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
+        if(typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
         if(!r&&typeof __bcReadNativeSlip==='function'){var n=__bcReadNativeSlip();if(n&&(n.odds>1.01||n.ok&&n.odds>1.01))r=n;}
         if(!r&&typeof __bcScrapeOdds==='function'){var x=__bcScrapeOdds();if(x&&(x.odds>1.01||x.ok&&x.odds>1.01))r=x;}
       }catch(e){}
@@ -39,6 +39,19 @@ function readMainWorldSlipRaw() {
 
 function normalizeSportsSlip(raw) {
   if (!raw) return null;
+  if (raw.suspended) {
+    return {
+      source: 'bcgame',
+      odds: raw.odds > 1.01 ? raw.odds : null,
+      suspended: true,
+      teamLabel: raw.teamLabel || raw.selectionText || raw.outcome || '',
+      outcome: raw.teamLabel || raw.selectionText || raw.outcome || '',
+      selectionText: raw.selectionText || raw.teamLabel || '',
+      fromSlip: true,
+      sourceKind: raw.sourceKind || 'bc-direct-slip',
+      hint: '배당 마감'
+    };
+  }
   const odds = raw.odds > 1.01 ? raw.odds : null;
   if (!odds) return null;
   const team = raw.teamLabel || raw.selectionText || raw.outcome || '';
@@ -47,9 +60,11 @@ function normalizeSportsSlip(raw) {
   const stake = !apiOnly && raw.stake > 0 ? raw.stake : null;
   const payout = !apiOnly && raw.payout > 0 ? raw.payout : (stake && odds ? stake * odds : null);
   const fromPayout = !apiOnly && (!!raw.fromPayout || (stake > 0 && payout > stake));
+  const suspended = !!raw.suspended || raw.reason === 'market-suspended';
   return {
     source: 'bcgame',
     odds,
+    suspended,
     teamLabel: team,
     outcome: team,
     selectionText: raw.selectionText || team,
