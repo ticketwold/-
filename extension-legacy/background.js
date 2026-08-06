@@ -1001,11 +1001,28 @@ chrome.windows.onRemoved.addListener((id) => {
 });
 
 chrome.webNavigation.onCommitted.addListener((details) => {
-  if (details.frameId !== 0) return;
   const url = details.url || '';
   if (!/bc\.game|betby\.com|sptpub|sptsportscdn|cocoesports|biahosted|x10x10s\.com|bti-sports|live8588|fxf774/i.test(url)) return;
   try {
-    chrome.runtime.sendMessage({ type: 'TAB_NAVIGATED', tabId: details.tabId, url });
+    chrome.runtime.sendMessage({
+      type: 'TAB_NAVIGATED',
+      tabId: details.tabId,
+      url,
+      frameId: details.frameId
+    });
+  } catch (_) {}
+});
+
+chrome.webNavigation.onCompleted.addListener((details) => {
+  const url = details.url || '';
+  if (!/bc\.game|betby\.com|sptpub|sptsportscdn|cocoesports|biahosted|x10x10s\.com|bti-sports|live8588|fxf774/i.test(url)) return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'TAB_NAVIGATED',
+      tabId: details.tabId,
+      url,
+      frameId: details.frameId
+    });
   } catch (_) {}
 });
 

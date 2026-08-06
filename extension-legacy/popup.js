@@ -64,15 +64,35 @@ function clearScriptCacheForTab(tabId) {
   }
 }
 
-function onTabNavigated(tabId, url) {
+let bcTabWarmUntil = 0;
+
+function markBcTabWarming(tabId) {
+  bcTabWarmUntil = Date.now() + 12000;
+  clearScriptCacheForTab(tabId);
+}
+
+function onTabNavigated(tabId, url, frameId = 0) {
+  if (frameId !== 0) {
+    if (isBcUrl(url)) {
+      clearScriptCacheForTab(tabId);
+      bcCartEmptyConfirmed = false;
+      markBcTabWarming(tabId);
+      setTimeout(() => refreshSlips().catch(() => {}), 300);
+      setTimeout(() => refreshSlips().catch(() => {}), 1000);
+      setTimeout(() => refreshSlips().catch(() => {}), 2500);
+    }
+    return;
+  }
   clearScriptCacheForTab(tabId);
   if (isBcUrl(url)) {
     bcCartEmptyConfirmed = false;
     cachedBc = null;
     lastBcStakeFrameId = null;
     lastBcSyncAt = 0;
-    setTimeout(() => refreshSlips().catch(() => {}), 400);
-    setTimeout(() => refreshSlips().catch(() => {}), 1200);
+    markBcTabWarming(tabId);
+    setTimeout(() => refreshSlips().catch(() => {}), 500);
+    setTimeout(() => refreshSlips().catch(() => {}), 1500);
+    setTimeout(() => refreshSlips().catch(() => {}), 3500);
   }
   if (isBtiUrl(url)) {
     cachedBti = null;
@@ -1696,7 +1716,18 @@ async function readBcSlip(bcTab) {
   }
   bcCartEmptyConfirmed = false;
 
-  const slip = await readBcSlipAllFrames(bcTab);
+  let slip = await readBcSlipAllFrames(bcTab);
+  const warming = Date.now() < bcTabWarmUntil;
+  if ((!slip?.odds || slip.odds <= 1) && warming) {
+    for (const waitMs of [350, 700, 1200]) {
+      await delay(waitMs);
+      await ensureBcScript(bcTab.id);
+      if (await probeBcCartEmptyAnyFrame(bcTab)) break;
+      slip = await readBcSlipAllFrames(bcTab);
+      if (slip?.odds > 1) break;
+    }
+  }
+
   if (!slip?.odds || slip.odds <= 1 || slip.empty || slip.cartEmpty) {
     if (await probeBcCartEmptyAnyFrame(bcTab)) {
       bcCartEmptyConfirmed = true;
@@ -2796,7 +2827,7 @@ $('diagBtn')?.addEventListener('click', async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'TAB_NAVIGATED') onTabNavigated(msg.tabId, msg.url);
+  if (msg.type === 'TAB_NAVIGATED') onTabNavigated(msg.tabId, msg.url, msg.frameId || 0);
   if (msg.type === 'SEARCH_RESULT') renderSearchResults(msg);
   if (msg.type === 'ODDS_CHANGED') onOddsChanged(msg);
   if (msg.type === 'BTI_STAKE_CHANGED') onBtiStakeChanged(msg);
@@ -2824,4 +2855,14 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.29 ${IS_PANEL ? '패널' : '팝업'} 로드 — 새로고침 후 재인식`, 'info');
+
+try {
+  chrome.webNavigation?.onCommitted?.addListener((details) => {
+    onTabNavigated(details.tabId, details.url || '', details.frameId);
+  });
+  chrome.webNavigation?.onCompleted?.addListener((details) => {
+    if (!isBcUrl(details.url) && !isBtiUrl(details.url)) return;
+    onTabNavigated(details.tabId, details.url || '', details.frameId);
+  });
+} catch (_) {}
+log(`v5.9.30 ${IS_PANEL ? '패널' : '팝업'} 로드 — iframe 로드 후 재인식`, 'info');
