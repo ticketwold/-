@@ -1,6 +1,5 @@
 (function () {
-  if (window.__bcPlaceBetLoaded) return;
-  window.__bcPlaceBetLoaded = true;
+  window.__bcPlaceBetVer = 3;
 
   function openShadow(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -84,8 +83,49 @@
     return best;
   }
 
+  function isButtonClickable(btn) {
+    if (!btn || !visible(btn)) return false;
+    if (btn.disabled) return false;
+    if (btn.getAttribute('aria-disabled') === 'true') return false;
+    const cls = `${btn.className || ''} ${btn.parentElement?.className || ''}`;
+    if (/\bMui-disabled\b|disabled/i.test(cls) && btn.getAttribute('aria-disabled') !== 'false') {
+      // MUI: class만 disabled일 때 aria 확인
+      if (btn.getAttribute('aria-disabled') === 'true') return false;
+    }
+    return true;
+  }
+
+  function findBetslipPlaceBetButton() {
+    const selectors = [
+      '[data-editor-id="betslipPlaceBetButton"]',
+      'button[data-editor-id="betslipPlaceBetButton"]',
+      '[data-editor-id*="betslipPlaceBet"]',
+      '[data-editor-id*="PlaceBetButton"]'
+    ];
+    for (const sel of selectors) {
+      for (const el of collectAll(sel, document.documentElement)) {
+        if (el.tagName !== 'BUTTON' && el.getAttribute?.('role') !== 'button') {
+          const innerBtn = el.querySelector?.('button') || (el.closest?.('button') || null);
+          if (innerBtn && isButtonClickable(innerBtn)) return innerBtn;
+        }
+        if (isButtonClickable(el)) return el;
+      }
+    }
+    let found = null;
+    walkDeep(document.documentElement, (el) => {
+      if (found || el.nodeType !== 1 || el.tagName !== 'BUTTON') return;
+      const editorId = el.getAttribute?.('data-editor-id') || '';
+      if (editorId === 'betslipPlaceBetButton' || /betslipplacebet/i.test(editorId)) {
+        if (isButtonClickable(el)) found = el;
+      }
+    }, 0);
+    return found;
+  }
+
   function isBetButton(btn) {
-    if (!btn || btn.disabled) return false;
+    if (!isButtonClickable(btn)) return false;
+    const editorId = btn.getAttribute?.('data-editor-id') || '';
+    if (editorId === 'betslipPlaceBetButton' || /betslipplacebet/i.test(editorId)) return true;
     const t = (btn.textContent || btn.getAttribute?.('aria-label') || '').replace(/\s+/g, ' ').trim();
     if (!t || t.length > 120) return false;
     if (/취소|cancel|닫기|close|삭제|delete|clear/i.test(t) && !/베팅|bet/i.test(t)) return false;
@@ -99,6 +139,9 @@
   }
 
   function findPlaceBetButton(slip) {
+    const direct = findBetslipPlaceBetButton();
+    if (direct) return direct;
+
     const scopes = slip ? [slip, document.documentElement] : [document.documentElement];
     for (const scope of scopes) {
       const candidates = collectAll('button, [role="button"], a', scope);
@@ -183,8 +226,9 @@
 
   async function placeSportsBet(amountUsd) {
     const target = Math.max(0.01, Math.round(amountUsd * 100) / 100);
+    const placeBtnEarly = findBetslipPlaceBetButton();
     const slip = findSlipRoot();
-    if (!slip) {
+    if (!slip && !placeBtnEarly) {
       return { success: false, reason: 'slip-missing' };
     }
 
@@ -200,18 +244,27 @@
         fillRes = { ok: false, reason: String(e) };
       }
     }
-    await sleep(160);
+    await sleep(200);
 
-    let btn = findPlaceBetButton(slip);
+    let btn = findBetslipPlaceBetButton();
+    if (!btn) btn = findPlaceBetButton(slip);
     if (!btn) btn = findPlaceBetButton(null);
     if (!btn) {
       return { success: false, reason: 'bet-btn-missing', fill: fillRes };
     }
-    if (btn.disabled) {
-      return { success: false, reason: 'bet-btn-disabled', fill: fillRes };
+    if (!isButtonClickable(btn)) {
+      return {
+        success: false,
+        reason: 'bet-btn-disabled',
+        fill: fillRes,
+        btnText: (btn.textContent || '').trim().slice(0, 60),
+        editorId: btn.getAttribute?.('data-editor-id') || ''
+      };
     }
 
     robustClick(btn);
+    const innerSpan = btn.querySelector?.('span');
+    if (innerSpan) robustClick(innerSpan);
     await sleep(200);
     await clickConfirmDialogs();
 

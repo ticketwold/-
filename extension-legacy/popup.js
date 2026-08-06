@@ -2550,4 +2550,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.19 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC 배팅 엔진 v2`, 'info');
+log(`v5.9.20 ${IS_PANEL ? '패널' : '팝업'} 로드 — BC betslipPlaceBetButton`, 'info');

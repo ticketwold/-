@@ -131,7 +131,7 @@
   function findStakeInput(root) {
     const scope = root || document;
     const fields = collectAll(
-      '#counter, input, textarea, [contenteditable="true"], [role="textbox"], [role="spinbutton"]',
+      '#counter, [data-editor-id*="stake"], [data-editor-id*="Stake"], [data-editor-id*="betslip"], [data-editor-id*="Betslip"], input, textarea, [contenteditable="true"], [role="textbox"], [role="spinbutton"]',
       scope === document ? document.documentElement : scope
     );
     let best = null;
@@ -140,7 +140,9 @@
     for (const inp of fields) {
       if (!isStakeCandidate(inp)) continue;
       const ctx = inputContext(inp).toLowerCase();
+      const editorId = (inp.getAttribute?.('data-editor-id') || '').toLowerCase();
       let score = 0;
+      if (editorId === 'betslipstakeinput' || /betslip.*stake|stake.*betslip|betslipamount/i.test(editorId)) score += 500;
       if (inp.id === 'counter') score += 200;
       if (/usdt/i.test(ctx)) score += 120;
       if (/counter|stake|amount|bet|베팅|금액/i.test(ctx)) score += 80;
