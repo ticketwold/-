@@ -1,0 +1,40 @@
+{
+  "version": 482910,
+  "sports": [{"id": 109, "name": "Esports"}],
+  "events": {
+    "evt_live_1": {
+      "id": "evt_live_1",
+      "desc": {
+        "sport": 109,
+        "category": "LoL",
+        "tournament": "LCK",
+        "competitors": [
+          {"id": "c1", "name": "T1"},
+          {"id": "c2", "name": "Gen.G"}
+        ]
+      },
+      "state": {"status": 1, "match_status": 20, "score": "1:0"},
+      "markets": {
+        "m_winner": {
+          "id": "m_winner",
+          "name": "Match Winner",
+          "status": 1,
+          "outcomes": {
+            "o1": {"id": "o1", "name": "T1", "factor": 2.15, "status": 1},
+            "o2": {"id": "o2", "name": "Gen.G", "coefficient": 1.72, "status": 1}
+          }
+        }
+      }
+    },
+    "evt_live_2": {
+      "id": "evt_live_2",
+      "homeName": "DRX",
+      "awayName": "KT Rolster",
+      "state": {"status": 1},
+      "selections": [
+        {"name": "DRX", "price": 1.95, "status": 0},
+        {"name": "KT Rolster", "odds": 1.88, "status": 0}
+      ]
+    }
+  }
+}

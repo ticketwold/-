@@ -7,7 +7,9 @@ import orjson
 
 from arb_desktop.config import settings
 from arb_desktop.core.json_odds import extract_slip_from_json, url_matches_bc_patterns
+from arb_desktop.core.sptpub_v4_parser import is_sptpub_v4_url
 from arb_desktop.models import DetectionTier, Matchup, MoneylineSelection, SiteId
+from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
 from arb_desktop.scanners.tiers import NetworkScanner
 from arb_desktop.timing import now_ns
 
@@ -149,19 +151,35 @@ class BcCdpNetworkTap(NetworkScanner):
     def _ingest_payload(self, raw: str | bytes, source: str) -> None:
         slip = extract_slip_from_json(raw)
         if slip and slip.get("odds"):
-            # Single-selection updates — merge into board via DOM refresh trigger
             self._message = f"network slip @ {source[:60]} odds={slip['odds']}"
-        # Try to parse bulk events from payload
+
         try:
+            # sptpub /api/v4/live · /api/v4/prematch — JSON 전체 재귀 탐색
+            if is_sptpub_v4_url(source):
+                matchups = SptpubV4Client.parse_cdp_payload(raw, source)
+                if matchups:
+                    self._merge_matchups(matchups, source)
+                    return
+
             data = orjson.loads(raw) if isinstance(raw, (str, bytes)) else raw
             matchups = self._parse_board_json(data)
             if matchups:
-                self._matchups = matchups
-                _board_cache["matchups"] = [m.__dict__ for m in matchups]
-                _board_cache["updated_ns"] = now_ns()
-                self._message = f"network board {len(matchups)} from {source[:40]}"
+                self._merge_matchups(matchups, source)
         except Exception:
             pass
+
+    def _merge_matchups(self, matchups: list[Matchup], source: str) -> None:
+        if not matchups:
+            return
+        merged: dict[str, Matchup] = {m.event_id: m for m in self._matchups}
+        for m in matchups:
+            key = m.event_id or f"{m.home}|{m.away}".lower()
+            if key not in merged or len(m.moneyline) > len(merged[key].moneyline):
+                merged[key] = m
+        self._matchups = list(merged.values())
+        _board_cache["matchups"] = [m.__dict__ for m in self._matchups]
+        _board_cache["updated_ns"] = now_ns()
+        self._message = f"network board {len(self._matchups)} from {source[:48]}"
 
     def _parse_board_json(self, data: Any) -> list[Matchup]:
         """Best-effort recursive event extraction from BetBy JSON blobs."""

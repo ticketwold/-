@@ -42,8 +42,11 @@ class Settings(BaseSettings):
         "coupon",
         "ticket",
         "sptsportscdn",
+        "sptpub",
         "selection",
         "bc.game",
+        "api/v4/live",
+        "api/v4/prematch",
         "ws",
         "websocket",
     )

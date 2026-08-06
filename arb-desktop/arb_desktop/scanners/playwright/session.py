@@ -8,6 +8,7 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
+from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
 
 
 class BrowserSession:
@@ -21,6 +22,7 @@ class BrowserSession:
         self.bc_page: Page | None = None
         self.bti_origin: str | None = None
         self.bti_rest = BtiRestScanner()
+        self.sptpub_client = SptpubV4Client()
 
     async def start(self) -> None:
         settings.user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -70,6 +72,7 @@ class BrowserSession:
 
     async def stop(self) -> None:
         await self.bti_rest.close()
+        await self.sptpub_client.close()
         if self._context:
             await self.save_state()
             await self._context.close()

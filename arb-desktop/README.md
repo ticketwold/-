@@ -34,7 +34,7 @@ Chrome 확장프로그램을 **전용 데스크톱 앱**으로 재설계한 프�
 
 | 순위 | 방식 | BTI (x10x10s) | BC.Game |
 |------|------|---------------|---------|
-| 1 | Network | REST `sportscenter/*` API | CDP HTTP/WS JSON tap |
+| 1 | Network | REST `sportscenter/*` API | sptpub `/api/v4/live` + `/api/v4/prematch` JSON 재귀 파싱 |
 | 2 | Playwright | iframe DOM scrape | BetBy iframe DOM |
 | 3 | OCR | 화면 인식 fallback | 화면 인식 fallback |
 

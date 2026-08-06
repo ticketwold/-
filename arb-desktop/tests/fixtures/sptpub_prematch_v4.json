@@ -1,0 +1,35 @@
+{
+  "version": 99120,
+  "status": 0,
+  "events": [
+    {
+      "id": "pm_100",
+      "eventName": "Hanwha Life Esports vs Dplus KIA",
+      "league_name": "LCK",
+      "status": 0,
+      "markets": [
+        {
+          "marketName": "Winner",
+          "outcomes": [
+            {"outcomeName": "Hanwha Life Esports", "value": 1.62, "status": 1},
+            {"outcomeName": "Dplus KIA", "factor": 2.35, "status": 1}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pm_101",
+      "participant1Name": "Nongshim RedForce",
+      "participant2Name": "FearX",
+      "markets": {
+        "ml": {
+          "name": "Moneyline",
+          "selections": {
+            "s1": {"teamName": "Nongshim RedForce", "coefficient": 1.55},
+            "s2": {"teamName": "FearX", "price": 2.48}
+          }
+        }
+      }
+    }
+  ]
+}
