@@ -28,10 +28,16 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser
+    # Browser — 설치된 정식 Google Chrome + 전용 persistent 프로필
     headless: bool = False
-    user_data_dir: Path = Path.home() / ".arb-desktop" / "browser-profile"
+    chrome_channel: str = "chrome"
+    chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
     persist_sessions: bool = True
+
+    @property
+    def user_data_dir(self) -> Path:
+        """하위 호환 — chrome_profile_dir와 동일."""
+        return self.chrome_profile_dir
 
     # BTI API
     bti_market_types: str = "ML0,HC0,OU0"
