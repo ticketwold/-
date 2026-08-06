@@ -180,7 +180,9 @@
   function slipLooksEmpty() {
     const slip = findSlipRoot();
     const t = slip ? slipText(slip) : (document.body?.innerText || '');
-    return /슬립이\s*비어|선택한\s*베팅\s*없|베팅금액을\s*입력|베팅\s*옵션을\s*클릭|empty\s*bet\s*slip|no\s*selection/i.test(t);
+    if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return false;
+    if (/(?:승자|winner|오버|언더|over|under|핸디|handicap)[^\n]{0,120}\d+\.\d{1,3}/i.test(t)) return false;
+    return /슬립이\s*비어|선택한\s*베팅\s*없|empty\s*bet\s*slip|no\s*selection/i.test(t);
   }
 
   function pageBetSuccess() {

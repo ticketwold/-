@@ -1,5 +1,7 @@
 (function () {
-  if (window.__bcDirectSlipLoaded) return;
+  const DIRECT_SLIP_VER = 28;
+  if (window.__bcDirectSlipVer >= DIRECT_SLIP_VER && typeof window.__bcReadDirectSlip === 'function') return;
+  window.__bcDirectSlipVer = DIRECT_SLIP_VER;
   window.__bcDirectSlipLoaded = true;
 
   function openShadow(el) {
@@ -115,7 +117,7 @@
   }
 
   function isEmptySlip(t) {
-    return /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|베팅금액을\s*입력|베팅\s*옵션을\s*클릭|클릭하신\s*후.*베팅|옵션을\s*클릭하신\s*후|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty|betslip\s*is\s*empty/i.test(t);
+    return /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?|your\s*betslip\s*is\s*empty|betslip\s*is\s*empty/i.test(t);
   }
 
   function isEmptySlipPrompt(t) {
@@ -128,11 +130,10 @@
   const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
 
   function hasSelectionInSlip(text) {
-    if (!text || isEmptySlip(text)) return false;
+    if (!text) return false;
     const t = String(text).replace(/\s+/g, ' ').trim();
-    if (isEmptySlipPrompt(t)) return false;
 
-    // 슬립 배당 + 0 USDT (예: 1.14 0 USDT) — 가장 신뢰
+    // 슬립 배당 + 0 USDT (예: 1.14 0 USDT) — 가장 신뢰, 빈 카트 문구보다 우선
     if (/\d+\.\d{1,3}\s+0(?:\.\d+)?\s*USDT/i.test(t)) return true;
 
     const hasSlipChrome = /베팅\s*슬립|bet\s*slip|betslip|단일|조합|시스템/i.test(t);
@@ -151,6 +152,9 @@
       }
     }
 
+    if (isEmptySlip(t)) return false;
+    if (isEmptySlipPrompt(t)) return false;
+
     return false;
   }
 
@@ -167,7 +171,7 @@
         || (/단일|조합|시스템/.test(t) && /USDT|베팅하기|place\s*bet/i.test(t));
       if (!hasSlipUi) return;
       let score = /베팅\s*슬립|bet\s*slip/i.test(t) ? 120 : 60;
-      if (isEmptySlip(t)) score += 300;
+      if (isEmptySlip(t) && !hasSelectionInSlip(t)) score += 300;
       const r = el.getBoundingClientRect();
       if (r.x > vw * 0.38) score += 80;
       if (score > bestScore) {
@@ -184,24 +188,20 @@
 
   function isCartEmptyNow() {
     const shell = findBetSlipShell();
-    if (shell) {
-      const t = slipText(shell);
-      if (isEmptySlip(t) || !hasSelectionInSlip(t)) {
-        clearStaleBcCaches();
-        return true;
-      }
-    }
-    const slip = findSlipRoot() || findBetSlipShell();
+    const slip = findSlipRoot() || shell;
     if (slip) {
       const t = slipText(slip);
-      if (!hasSelectionInSlip(t)) {
+      if (hasSelectionInSlip(t)) return false;
+      if (isEmptySlip(t)) {
         clearStaleBcCaches();
         return true;
       }
-      return false;
+      clearStaleBcCaches();
+      return true;
     }
     if (shell) {
       const t = slipText(shell);
+      if (hasSelectionInSlip(t)) return false;
       if (/베팅\s*슬립|bet\s*slip/i.test(t) && /USDT|0\s*USDT/i.test(t) && !hasSelectionInSlip(t)) {
         clearStaleBcCaches();
         return true;
@@ -372,8 +372,9 @@
 
   function extractFromSlip(slip) {
     const text = slipText(slip);
-    if (!text || isEmptySlip(text)) return null;
+    if (!text) return null;
     if (!hasSelectionInSlip(text)) return null;
+    if (isEmptySlip(text) && !hasSelectionInSlip(text)) return null;
     if (isSlipSuspended(text)) {
       return { ok: false, suspended: true, reason: 'market-suspended', source: 'bcgame' };
     }

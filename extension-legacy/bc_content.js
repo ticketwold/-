@@ -21,8 +21,15 @@ function readMainWorldSlipRaw() {
     script.textContent = `(function(){
       var r=null;
       try{
-        if(typeof __bcProbeCartEmpty==='function'){var pe=__bcProbeCartEmpty();if(pe&&pe.empty&&pe.hasSelection===false){r={empty:true};}}
-        if(!r&&typeof __bcReadDirectSlip==='function'){var d=__bcReadDirectSlip();if(d&&d.empty){r={empty:true};}else if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;}
+        if(typeof __bcReadDirectSlip==='function'){
+          var d=__bcReadDirectSlip();
+          if(d&&d.empty){r={empty:true};}
+          else if(d&&(d.suspended||d.odds>1.01||d.ok&&d.odds>1.01))r=d;
+        }
+        if(!r&&typeof __bcProbeCartEmpty==='function'){
+          var pe=__bcProbeCartEmpty();
+          if(pe&&pe.empty&&pe.hasSelection===false)r={empty:true};
+        }
         if(!r&&typeof __bcScrapeOdds==='function'){var s=__bcScrapeOdds();if(s&&s.ok&&s.odds>1.01&&s.sourceKind!=='sports-board-selected')r=s;}
         if(!r&&window.__bcApiSlip&&window.__bcApiSlip.odds>1.01&&window.__bcApiSlip.capturedAt&&Date.now()-window.__bcApiSlip.capturedAt<8000){
           r=Object.assign({},window.__bcApiSlip,{ok:true,fromSlip:true,sourceKind:'bc-api-fresh'});

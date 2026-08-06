@@ -291,7 +291,6 @@ function formatBtiMeta(slip) {
 }
 
 function getBcSlipForUi() {
-  if (bcCartEmptyConfirmed) return null;
   const odds = resolveBcOddsForSync();
   if (!odds || odds <= 1) return null;
   return { ...cachedBc, odds };
@@ -753,6 +752,7 @@ async function probeBcCartEmptyAnyFrame(bcTab) {
   const seen = new Set();
   let sawShell = false;
   let sawSelection = false;
+  let sawOdds = false;
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
     seen.add(frameId);
@@ -761,7 +761,28 @@ async function probeBcCartEmptyAnyFrame(bcTab) {
       sawShell = true;
       if (probe.hasSelection || !probe.empty) sawSelection = true;
     }
+    if (!sawOdds) {
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: bcTab.id, frameIds: [frameId] },
+          world: 'MAIN',
+          func: () => {
+            if (typeof window.__bcReadDirectSlip === 'function') {
+              const d = window.__bcReadDirectSlip();
+              if (d?.odds > 1.01 && !d.empty) return { odds: d.odds };
+            }
+            if (typeof window.__bcProbeDirectSlip === 'function') {
+              const p = window.__bcProbeDirectSlip();
+              if (p?.odds > 1.01 && !p.cartEmpty) return { odds: p.odds };
+            }
+            return null;
+          }
+        });
+        if (results?.[0]?.result?.odds > 1) sawOdds = true;
+      } catch (_) {}
+    }
   }
+  if (sawOdds) return false;
   return sawShell && !sawSelection;
 }
 
@@ -781,7 +802,9 @@ async function readBcSlipAllFrames(bcTab) {
       if (probe.hasSelection || !probe.empty) sawSelection = true;
     }
   }
-  if (sawShell && !sawSelection) return null;
+  if (sawShell && !sawSelection) {
+    // probe가 빈 카트로 오판할 수 있음(금액 미입력 슬립) — 직접 읽기는 계속 시도
+  }
 
   let best = null;
   let bestScore = -1;
@@ -1330,7 +1353,6 @@ async function resolveBtiOddsForSync(btiTab) {
 }
 
 function resolveBcOddsForSync() {
-  if (bcCartEmptyConfirmed) return null;
   if (!cachedBc?.odds || cachedBc.odds <= 1) return null;
   if (isOuLineMistakenAsOdds(cachedBc)) return null;
   if (cachedBc.suspended && !(cachedBc.odds > 1)) return null;
@@ -1343,7 +1365,7 @@ function resolveBcOddsForAmountSync() {
   const direct = resolveBcOddsForSync();
   if (direct > 1) return direct;
   const slip = cachedBc;
-  if (!slip || bcCartEmptyConfirmed) return null;
+  if (!slip) return null;
   if (slip.fromPayout && slip.stake > 0 && slip.payout > slip.stake) {
     const o = Math.round((slip.payout / slip.stake) * 1000) / 1000;
     if (o > 1.01 && o <= 15 && !isOuLineMistakenAsOdds({ ...slip, odds: o })) return o;
@@ -1726,8 +1748,10 @@ async function refreshSlips() {
       cachedBc = null;
       lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
     } else if (poly?.empty || poly?.cartEmpty) {
-      bcCartEmptyConfirmed = true;
-      cachedBc = null;
+      if (!poly?.odds || poly.odds <= 1) {
+        bcCartEmptyConfirmed = true;
+        cachedBc = null;
+      }
     } else {
       bcCartEmptyConfirmed = false;
       cachedBc = coerceSlipCached(poly);
@@ -2738,4 +2762,4 @@ loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.26 ${IS_PANEL ? '패널' : '팝업'} 로드 — OU 라인≠배당`, 'info');
+log(`v5.9.28 ${IS_PANEL ? '패널' : '팝업'} 로드 — 카트 비운 뒤 재선택 인식`, 'info');
