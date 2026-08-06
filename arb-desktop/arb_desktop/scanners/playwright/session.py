@@ -41,6 +41,7 @@ class BrowserSession:
 
         await self.bti_page.goto(settings.bti_wrapper_url, wait_until="domcontentloaded", timeout=30_000)
         await self.bc_page.goto(settings.bc_sports_url, wait_until="domcontentloaded", timeout=30_000)
+        await self.wait_for_frames(self.bti_page, timeout_ms=15_000)
         await self._sync_bti_session()
 
     async def _sync_bti_session(self) -> None:

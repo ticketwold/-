@@ -1,8 +1,11 @@
 /**
- * x10x10s / BTI BetSlip reader — 배팅카트 컨테이너 내부만 탐색.
+ * x10x10s / BTI BetSlip reader — 현재 document(iframe) 내부 betslip 탐색.
  */
-(function () {
+(function (options) {
+  options = options || {};
+  const DEBUG = !!options.debug;
   const SUSPENDED_RE = /정지된|정지됨|마감|closed|suspended|locked|unavailable/i;
+  const SLIP_HINT_RE = /betslip|bet-slip|bet_slip|coupon|ticket|selections/i;
 
   function visible(el) {
     if (!el) return false;
@@ -21,7 +24,8 @@
 
   function selectorHint(el) {
     if (!el) return '';
-    const cls = String(el.className || '').split(/\s+/).filter(Boolean).find((c) => /betslip|BetSecondary|betInformation/i.test(c));
+    if (el.id) return `#${el.id}`;
+    const cls = String(el.className || '').split(/\s+/).filter(Boolean).find((c) => SLIP_HINT_RE.test(c) || /betInformation|BetSecondary/i.test(c));
     if (cls) return `.${cls}`;
     return el.tagName ? el.tagName.toLowerCase() : '';
   }
@@ -39,7 +43,6 @@
     try {
       const cs = window.getComputedStyle(el);
       if ((cs.textDecorationLine || '').includes('line-through')) return true;
-      if ((cs.textDecoration || '').includes('line-through')) return true;
     } catch (_) {}
     const cn = String(el.className || '');
     if (/old|previous|strike|strikethrough|deprecated|crossed/i.test(cn)) return true;
@@ -52,27 +55,43 @@
     let node = el;
     for (let i = 0; i < 18 && node; i++) {
       const blob = `${node.className || ''} ${node.id || ''} ${node.getAttribute?.('data-testid') || ''}`.toLowerCase();
-      if (/mybets|my-bets|bet-history|bethistory|openbets|settledbets|historybets|pastbets/i.test(blob)) return true;
+      if (/mybets|bet-history|bethistory|openbets|settledbets|historybets/i.test(blob)) return true;
       node = node.parentElement;
     }
     return false;
   }
 
-  function findSlipRoot() {
+  function findSlipRoots() {
     const roots = [];
-    for (const el of document.querySelectorAll('[class*="betslip_fe"], [class*="Betslip"], [class*="betslip"]')) {
-      if (!visible(el) || isInsideBetHistory(el)) continue;
-      roots.push(el);
+    const seen = new Set();
+    const selectors = [
+      '[class*="betslip_fe"]',
+      '[class*="Betslip"]',
+      '[class*="betslip"]',
+      '[class*="bet-slip"]',
+      '[class*="coupon"]',
+      '[class*="ticket"]',
+      '[id*="betslip"]',
+      '[data-testid*="betslip"]'
+    ];
+    for (const sel of selectors) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (seen.has(el) || !visible(el) || isInsideBetHistory(el)) continue;
+        const blob = `${el.className || ''} ${el.id || ''}`.toLowerCase();
+        if (!SLIP_HINT_RE.test(blob) && !el.querySelector('[class*="betInformation"]')) continue;
+        seen.add(el);
+        roots.push(el);
+      }
     }
-    if (!roots.length) return null;
     roots.sort((a, b) => text(b).length - text(a).length);
-    return roots[0];
+    return roots;
   }
 
   function getSlipCards(slipRoot) {
     const selectors = [
       '[class*="betslip_fe_BetSecondary_bet"]',
-      '[class*="BetSecondary_bet"]'
+      '[class*="BetSecondary_bet"]',
+      '[class*="betInformation"]'
     ];
     const seen = new Set();
     const cards = [];
@@ -82,7 +101,9 @@
         const cn = String(el.className || '');
         if (cn.includes('wrapper') || cn.includes('counter') || cn.includes('badge') || cn.includes('PlaceBet') || cn.includes('Tab')) continue;
         const hasTitle = el.querySelector('[class*="betInformation__title"]');
-        if (!hasTitle) continue;
+        const txt = text(el);
+        if (!hasTitle && txt.length < 10) continue;
+        if (txt.length > 900) continue;
         seen.add(el);
         cards.push(el);
       }
@@ -92,40 +113,24 @@
 
   function detectMarket(marketTitle, selection) {
     const blob = `${marketTitle} ${selection}`;
-    if (/오버|언더|over|under|total|O\/U|합계/i.test(blob)) return { market: marketTitle || 'Over/Under', kind: 'over_under' };
-    if (/핸디|handicap|spread/i.test(blob)) return { market: marketTitle || 'Handicap', kind: 'handicap' };
-    if (/승패|승자|winner|moneyline|match winner|우승/i.test(blob)) return { market: marketTitle || 'Moneyline', kind: 'moneyline' };
-    return { market: marketTitle || '', kind: 'unknown' };
-  }
-
-  function detectPhase(marketTitle, cardText) {
-    const blob = `${marketTitle} ${cardText}`;
-    if (/live|라이브|in[\s-]?play|진행\s*중/i.test(blob)) return 'live';
-    if (/prematch|프리매치|pre[\s-]?match/i.test(blob)) return 'prematch';
-    return 'unknown';
+    if (/오버|언더|over|under|total|O\/U|합계/i.test(blob)) return { market: marketTitle || 'Over/Under', normalized: 'Over/Under', kind: 'over_under' };
+    if (/핸디|handicap|spread/i.test(blob)) return { market: marketTitle || 'Handicap', normalized: 'Handicap', kind: 'handicap' };
+    if (/승패|승자|winner|moneyline|match winner|우승/i.test(blob)) return { market: marketTitle || 'Moneyline', normalized: 'Moneyline', kind: 'moneyline' };
+    return { market: marketTitle || '', normalized: '', kind: 'unknown' };
   }
 
   function readOddsFromCard(card) {
     if (SUSPENDED_RE.test(text(card))) return null;
-
-    for (const sp of card.querySelectorAll('[class*="UpdateNotification"]')) {
+    for (const sp of card.querySelectorAll('[class*="UpdateNotification"], [class*="odds"], [class*="Odds"], [class*="price"], [class*="Price"]')) {
       if (isStruckThrough(sp)) continue;
       const n = parseOdds(sp.textContent);
       if (n) return n;
     }
-
-    for (const sp of card.querySelectorAll('[class*="odds"], [class*="Odds"], [class*="price"], [class*="Price"]')) {
-      if (isStruckThrough(sp)) continue;
-      const n = parseOdds(sp.textContent);
-      if (n) return n;
-    }
-
     const atM = text(card).match(/@\s*(\d+(?:\.\d{1,4})?)/);
     if (atM) {
       const n = parseOdds(atM[1]);
       if (n) return n;
     }
-
     for (const sp of card.querySelectorAll('span, div, b, strong, p')) {
       if (isStruckThrough(sp)) continue;
       const t = (sp.textContent || '').trim();
@@ -144,17 +149,6 @@
     return Number.isFinite(v) && v > 0 ? v : 0;
   }
 
-  function cardStatus(card) {
-    const t = text(card);
-    if (SUSPENDED_RE.test(t)) return 'suspended';
-    for (const sp of card.querySelectorAll('span, div, label')) {
-      const label = (sp.textContent || '').trim();
-      if (/^정지된$|^정지$|^마감$|^Suspended$|^Closed$/i.test(label)) return 'suspended';
-    }
-    const odds = readOddsFromCard(card);
-    return odds ? 'active' : 'odds_missing';
-  }
-
   function parseCard(card, slipRoot) {
     const titleEls = card.querySelectorAll('[class*="betInformation__title"]');
     const selection = titleEls[0] ? titleEls[0].textContent.trim() : '';
@@ -162,46 +156,72 @@
     const eventEl = card.querySelector('[class*="eventName"], [class*="betInformation__eventName"]');
     const event = eventEl ? eventEl.textContent.trim() : '';
     const marketInfo = detectMarket(marketTitle, selection);
-    const status = cardStatus(card);
-    const odds = status === 'suspended' ? null : readOddsFromCard(card);
-    const eventPhase = detectPhase(marketTitle, text(card));
-    const containerSelector = selectorHint(card);
-
+    const suspended = SUSPENDED_RE.test(text(card));
+    const odds = suspended ? null : readOddsFromCard(card);
     return {
       event,
       market: marketInfo.market,
+      market_normalized: marketInfo.normalized,
       selection,
       odds,
-      status,
+      status: suspended ? 'suspended' : (odds ? 'active' : 'odds_missing'),
       stake: readStake(slipRoot) || null,
-      event_phase: eventPhase,
       market_kind: marketInfo.kind,
-      container_selector: containerSelector,
-      item_key: `${event}|${marketInfo.market}|${selection}`.toLowerCase()
+      container_selector: selectorHint(card)
     };
   }
 
-  function readBtiBetSlip() {
-    const slipRoot = findSlipRoot();
-    if (!slipRoot) {
-      return { ok: false, empty: true, items: [], reason: 'no-slip-root', container_selector: '' };
+  function probe() {
+    const frameUrl = location.href;
+    const roots = findSlipRoots();
+    const probes = roots.map((root) => ({
+      container_selector: selectorHint(root),
+      card_count: getSlipCards(root).length,
+      text_preview: text(root).slice(0, 120)
+    }));
+
+    if (!roots.length) {
+      return {
+        ok: false,
+        empty: true,
+        items: [],
+        reason: 'no-slip-root',
+        frame_url: frameUrl,
+        can_scan: false,
+        probes,
+        debug: DEBUG ? { frame_url: frameUrl, probes } : undefined
+      };
     }
 
-    const cards = getSlipCards(slipRoot);
-    if (!cards.length) {
-      return { ok: true, empty: true, items: [], reason: 'empty-slip', container_selector: selectorHint(slipRoot) };
+    for (const root of roots) {
+      const cards = getSlipCards(root);
+      if (!cards.length) continue;
+      const items = [parseCard(cards[cards.length - 1], root)];
+      if (items[0].event || items[0].selection) {
+        return {
+          ok: true,
+          empty: false,
+          items,
+          source: 'dom',
+          frame_url: frameUrl,
+          container_selector: selectorHint(root),
+          can_scan: true,
+          probes
+        };
+      }
     }
 
-    const items = [parseCard(cards[cards.length - 1], slipRoot)];
     return {
       ok: true,
-      empty: false,
-      items,
-      source: 'dom',
-      reason: '',
-      container_selector: selectorHint(slipRoot)
+      empty: true,
+      items: [],
+      reason: 'empty-slip',
+      frame_url: frameUrl,
+      container_selector: selectorHint(roots[0]),
+      can_scan: true,
+      probes
     };
   }
 
-  return readBtiBetSlip();
-})();
+  return probe();
+})

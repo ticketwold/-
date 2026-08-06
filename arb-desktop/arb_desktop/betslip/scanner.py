@@ -15,9 +15,9 @@ class BetSlipScanner:
         self._bc_network_odds: float | None = None
         self._bti_network_odds: float | None = None
 
-    async def scan(self) -> BetSlipScanResult:
-        bc = await read_bc_betslip(self._session.bc_page)
-        bti = await read_bti_betslip(self._session.bti_page)
+    async def scan(self, *, debug: bool = False, cart_wait_sec: float = 30.0) -> BetSlipScanResult:
+        bc = await read_bc_betslip(self._session.bc_page, debug=debug)
+        bti = await read_bti_betslip(self._session.bti_page, debug=debug, wait_sec=cart_wait_sec)
 
         match = check_slip_pair(bc, bti)
         match = apply_network_verification(
@@ -39,9 +39,3 @@ class BetSlipScanner:
             )
 
         return BetSlipScanResult(bc=bc, bti=bti, match=match, arbitrage=arbitrage)
-
-    def set_network_odds(self, *, bc: float | None = None, bti: float | None = None) -> None:
-        if bc is not None:
-            self._bc_network_odds = bc
-        if bti is not None:
-            self._bti_network_odds = bti

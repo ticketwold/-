@@ -94,7 +94,7 @@ class BetSlipItem:
         return cls(
             site=site,
             event=str(data.get("event") or "").strip(),
-            market=str(data.get("market") or "").strip(),
+            market=str(data.get("market") or data.get("market_raw") or "").strip(),
             selection=str(data.get("selection") or "").strip(),
             odds=odds,
             status=status,

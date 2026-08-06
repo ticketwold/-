@@ -31,12 +31,17 @@ def format_stake(stake: float | None) -> str:
 
 
 def format_betslip_block(item: BetSlipItem) -> str:
-    return "\n".join(
+    lines = [
+        "[BETSLIP]",
+        f"site: {item.site}",
+        f"event: {item.event or '-'}",
+        f"market: {item.market or '-'}",
+    ]
+    market_norm = item.raw.get("market_normalized")
+    if market_norm:
+        lines.append(f"market_normalized: {market_norm}")
+    lines.extend(
         [
-            "[BETSLIP]",
-            f"site: {item.site}",
-            f"event: {item.event or '-'}",
-            f"market: {item.market or '-'}",
             f"selection: {item.selection or '-'}",
             f"odds: {format_odds(item.odds)}",
             f"status: {item.status.value}",
@@ -46,6 +51,7 @@ def format_betslip_block(item: BetSlipItem) -> str:
             f"container_selector: {item.container_selector or '-'}",
         ]
     )
+    return "\n".join(lines)
 
 
 def empty_betslip_block(site: str, status: SlipStatus = SlipStatus.EMPTY, reason: str = "") -> str:
