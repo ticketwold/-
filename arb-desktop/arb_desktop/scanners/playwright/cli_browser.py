@@ -17,7 +17,7 @@ def add_browser_arguments(parser: argparse.ArgumentParser) -> None:
         "--chrome-profile",
         dest="chrome_profile_directory",
         default=None,
-        help="기존 프로필 디렉터리명 (예: Default, Profile 1)",
+        help="기존 프로필 디렉터리명 (기본: Profile 3, 예: Default, Profile 1)",
     )
     parser.add_argument(
         "--chrome-user-data",

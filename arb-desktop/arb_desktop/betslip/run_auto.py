@@ -33,7 +33,7 @@ def _print_result(result) -> None:
 
 
 def _print_browser_info() -> None:
-    print("=== Auto BetSlip Pipeline v1.0.9 ===", flush=True)
+    print("=== Auto BetSlip Pipeline v1.0.10 ===", flush=True)
     print(f"dry_run={settings.dry_run} live_execution={settings.live_execution_enabled}", flush=True)
     print(f"profile_mode={settings.chrome_profile_mode}", flush=True)
     if settings.uses_existing_chrome_profile:
@@ -43,7 +43,7 @@ def _print_browser_info() -> None:
     else:
         print(f"전용 프로필: {settings.chrome_profile_dir}", flush=True)
     print("", flush=True)
-    print("launch_persistent_context로 기존 Chrome 프로필을 직접 엽니다.", flush=True)
+    print("Chrome 실행 중 → 기존 탭 attach / 없으면 Profile 3 launch_persistent_context", flush=True)
     print("양쪽 배팅카트 준비 후 Enter → SCAN~READY 파이프라인 (Bet 버튼 자동 클릭 없음)", flush=True)
     print("", flush=True)
 
@@ -81,7 +81,7 @@ async def run(*, input_stakes: bool, debug: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="BetSlip 자동배팅 파이프라인 v1.0.9")
+    parser = argparse.ArgumentParser(description="BetSlip 자동배팅 파이프라인 v1.0.10")
     add_browser_arguments(parser)
     parser.add_argument("--input", action="store_true", help="드라이런 해제 시 stake 자동 입력")
     parser.add_argument("--live", action="store_true", help="Live execution 플래그 (Bet 클릭은 여전히 수동)")

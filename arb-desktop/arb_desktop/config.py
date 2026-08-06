@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
     chrome_profile_directory: str = "Profile 3"
     chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
-    persist_sessions: bool = True
+    chrome_cdp_urls: tuple[str, ...] = ("http://127.0.0.1:9222", "http://127.0.0.1:9229")
+    chrome_cdp_timeout_ms: int = 5000
+    persist_sessions: bool = False
 
     @property
     def user_data_dir(self) -> Path:

@@ -9,7 +9,9 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
 from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
+from arb_desktop.scanners.playwright.chrome_attach import discover_cdp_endpoints, is_chrome_running
 from arb_desktop.scanners.playwright.chrome_profile import (
+    ChromeProfileError,
     launch_args_for_mode,
     resolve_chrome_user_data_dir,
     validate_profile_directory,
@@ -41,12 +43,13 @@ def log_step(message: str) -> None:
 
 
 class BrowserSession:
-    """공유 Playwright 세션 — launch_persistent_context + 기존 Chrome 프로필."""
+    """Running Chrome → 탭 재사용(attach). 없을 때만 launch_persistent_context(Profile 3)."""
 
     def __init__(self) -> None:
         self._pw = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
+        self._attached = False
         self.bti_page: Page | None = None
         self.bc_page: Page | None = None
         self.bti_origin: str | None = None
@@ -62,25 +65,27 @@ class BrowserSession:
         return settings.chrome_profile_dir
 
     async def start(self) -> None:
-        log_step("[STEP1] Launch Chrome")
-
         if settings.uses_existing_chrome_profile:
             validate_profile_directory(self.user_data_path, self.profile_directory)
         else:
             self.user_data_path.mkdir(parents=True, exist_ok=True)
 
         self._pw = await async_playwright().start()
-        launch_args = launch_args_for_mode(self.profile_mode, self.profile_directory)
 
-        self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self.user_data_path),
-            executable_path=str(settings.chrome_executable),
-            headless=settings.headless,
-            viewport={"width": 1400, "height": 900},
-            args=launch_args,
-        )
-        self._browser = None
+        if is_chrome_running():
+            log_step("[MODE] Attach Existing Chrome")
+            if not await self._attach_existing_chrome():
+                raise ChromeProfileError(
+                    "실행 중인 Chrome 탭에 연결하지 못했습니다. "
+                    "Profile Lock을 피하기 위해 새 Chrome을 실행하지 않습니다."
+                )
+            self._attached = True
+        else:
+            log_step("[MODE] Launch Persistent Profile")
+            await self._launch_persistent_profile()
+            self._attached = False
 
+        log_step("[STEP1] Launch Chrome")
         log_step("[STEP2] Open BC")
         log_step("[STEP3] Open x10")
         self.bti_page, self.bc_page = await self._open_site_pages()
@@ -91,6 +96,42 @@ class BrowserSession:
         await self._sync_bti_session()
         if setup_monitors and self.bc_page and self.bti_page:
             await setup_monitors(self.bc_page, self.bti_page)
+
+    async def _attach_existing_chrome(self) -> bool:
+        if not self._pw:
+            return False
+
+        endpoints = discover_cdp_endpoints(self.user_data_path, settings.chrome_cdp_urls)
+        for endpoint in endpoints:
+            try:
+                browser = await self._pw.chromium.connect_over_cdp(
+                    endpoint,
+                    timeout=settings.chrome_cdp_timeout_ms,
+                )
+                context = browser.contexts[0] if browser.contexts else None
+                if not context:
+                    await _safe_close(lambda: browser.close())
+                    continue
+                self._browser = browser
+                self._context = context
+                return True
+            except Exception:
+                continue
+        return False
+
+    async def _launch_persistent_profile(self) -> None:
+        if not self._pw:
+            raise RuntimeError("playwright not started")
+
+        launch_args = launch_args_for_mode(self.profile_mode, self.profile_directory)
+        self._context = await self._pw.chromium.launch_persistent_context(
+            user_data_dir=str(self.user_data_path),
+            executable_path=str(settings.chrome_executable),
+            headless=settings.headless,
+            viewport={"width": 1400, "height": 900},
+            args=launch_args,
+        )
+        self._browser = None
 
     async def _open_site_pages(self) -> tuple[Page, Page]:
         if not self._context:
@@ -125,10 +166,11 @@ class BrowserSession:
             if any(hint in current for hint in host_hints):
                 return page
 
-        for page in self._context.pages:
-            if page not in excluded:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                return page
+        if self._context.pages:
+            for page in self._context.pages:
+                if page not in excluded:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    return page
 
         return await self._context.new_page()
 
@@ -155,25 +197,18 @@ class BrowserSession:
             self.bti_origin = origin
             self.bti_rest.set_session(origin, jar)
 
-    async def save_state(self) -> None:
-        if settings.uses_existing_chrome_profile:
-            return
-        if not self._context or not settings.persist_sessions:
-            return
-        backup = self.user_data_path / "storage-backup.json"
-        await _safe_close(lambda: self._context.storage_state(path=str(backup)))  # type: ignore[union-attr]
-
     async def stop(self) -> None:
         await self.bti_rest.close()
         await self.sptpub_client.close()
-        if self._context:
-            await self.save_state()
+        if self._attached:
+            if self._browser:
+                await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
+        elif self._context:
             await _safe_close(lambda: self._context.close())  # type: ignore[union-attr]
-        if self._browser:
-            await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
         if self._pw:
             await _safe_close(lambda: self._pw.stop())  # type: ignore[union-attr]
         self._pw = self._browser = self._context = None
+        self._attached = False
 
     async def wait_for_frames(self, page: Page, timeout_ms: int = 8000) -> None:
         deadline = asyncio.get_event_loop().time() + timeout_ms / 1000
