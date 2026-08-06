@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
     chrome_profile_directory: str = "Default"
     chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
+    chrome_cdp_urls: tuple[str, ...] = ("http://127.0.0.1:9222", "http://127.0.0.1:9229")
+    chrome_cdp_timeout_ms: int = 5000
+    chrome_remote_debugging_port: int = 9222
     persist_sessions: bool = True
 
     @property

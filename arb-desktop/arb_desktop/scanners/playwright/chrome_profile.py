@@ -6,8 +6,6 @@ from pathlib import Path
 
 PROFILE_LOCK_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 
-CHROME_CLOSE_MESSAGE = "모든 Chrome 창을 완전히 종료한 뒤 다시 실행하세요."
-
 
 class ChromeProfileError(RuntimeError):
     """Chrome 프로필 실행 전 검증 실패."""
@@ -72,15 +70,35 @@ def find_profile_locks(user_data_dir: Path) -> list[str]:
     return found
 
 
-def validate_existing_profile_launch(user_data_dir: Path, profile_directory: str) -> None:
-    """기존 Chrome 프로필 모드 — Chrome 종료·잠금 파일·프로필 존재 확인."""
-    if is_chrome_running():
-        raise ChromeProfileError(CHROME_CLOSE_MESSAGE)
+def read_devtools_active_port(user_data_dir: Path) -> int | None:
+    port_file = user_data_dir / "DevToolsActivePort"
+    if not port_file.is_file():
+        return None
+    try:
+        first_line = port_file.read_text(encoding="utf-8", errors="ignore").splitlines()[0].strip()
+        port = int(first_line)
+        return port if port > 0 else None
+    except (IndexError, ValueError, OSError):
+        return None
 
-    locks = find_profile_locks(user_data_dir)
-    if locks:
-        raise ChromeProfileError(f"{CHROME_CLOSE_MESSAGE} (프로필 잠금: {', '.join(locks)})")
 
+def cdp_endpoint_candidates(user_data_dir: Path, extra_urls: tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    urls: list[str] = []
+    port = read_devtools_active_port(user_data_dir)
+    if port:
+        endpoint = f"http://127.0.0.1:{port}"
+        seen.add(endpoint)
+        urls.append(endpoint)
+    for raw in extra_urls:
+        url = raw.strip()
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def validate_profile_directory(user_data_dir: Path, profile_directory: str) -> None:
     profile_path = user_data_dir / profile_directory
     if not profile_path.is_dir():
         raise ChromeProfileError(f"프로필을 찾을 수 없습니다: {profile_path}")

@@ -10,9 +10,12 @@ from arb_desktop.config import settings
 from arb_desktop.scanners.network.bti_rest import BTI_HOST_HINTS, BtiRestScanner, detect_bti_origin_from_url
 from arb_desktop.scanners.network.sptpub_v4 import SptpubV4Client
 from arb_desktop.scanners.playwright.chrome_profile import (
+    ChromeProfileError,
+    cdp_endpoint_candidates,
+    is_chrome_running,
     launch_args_for_mode,
     resolve_chrome_user_data_dir,
-    validate_existing_profile_launch,
+    validate_profile_directory,
 )
 
 try:
@@ -35,13 +38,19 @@ async def _safe_close(coro_factory) -> None:
         if not _is_target_closed_error(exc):
             raise
 
+
+def log_step(message: str) -> None:
+    print(message, flush=True)
+
+
 class BrowserSession:
-    """공유 Playwright 세션 — 정식 Chrome persistent 프로필로 로그인·쿠키 유지."""
+    """공유 Playwright 세션 — 정식 Chrome persistent 프로필 또는 CDP 연결."""
 
     def __init__(self) -> None:
         self._pw = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
+        self._cdp_attached = False
         self.bti_page: Page | None = None
         self.bc_page: Page | None = None
         self.bti_origin: str | None = None
@@ -57,14 +66,70 @@ class BrowserSession:
         return settings.chrome_profile_dir
 
     async def start(self) -> None:
+        log_step("[STEP1] Launch Chrome")
+
         if settings.uses_existing_chrome_profile:
-            validate_existing_profile_launch(self.user_data_path, self.profile_directory)
+            validate_profile_directory(self.user_data_path, self.profile_directory)
         else:
             self.user_data_path.mkdir(parents=True, exist_ok=True)
 
-        launch_args = launch_args_for_mode(self.profile_mode, self.profile_directory)
-
         self._pw = await async_playwright().start()
+
+        if is_chrome_running():
+            log_step("[STEP1] Chrome 실행 중 — CDP 연결 시도")
+            if await self._try_connect_cdp():
+                log_step("[STEP1] 기존 Chrome CDP 연결 성공")
+            else:
+                raise ChromeProfileError(
+                    "실행 중인 Chrome에 연결하지 못했습니다. "
+                    "Chrome 바로가기 대상 끝에 --remote-debugging-port=9222 를 추가한 뒤 "
+                    "Chrome을 다시 실행해 주세요."
+                )
+        else:
+            await self._launch_persistent()
+
+        log_step("[STEP2] Open BC")
+        log_step("[STEP3] Open x10")
+        self.bti_page, self.bc_page = await self._open_site_pages()
+
+        await self.bc_page.goto(settings.bc_sports_url, wait_until="domcontentloaded", timeout=30_000)
+        await self.bti_page.goto(settings.bti_wrapper_url, wait_until="domcontentloaded", timeout=30_000)
+        await self.wait_for_frames(self.bti_page, timeout_ms=15_000)
+        await self._sync_bti_session()
+        if setup_monitors and self.bc_page and self.bti_page:
+            await setup_monitors(self.bc_page, self.bti_page)
+
+    async def _try_connect_cdp(self) -> bool:
+        if not self._pw:
+            return False
+
+        endpoints = cdp_endpoint_candidates(self.user_data_path, settings.chrome_cdp_urls)
+        for endpoint in endpoints:
+            try:
+                browser = await self._pw.chromium.connect_over_cdp(
+                    endpoint,
+                    timeout=settings.chrome_cdp_timeout_ms,
+                )
+                self._browser = browser
+                self._cdp_attached = True
+                self._context = browser.contexts[0] if browser.contexts else None
+                if self._context:
+                    return True
+                await _safe_close(lambda: browser.close())
+                self._browser = None
+                self._cdp_attached = False
+            except Exception:
+                continue
+        return False
+
+    async def _launch_persistent(self) -> None:
+        if not self._pw:
+            raise RuntimeError("playwright not started")
+
+        launch_args = list(launch_args_for_mode(self.profile_mode, self.profile_directory))
+        if settings.chrome_remote_debugging_port > 0:
+            launch_args.append(f"--remote-debugging-port={settings.chrome_remote_debugging_port}")
+
         self._context = await self._pw.chromium.launch_persistent_context(
             user_data_dir=str(self.user_data_path),
             channel=settings.chrome_channel,
@@ -73,27 +138,47 @@ class BrowserSession:
             args=launch_args,
         )
         self._browser = None
+        self._cdp_attached = False
 
-        self.bti_page, self.bc_page = await self._ensure_site_pages()
-
-        await self.bti_page.goto(settings.bti_wrapper_url, wait_until="domcontentloaded", timeout=30_000)
-        await self.bc_page.goto(settings.bc_sports_url, wait_until="domcontentloaded", timeout=30_000)
-        await self.wait_for_frames(self.bti_page, timeout_ms=15_000)
-        await self._sync_bti_session()
-        if setup_monitors and self.bc_page and self.bti_page:
-            await setup_monitors(self.bc_page, self.bti_page)
-
-    async def _ensure_site_pages(self) -> tuple[Page, Page]:
+    async def _open_site_pages(self) -> tuple[Page, Page]:
         if not self._context:
             raise RuntimeError("browser context not started")
 
-        pages = list(self._context.pages)
-        if len(pages) >= 2:
-            return pages[0], pages[1]
-
-        bti_page = pages[0] if pages else await self._context.new_page()
-        bc_page = pages[1] if len(pages) > 1 else await self._context.new_page()
+        bc_page = await self._find_or_new_page(
+            host_hints=("bc.game", "bcgame"),
+            url=settings.bc_sports_url,
+        )
+        bti_page = await self._find_or_new_page(
+            host_hints=("x10x10s", "x10"),
+            url=settings.bti_wrapper_url,
+            exclude={bc_page},
+        )
         return bti_page, bc_page
+
+    async def _find_or_new_page(
+        self,
+        *,
+        host_hints: tuple[str, ...],
+        url: str,
+        exclude: set[Page] | None = None,
+    ) -> Page:
+        if not self._context:
+            raise RuntimeError("browser context not started")
+
+        excluded = exclude or set()
+        for page in self._context.pages:
+            if page in excluded:
+                continue
+            current = page.url.lower()
+            if any(hint in current for hint in host_hints):
+                return page
+
+        for page in self._context.pages:
+            if page not in excluded:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                return page
+
+        return await self._context.new_page()
 
     async def _sync_bti_session(self) -> None:
         if not self._context:
@@ -119,8 +204,7 @@ class BrowserSession:
             self.bti_rest.set_session(origin, jar)
 
     async def save_state(self) -> None:
-        """dedicated 모드만 storage 백업 — existing 모드는 persistent 프로필 자체에 저장."""
-        if settings.uses_existing_chrome_profile:
+        if settings.uses_existing_chrome_profile or self._cdp_attached:
             return
         if not self._context or not settings.persist_sessions:
             return
@@ -130,14 +214,18 @@ class BrowserSession:
     async def stop(self) -> None:
         await self.bti_rest.close()
         await self.sptpub_client.close()
-        if self._context:
+        if self._cdp_attached:
+            if self._browser:
+                await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
+        elif self._context:
             await self.save_state()
             await _safe_close(lambda: self._context.close())  # type: ignore[union-attr]
-        if self._browser:
+        if self._browser and not self._cdp_attached:
             await _safe_close(lambda: self._browser.close())  # type: ignore[union-attr]
         if self._pw:
             await _safe_close(lambda: self._pw.stop())  # type: ignore[union-attr]
         self._pw = self._browser = self._context = None
+        self._cdp_attached = False
 
     async def wait_for_frames(self, page: Page, timeout_ms: int = 8000) -> None:
         deadline = asyncio.get_event_loop().time() + timeout_ms / 1000

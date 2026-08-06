@@ -6,11 +6,12 @@ from unittest.mock import patch
 import pytest
 
 from arb_desktop.scanners.playwright.chrome_profile import (
-    CHROME_CLOSE_MESSAGE,
     ChromeProfileError,
+    cdp_endpoint_candidates,
     find_profile_locks,
     launch_args_for_mode,
-    validate_existing_profile_launch,
+    read_devtools_active_port,
+    validate_profile_directory,
 )
 
 
@@ -26,31 +27,19 @@ def test_find_profile_locks(tmp_path: Path):
     assert find_profile_locks(tmp_path) == ["SingletonLock"]
 
 
-def test_validate_aborts_when_chrome_running(tmp_path: Path):
-    (tmp_path / "Default").mkdir()
-    with patch(
-        "arb_desktop.scanners.playwright.chrome_profile.is_chrome_running",
-        return_value=True,
-    ):
-        with pytest.raises(ChromeProfileError, match=CHROME_CLOSE_MESSAGE):
-            validate_existing_profile_launch(tmp_path, "Default")
+def test_read_devtools_active_port(tmp_path: Path):
+    assert read_devtools_active_port(tmp_path) is None
+    (tmp_path / "DevToolsActivePort").write_text("9333\n/dev/null\n", encoding="utf-8")
+    assert read_devtools_active_port(tmp_path) == 9333
 
 
-def test_validate_aborts_on_lock_files(tmp_path: Path):
-    (tmp_path / "Default").mkdir()
-    (tmp_path / "SingletonCookie").write_text("x", encoding="utf-8")
-    with patch(
-        "arb_desktop.scanners.playwright.chrome_profile.is_chrome_running",
-        return_value=False,
-    ):
-        with pytest.raises(ChromeProfileError, match="SingletonCookie"):
-            validate_existing_profile_launch(tmp_path, "Default")
+def test_cdp_endpoint_candidates(tmp_path: Path):
+    (tmp_path / "DevToolsActivePort").write_text("9444\n", encoding="utf-8")
+    urls = cdp_endpoint_candidates(tmp_path, ("http://127.0.0.1:9222",))
+    assert urls[0] == "http://127.0.0.1:9444"
+    assert "http://127.0.0.1:9222" in urls
 
 
 def test_validate_missing_profile(tmp_path: Path):
-    with patch(
-        "arb_desktop.scanners.playwright.chrome_profile.is_chrome_running",
-        return_value=False,
-    ):
-        with pytest.raises(ChromeProfileError, match="프로필을 찾을 수 없습니다"):
-            validate_existing_profile_launch(tmp_path, "Default")
+    with pytest.raises(ChromeProfileError, match="프로필을 찾을 수 없습니다"):
+        validate_profile_directory(tmp_path, "Default")

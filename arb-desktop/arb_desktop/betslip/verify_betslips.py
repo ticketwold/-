@@ -17,8 +17,7 @@ from arb_desktop.scanners.playwright.session import BrowserSession
 
 
 async def wait_for_enter(prompt: str) -> None:
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, lambda: input(prompt))
+    await asyncio.to_thread(input, prompt)
 
 
 def _print_bc_debug(raw: dict) -> None:
