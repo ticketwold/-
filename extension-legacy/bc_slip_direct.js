@@ -52,6 +52,38 @@
     return /슬립이\s*비어|선택한\s*베팅\s*없|empty\s*(bet\s*)?slip|no\s*selection|add\s*selections?/i.test(t);
   }
 
+  function findBetSlipShell() {
+    let best = null;
+    let bestScore = -1;
+    const vw = window.innerWidth || 1200;
+    walk(document.documentElement, (el) => {
+      if (el.nodeType !== 1 || !visible(el)) return;
+      const t = slipText(el);
+      if (t.length < 12 || t.length > 4000) return;
+      if (isHistoryPanel(t)) return;
+      const hasSlipUi = /베팅\s*슬립|bet\s*slip|betslip/i.test(t)
+        || (/단일|조합|시스템/.test(t) && /USDT|베팅하기|place\s*bet/i.test(t));
+      if (!hasSlipUi) return;
+      let score = /베팅\s*슬립|bet\s*slip/i.test(t) ? 120 : 60;
+      if (isEmptySlip(t)) score += 300;
+      const r = el.getBoundingClientRect();
+      if (r.x > vw * 0.38) score += 80;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }, 0);
+    return best;
+  }
+
+  function isCartEmptyNow() {
+    const shell = findBetSlipShell();
+    if (shell && isEmptySlip(slipText(shell))) return true;
+    const body = document.body?.innerText || '';
+    if (/베팅\s*슬립|bet\s*slip/i.test(body) && isEmptySlip(body)) return true;
+    return false;
+  }
+
   const CHIP = new Set([10, 20, 50, 100, 300, 0.2]);
 
   function findSlipRoot() {
@@ -202,11 +234,21 @@
   }
 
   window.__bcReadDirectSlip = function () {
+    if (isCartEmptyNow()) {
+      return { ok: false, empty: true, reason: 'empty-slip' };
+    }
     const slip = findSlipRoot();
-    if (!slip) return { ok: false, reason: 'no-slip-root' };
+    if (!slip) {
+      if (isCartEmptyNow()) return { ok: false, empty: true, reason: 'empty-slip' };
+      return { ok: false, reason: 'no-slip-root' };
+    }
     const r = extractFromSlip(slip);
     if (!r) return { ok: false, reason: 'slip-parse-fail', sample: slipText(slip).slice(0, 240) };
     return r;
+  };
+
+  window.__bcProbeCartEmpty = function () {
+    return { empty: isCartEmptyNow(), hasSlipShell: !!findBetSlipShell() };
   };
 
   window.__bcProbeDirectSlip = function () {

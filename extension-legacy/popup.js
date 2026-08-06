@@ -506,18 +506,15 @@ async function injectReadBcSports(tabId, frameId = 0) {
         }
         try {
           if (typeof window.__bcReadDirectSlip === 'function') {
-            const d = pack(window.__bcReadDirectSlip());
-            if (d) return d;
+            const d = window.__bcReadDirectSlip();
+            if (d?.empty) return { empty: true, cartEmpty: true };
+            const packed = pack(d);
+            if (packed) return packed;
           }
           if (typeof window.__bcReadNativeSlip === 'function') {
             const n = window.__bcReadNativeSlip();
             const p = pack(n?.ok ? n : n);
             if (p) return p;
-          }
-          if (typeof window.__bcScrapeOdds === 'function') {
-            const s = window.__bcScrapeOdds();
-            const p = pack(s?.ok ? s : s);
-            if (p && p.sourceKind !== 'sports-board-selected') return p;
           }
         } catch (_) {}
         return null;
@@ -570,6 +567,7 @@ async function readBcSlipAllFrames(bcTab) {
   const seen = new Set();
   let best = null;
   let bestScore = -1;
+  let sawEmptyCart = false;
 
   for (const frameId of order) {
     if (seen.has(frameId)) continue;
@@ -577,26 +575,40 @@ async function readBcSlipAllFrames(bcTab) {
     await ensureBcScript(bcTab.id, frameId);
 
     const injected = await injectReadBcSports(bcTab.id, frameId);
+    if (injected?.empty || injected?.cartEmpty) {
+      sawEmptyCart = true;
+      continue;
+    }
     if (injected?.odds > 1) {
       const sc = scoreBcSlip(injected);
-      if (injected.sourceKind === 'bc-direct-slip' && sc >= bestScore) return injected;
-      if (sc > bestScore) {
+      if (injected.sourceKind === 'bc-direct-slip' && sc >= bestScore) {
+        best = injected;
+        bestScore = sc;
+      } else if (sc > bestScore) {
         bestScore = sc;
         best = injected;
       }
     }
 
     const res = await sendBc(bcTab.id, { type: 'READ_SLIP' }, frameId);
-    let slip = res?.slip;
-    if (!slip?.odds && !slip?.fromPayout) continue;
-    if (slip && !isCartSlip(slip) && !slip.fromPayout) continue;
+    const slip = res?.slip;
+    if (slip?.empty || slip?.cartEmpty) {
+      sawEmptyCart = true;
+      continue;
+    }
+    if (!slip?.odds || slip.odds <= 1) continue;
+    if (!isCartSlip(slip) && !slip.fromPayout) continue;
     const sc = scoreBcSlip(slip);
-    if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) return slip;
-    if (sc > bestScore) {
+    if (slip.fromPayout && slip.odds > 1.01 && sc >= bestScore) {
+      best = slip;
+      bestScore = sc;
+    } else if (sc > bestScore) {
       bestScore = sc;
       best = slip;
     }
   }
+
+  if (sawEmptyCart && !best) return null;
   return best;
 }
 
@@ -1279,6 +1291,10 @@ async function readBcSlip(bcTab) {
   await ensureBcScript(bcTab.id);
 
   let slip = await readBcSlipAllFrames(bcTab);
+  if (!slip) {
+    lastStatus.bc = 'BC.Game: 배팅카트 비어 있음';
+    return { source: 'bcgame', odds: null, cartEmpty: true, empty: true };
+  }
 
   if (!slip?.fromPayout) {
     const injected = await injectReadBc(bcTab.id);
@@ -1351,8 +1367,9 @@ function applySlipUpdate(source, slip, opts = {}) {
     }
   }
   if (source === 'bcgame') {
-    if (opts.cartEmpty || !slip) cachedBc = null;
-    else if (slip.suspended) {
+    if (opts.cartEmpty || slip?.empty || slip?.cartEmpty || !slip) {
+      cachedBc = null;
+    } else if (slip.suspended) {
       cachedBc = { ...slip, odds: slip.odds > 1 ? slip.odds : null, suspended: true };
     } else {
       const normalized = normalizeCartSlip(slip);
@@ -1382,13 +1399,17 @@ async function refreshSlips() {
       if (cartCheck.cartEmpty && !bti?.odds && cachedBti && isCartSlip(cachedBti)) cachedBti = null;
     }
 
-    cachedBc = (() => {
-      if (poly?.suspended) return { ...poly, odds: poly.odds > 1 ? poly.odds : null, suspended: true };
-      const norm = normalizeCartSlip(poly);
-      if (norm) return norm;
-      if (poly?.needsStake) return poly;
-      return null;
-    })();
+    if (poly?.empty || poly?.cartEmpty) {
+      cachedBc = null;
+    } else {
+      cachedBc = (() => {
+        if (poly?.suspended) return { ...poly, odds: poly.odds > 1 ? poly.odds : null, suspended: true };
+        const norm = normalizeCartSlip(poly);
+        if (norm) return norm;
+        if (poly?.needsStake) return poly;
+        return null;
+      })();
+    }
     cachedBti = (() => {
       const o = slipOdds(bti);
       if (o) return { ...bti, odds: o };
@@ -1825,10 +1846,14 @@ async function strikeBothBets(found, btiBet, polyUsd, btiOdds, btiArb) {
       placeBcBet(found.bcTab, polyUsd, { skipFill: true })
     ]);
 
-    if (btiRes?.success && polyRes?.success) {
+    if (btiRes?.success || polyRes?.success) {
       lastStrikeAt = Date.now();
-      log('동시 배팅 성공', 'ok');
+      const parts = [];
+      if (btiRes?.success) parts.push('텐텐뱃');
+      if (polyRes?.success) parts.push('BC');
+      log(`배팅 완료 — ${parts.join(' + ')}`, 'ok');
       stopAutoBetOnly(true);
+      log('자동 배팅 종료', 'info');
     } else {
       const parts = [];
       if (!btiRes?.success) parts.push(`텐텐뱃: ${btiRes?.reason || '실패'}`);
@@ -1908,11 +1933,6 @@ async function initSyncFromStorage() {
         chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: true }).catch(() => {});
       }
     }
-    if (s.autoSyncEnabled === false && !autoBetWanted) {
-      autoSyncEnabled = false;
-      updateAutomationButtons();
-      return;
-    }
   } catch (_) {}
   enableAutoSync();
 }
@@ -1926,53 +1946,27 @@ function enableAutoSync() {
 }
 
 function isAutomationActive() {
-  return autoBetRunning || autoBetWanted || autoSyncEnabled;
+  return autoBetWanted || autoBetRunning;
 }
 
 function updateAutomationButtons() {
-  const syncStopBtn = $('syncStop');
-  const syncStartBtn = $('syncAmountsBtn');
   const betStartBtn = $('autoBetStart');
   const betStopBtn = $('autoBetStop');
 
-  if (syncStopBtn) syncStopBtn.disabled = !autoSyncEnabled;
-  if (syncStartBtn) syncStartBtn.classList.toggle('primary', autoSyncEnabled);
-  if (betStartBtn) betStartBtn.disabled = autoBetWanted;
-  if (betStopBtn) betStopBtn.disabled = !isAutomationActive();
+  if (betStartBtn) betStartBtn.disabled = autoBetWanted && autoBetRunning;
+  if (betStopBtn) betStopBtn.disabled = !autoBetWanted;
   const hint = $('profitHint');
   if (hint && autoBetPausedByClose) {
     hint.textContent = '배당 마감 — 자동배팅 일시정지 (재개 대기)';
+  } else if (hint && autoBetWanted && autoBetRunning) {
+    hint.textContent = '자동배팅 가동 중 — 수익 조건 충족 시 즉시 배팅';
   }
 }
 
 const updateSyncButtons = updateAutomationButtons;
 
-function startSync() {
-  enableAutoSync();
-  lastSyncedBtiKrw = 0;
-  lastSyncedBcUsd = 0;
-  lastSyncedAt = 0;
-  refreshBithumbRate().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
-}
-
-function stopSync() {
-  autoSyncEnabled = false;
-  syncRunning = false;
-  syncPending = false;
-  bcSyncPending = false;
-  if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
-  if (!autoBetWanted && !autoSyncEnabled && calcTimer) {
-    clearInterval(calcTimer);
-    calcTimer = null;
-  }
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: false }).catch(() => {});
-  persistSyncState({ autoSyncEnabled: false });
-  updateAutomationButtons();
-  log('금액 동기화 정지', 'info');
-}
-
 function startAutoBet() {
-  if (autoBetWanted && autoBetRunning) return;
+  if (autoBetRunning) return;
   document.querySelector('.tab[data-tab="slip"]')?.click();
   autoBetWanted = true;
   autoBetPausedByClose = false;
@@ -2013,38 +2007,14 @@ function stopAutoBetOnly(clearWanted = true) {
     autoBetPausedByClose: false
   });
   updateAutomationButtons();
+  const hint = $('profitHint');
+  if (hint && !autoBetWanted) hint.textContent = '배팅카트에 담으면 금액 자동 동기화';
 }
 
 function stopAutoBet() {
-  stopAllAutomation();
-}
-
-function stopAllAutomation() {
-  const wasBet = autoBetWanted || autoBetRunning;
-  const wasSync = autoSyncEnabled;
-
-  autoBetWanted = false;
-  autoBetPausedByClose = false;
-  autoBetRunning = false;
-  strikePending = false;
-  if (autoBetTimer) { clearTimeout(autoBetTimer); autoBetTimer = null; }
-
-  autoSyncEnabled = false;
-  syncRunning = false;
-  syncPending = false;
-  bcSyncPending = false;
-  if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
-  if (calcTimer) { clearInterval(calcTimer); calcTimer = null; }
-
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_BET', enabled: false }).catch(() => {});
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: false }).catch(() => {});
-  chrome.runtime.sendMessage({ type: 'STOP_ALL_AUTOMATION' }).catch(() => {});
-  persistSyncState({ autoSyncEnabled: false, autoBetRunning: false, autoBetWanted: false, autoBetPausedByClose: false });
-  updateAutomationButtons();
-
-  if (wasBet && wasSync) log('자동 배팅·동기화 정지', 'info');
-  else if (wasBet) log('자동 배팅 정지', 'info');
-  else if (wasSync) log('금액 동기화 정지', 'info');
+  if (!autoBetWanted && !autoBetRunning) return;
+  stopAutoBetOnly(true);
+  log('자동 배팅 정지', 'info');
 }
 
 function renderSearchResults(data) {
@@ -2110,17 +2080,11 @@ document.querySelectorAll('.tab').forEach((btn) => {
   });
 });
 
-$('syncAmountsBtn')?.addEventListener('click', () => {
-  enableAutoSync();
-  refreshSlips().then(() => syncAmounts(true));
-});
-$('syncStart')?.addEventListener('click', startSync);
-$('syncStop')?.addEventListener('click', stopSync);
 $('autoBetStart')?.addEventListener('click', startAutoBet);
 $('autoBetStop')?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  stopAllAutomation();
+  stopAutoBet();
 });
 $('clearHistoryBtn')?.addEventListener('click', clearHistory);
 $('searchStart')?.addEventListener('click', startSearch);
@@ -2171,14 +2135,13 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 setInterval(() => {
   refreshSlips().then(() => {
-    if (shouldSyncAmounts()) {
-      scheduleSyncAmounts();
-      scheduleAutoBetCheck();
-    }
+    updateAutoBetMarketState();
+    if (shouldSyncAmounts()) scheduleSyncAmounts();
+    if (autoBetRunning) scheduleAutoBetCheck();
   });
 }, FALLBACK_REFRESH_MS);
 loadHistory();
 startBithumbRateLoop();
 initSyncFromStorage().then(() => refreshSlips().then(() => scheduleSyncAmounts()));
 updateAutomationButtons();
-log(`v5.9.7 ${IS_PANEL ? '패널' : '팝업'} 로드 — 배당 마감 시 자동배팅 일시정지`, 'info');
+log(`v5.9.8 ${IS_PANEL ? '패널' : '팝업'} 로드 — 금액 자동동기화 + 자동배팅`, 'info');

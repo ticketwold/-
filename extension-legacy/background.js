@@ -970,7 +970,7 @@ chrome.action.onClicked.addListener(() => {
   openPanelWindow().catch((e) => console.warn('[panel]', e.message));
 });
 
-console.log('[양방봇 v5.9.7] background loaded — 배당 마감 자동배팅 일시정지');
+console.log('[양방봇 v5.9.8] background loaded');
 
 loadSyncState().then((state) => {
   if (shouldBgSync(state)) startBgSyncLoop();
