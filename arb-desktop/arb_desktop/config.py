@@ -35,17 +35,13 @@ class Settings(BaseSettings):
     live_execution_enabled: bool = False
     auto_retry_max: int = 3
 
-    # Browser — 설치된 정식 Google Chrome + 기존 프로필 (기본)
+    # Browser — launch_persistent_context + 기존 Chrome 프로필 (기본 Profile 3)
     headless: bool = False
-    chrome_channel: str = "chrome"
     chrome_executable: Path = Field(default_factory=default_chrome_executable)
     chrome_profile_mode: Literal["dedicated", "existing"] = "existing"
     chrome_user_data_dir: Path = Field(default_factory=default_chrome_user_data_dir)
-    chrome_profile_directory: str = "Default"
+    chrome_profile_directory: str = "Profile 3"
     chrome_profile_dir: Path = Path.home() / "arb-chrome-profile"
-    chrome_cdp_urls: tuple[str, ...] = ("http://127.0.0.1:9222", "http://127.0.0.1:9229")
-    chrome_cdp_timeout_ms: int = 5000
-    chrome_remote_debugging_port: int = 9222
     persist_sessions: bool = True
 
     @property
