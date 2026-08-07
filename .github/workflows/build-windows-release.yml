@@ -6,7 +6,7 @@ on:
       version:
         description: Release tag suffix (e.g. 1.4.0)
         required: true
-        default: "1.4.0"
+        default: "1.5.0"
       upload_release:
         description: Upload assets to GitHub Release
         required: true
@@ -41,7 +41,7 @@ jobs:
           } elseif ($ref -match 'refs/tags/arb-desktop-v(.+)') {
             $v = $Matches[1]
           } else {
-            $v = "1.4.0"
+            $v = "1.5.0"
           }
           "APP_VERSION=$v" >> $env:GITHUB_ENV
           Write-Host "Building version $v"

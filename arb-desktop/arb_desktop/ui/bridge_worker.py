@@ -16,7 +16,6 @@ from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
 
 class BridgeWorker(QObject):
     bridge_status = pyqtSignal(object)
-    bridge_token = pyqtSignal(str)
     slip_updated = pyqtSignal(str, object)
     x10_debug = pyqtSignal(object)
     watch_state = pyqtSignal(str, object, str)
@@ -29,6 +28,7 @@ class BridgeWorker(QObject):
         self._store = store
         self._app_settings = store.load()
         store.apply_to_runtime(self._app_settings)
+        self._pairing_store = store.pairing_store_from_settings(self._app_settings)
         self._runtime = None
         self._scanner: BetSlipScanner | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -120,7 +120,7 @@ class BridgeWorker(QObject):
         def on_debug(payload: dict[str, Any]) -> None:
             site = str(payload.get("site") or "").lower()
             block = str(payload.get("block") or "").upper()
-            if site != "x10" and site != "bti":
+            if site not in {"x10", "bti"}:
                 return
             if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN"}:
                 self.x10_debug.emit(payload)
@@ -138,7 +138,7 @@ class BridgeWorker(QObject):
                 )
 
         self._runtime = create_bridge_runtime(
-            token=self._app_settings.bridge_token,
+            pairing_store=self._pairing_store,
             on_status_change=on_status,
             on_slip_update=on_slip,
             on_debug=on_debug,
@@ -146,7 +146,6 @@ class BridgeWorker(QObject):
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()
         self._bridge_started = True
-        self.bridge_token.emit(self._runtime.manager.token)
         self._watch_engine.set_idle()
         self._emit_watch_state()
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -202,6 +201,22 @@ class BridgeWorker(QObject):
     def reconnect(self) -> None:
         if self._loop and self._runtime:
             asyncio.run_coroutine_threadsafe(self._runtime.server.request_status(), self._loop)
+
+    @pyqtSlot()
+    def repair_pairing(self) -> None:
+        if self._loop and self._runtime:
+            self._runtime.reset_pairing()
+            self._store.save(self._app_settings)
+            asyncio.run_coroutine_threadsafe(self._runtime.server.request_status(), self._loop)
+
+    @pyqtSlot()
+    def reset_connection(self) -> None:
+        self._watching = False
+        self._watch_engine.stop_watch()
+        self._emit_watch_state()
+        if self._loop and self._runtime:
+            self._runtime.reset_pairing()
+            self._store.save(self._app_settings)
 
     @pyqtSlot()
     def start_watch(self) -> None:

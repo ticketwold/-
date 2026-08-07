@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     use_chrome_bridge: bool = True
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 18765
+    bridge_pair_port: int = 18766
     bridge_token: str = ""
 
     # Legacy browser settings (Playwright — 비활성화됨)

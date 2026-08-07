@@ -12,12 +12,24 @@ def test_settings_roundtrip(tmp_path: Path) -> None:
 
     store = SettingsStore(path=tmp_path / "settings.json")
     store.logs_dir = tmp_path / "logs"
-    s = AppSettings(target_profit_pct=1.5, bti_stake_krw=20000, bridge_token="abc")
+    s = AppSettings(target_profit_pct=1.5, bti_stake_krw=20000, bridge_credential="abc")
     store.save(s)
     loaded = store.load()
     assert loaded.target_profit_pct == 1.5
     assert loaded.bti_stake_krw == 20000
-    assert loaded.bridge_token == "abc"
+    assert loaded.bridge_credential == "abc"
+
+
+def test_settings_migrates_bridge_token(tmp_path: Path) -> None:
+    from arb_desktop.ui.settings_store import SettingsStore
+
+    path = tmp_path / "settings.json"
+    path.write_text('{"bridge_token": "legacy-token", "target_profit_pct": 1.0}', encoding="utf-8")
+    store = SettingsStore(path=path)
+    store.logs_dir = tmp_path / "logs"
+    loaded = store.load()
+    assert loaded.bridge_credential == "legacy-token"
+    assert "bridge_token" not in path.read_text(encoding="utf-8")
 
 
 def test_watch_engine_ready_flow() -> None:

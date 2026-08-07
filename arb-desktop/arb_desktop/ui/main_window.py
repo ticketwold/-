@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import webbrowser
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread
-from PyQt6.QtGui import QFont, QGuiApplication
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -17,7 +16,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -29,7 +27,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from arb_desktop.bridge.message_models import BridgeStatus, BetSlipState
+from arb_desktop.bridge.instance_lock import ensure_single_instance
+from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus, BetSlipState
 from arb_desktop.betslip.matcher import calculate_arbitrage
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
@@ -89,7 +88,6 @@ class MainWindow(QMainWindow):
         self._worker.ready.connect(self._on_bridge_ready)
         self._worker.error.connect(self._on_error)
         self._worker.bridge_status.connect(self._on_bridge_status)
-        self._worker.bridge_token.connect(self._on_bridge_token)
         self._worker.slip_updated.connect(self._on_slip_updated)
         self._worker.x10_debug.connect(self._on_x10_debug)
         self._worker.watch_state.connect(self._on_watch_state)
@@ -106,30 +104,33 @@ class MainWindow(QMainWindow):
         box = QGroupBox("연결 상태")
         grid = QGridLayout(box)
         font = QFont("Consolas", 10)
-        self.lbl_bridge = QLabel("Chrome Bridge: DISCONNECTED")
+        self.lbl_bridge = QLabel("Chrome Bridge: WAITING")
+        self.lbl_extension = QLabel("확장: 미연결")
+        self.lbl_last_connected = QLabel("마지막 연결: —")
         self.lbl_bc_tab = QLabel("BC.Game 탭: NOT FOUND")
         self.lbl_x10_tab = QLabel("x10x10s 탭: NOT FOUND")
         self.lbl_bc_slip = QLabel("BC BetSlip: EMPTY")
         self.lbl_x10_slip = QLabel("x10 BetSlip: EMPTY")
         for i, lbl in enumerate(
-            [self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_bc_slip, self.lbl_x10_slip]
+            [
+                self.lbl_bridge,
+                self.lbl_extension,
+                self.lbl_last_connected,
+                self.lbl_bc_tab,
+                self.lbl_x10_tab,
+                self.lbl_bc_slip,
+                self.lbl_x10_slip,
+            ]
         ):
             lbl.setFont(font)
             grid.addWidget(lbl, i, 0)
 
-        token_row = QHBoxLayout()
-        self.edit_token = QLineEdit()
-        self.edit_token.setReadOnly(True)
-        self.edit_token.setPlaceholderText("Bridge Token")
-        btn_copy = QPushButton("Token 복사")
-        btn_copy.clicked.connect(self._copy_token)
-        btn_ext = QPushButton("확장 옵션 열기")
-        btn_ext.clicked.connect(self._open_extension_help)
-        token_row.addWidget(QLabel("Token:"))
-        token_row.addWidget(self.edit_token, 1)
-        token_row.addWidget(btn_copy)
-        token_row.addWidget(btn_ext)
-        grid.addLayout(token_row, 5, 0)
+        btn_row = QHBoxLayout()
+        self.btn_repair = QPushButton("다시 페어링")
+        self.btn_reset_conn = QPushButton("연결 초기화")
+        btn_row.addWidget(self.btn_repair)
+        btn_row.addWidget(self.btn_reset_conn)
+        grid.addLayout(btn_row, 7, 0)
         return box
 
     def _build_settings_group(self) -> QGroupBox:
@@ -233,6 +234,8 @@ class MainWindow(QMainWindow):
 
     def _wire_buttons(self) -> None:
         self.btn_reconnect.clicked.connect(self._worker.reconnect)
+        self.btn_repair.clicked.connect(self._worker.repair_pairing)
+        self.btn_reset_conn.clicked.connect(self._on_reset_connection)
         self.btn_watch_start.clicked.connect(self._start_watch)
         self.btn_watch_stop.clicked.connect(self._stop_watch)
         self.btn_dry_test.clicked.connect(self._dry_run_test)
@@ -253,7 +256,16 @@ class MainWindow(QMainWindow):
         self.chk_dry.setChecked(s.dry_run)
         self._set_combo_value(self.combo_round_krw, str(s.round_unit_krw))
         self._set_combo_value(self.combo_round_usdt, str(s.round_unit_usdt))
-        self.edit_token.setText(s.bridge_token)
+
+    def _on_reset_connection(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "연결 초기화",
+            "페어링 credential을 재발급합니다.\n확장 프로그램은 자동으로 다시 페어링됩니다.",
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._worker.reset_connection()
+            self.status.showMessage("연결 초기화됨 — 확장 자동 재페어링 대기")
 
     def _set_combo_value(self, combo: QComboBox, value: str) -> None:
         idx = combo.findText(value)
@@ -270,7 +282,6 @@ class MainWindow(QMainWindow):
         s.dry_run = self.chk_dry.isChecked()
         s.round_unit_krw = int(self.combo_round_krw.currentText())
         s.round_unit_usdt = float(self.combo_round_usdt.currentText())
-        s.bridge_token = self.edit_token.text().strip() or s.bridge_token
         return s
 
     def _save_settings(self) -> None:
@@ -280,24 +291,6 @@ class MainWindow(QMainWindow):
         self.status.showMessage("설정 저장됨")
         self._log.log(site="APP", status="SAVE", message="settings saved")
 
-    def _copy_token(self) -> None:
-        token = self.edit_token.text().strip()
-        if token:
-            QGuiApplication.clipboard().setText(token)
-            self.status.showMessage("Token 복사됨 — 확장 옵션 페이지에 붙여넣으세요")
-
-    def _open_extension_help(self) -> None:
-        ext_dir = _chrome_bridge_dir()
-        msg = (
-            f"1. chrome://extensions 열기\n"
-            f"2. 개발자 모드 → '압축해제된 확장 프로그램 로드'\n"
-            f"3. 폴더 선택: {ext_dir}\n"
-            f"4. 확장 '옵션' 에서 Token / Port 입력\n"
-            f"5. Token 복사 버튼으로 값 붙여넣기"
-        )
-        QMessageBox.information(self, "Chrome 확장 설치", msg)
-        webbrowser.open("chrome://extensions")
-
     def _run_setup_wizard(self) -> None:
         wizard = SetupWizard(self)
         if wizard.exec():
@@ -305,23 +298,31 @@ class MainWindow(QMainWindow):
             self._store.save(self._settings)
 
     def _on_bridge_ready(self) -> None:
-        self.status.showMessage("Bridge 서버 실행 중 — 확장 프로그램 연결 대기")
+        self.status.showMessage("Bridge 서버 실행 중 — 확장 자동 연결 대기")
         self.btn_watch_start.setEnabled(True)
 
-    def _on_bridge_token(self, token: str) -> None:
-        if token and not self.edit_token.text():
-            self.edit_token.setText(token)
-            self._settings.bridge_token = token
-            self._store.save(self._settings)
-
     def _on_bridge_status(self, status: BridgeStatus) -> None:
-        lines = status.format_lines()
-        # Extend slip labels for SUSPENDED from manager if needed
-        labels = [self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_bc_slip, self.lbl_x10_slip]
-        for lbl, line in zip(labels, lines, strict=True):
+        bridge_line = status.format_lines()[0]
+        self.lbl_bridge.setText(bridge_line.replace("BC.Game tab", "BC.Game 탭").replace("x10x10s tab", "x10x10s 탭"))
+
+        if status.extension_id:
+            short = f"{status.extension_id[:8]}…" if len(status.extension_id) > 10 else status.extension_id
+            self.lbl_extension.setText(f"확장: {short}")
+        else:
+            self.lbl_extension.setText("확장: 미연결")
+
+        self.lbl_last_connected.setText(
+            f"마지막 연결: {status.last_connected_at}" if status.last_connected_at else "마지막 연결: —"
+        )
+
+        slip_labels = [self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_bc_slip, self.lbl_x10_slip]
+        for lbl, line in zip(slip_labels, status.format_lines()[1:5], strict=True):
             lbl.setText(line.replace("BC.Game tab", "BC.Game 탭").replace("x10x10s tab", "x10x10s 탭"))
-        if status.bridge.value == "CONNECTED":
+
+        if status.bridge == BridgeConnectionState.CONNECTED:
             self.status.showMessage("Chrome Bridge 연결됨")
+        elif status.bridge == BridgeConnectionState.AUTH_FAILED:
+            self.status.showMessage("Chrome Bridge 인증 실패 — 확장을 다시 로드하거나 '다시 페어링'을 사용하세요")
         else:
             self.status.showMessage("Chrome Bridge 연결 대기 중…")
 
@@ -429,6 +430,12 @@ class MainWindow(QMainWindow):
 
 
 def run_app() -> int:
+    lock = ensure_single_instance()
+    if not lock.ok:
+        app = QApplication(sys.argv)
+        QMessageBox.warning(None, "arb-desktop", lock.message)
+        return 1
+
     app = QApplication(sys.argv)
     app.setApplicationName("arb-desktop")
     app.setStyle("Fusion")

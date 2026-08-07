@@ -18,12 +18,12 @@ class SetupWizard(QWizard):
             "1. Chrome 확장 설치",
             "chrome://extensions 에서 개발자 모드를 켜고\n"
             "프로그램 폴더의 chrome-bridge 를 '압축해제된 확장 프로그램을 로드합니다'로 추가하세요.\n\n"
-            "확장 옵션 페이지에서 Bridge Token 을 입력합니다.",
+            "Token 입력은 필요 없습니다. 확장이 자동으로 페어링됩니다.",
         ))
         self.addPage(self._page(
             "2. Bridge 연결",
-            "프로그램을 실행하면 WebSocket 서버가 자동 시작됩니다.\n"
-            "메인 화면의 Token 복사 버튼으로 토큰을 복사해 확장 옵션에 붙여넣으세요.\n"
+            "ArbDesktop.exe 를 실행하면 WebSocket·페어링 서버가 자동 시작됩니다.\n"
+            "확장 프로그램이 localhost 로 자동 페어링 후 CONNECTED 상태가 됩니다.\n"
             "연결 상태가 CONNECTED 가 되면 다음 단계로 진행합니다.",
         ))
         self.addPage(self._page(
