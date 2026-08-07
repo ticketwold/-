@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self.lbl_x10_tab = QLabel("x10x10s 탭: NOT FOUND")
         self.lbl_bc_slip = QLabel("BC BetSlip: EMPTY")
         self.lbl_x10_slip = QLabel("x10 BetSlip: EMPTY")
+        self.lbl_x10_site = QLabel("텐텐벳: 카트 없음")
+        self.lbl_bc_site = QLabel("BC.Game: 카트 없음")
         for i, lbl in enumerate(
             [
                 self.lbl_bridge,
@@ -163,6 +165,8 @@ class MainWindow(QMainWindow):
                 self.lbl_x10_tab,
                 self.lbl_bc_slip,
                 self.lbl_x10_slip,
+                self.lbl_x10_site,
+                self.lbl_bc_site,
             ]
         ):
             lbl.setFont(font)
@@ -173,7 +177,7 @@ class MainWindow(QMainWindow):
         self.btn_reset_conn = QPushButton("연결 초기화")
         btn_row.addWidget(self.btn_repair)
         btn_row.addWidget(self.btn_reset_conn)
-        grid.addLayout(btn_row, 7, 0)
+        grid.addLayout(btn_row, 9, 0)
         return box
 
     def _build_settings_group(self) -> QGroupBox:
@@ -210,6 +214,21 @@ class MainWindow(QMainWindow):
         self.chk_dry = QCheckBox("드라이런 (실제 배팅 안 함)")
         self.chk_dry.setChecked(True)
         self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 직접 확인했습니다")
+        self.chk_bet_close_wait = QCheckBox("배팅 닫힘 시 자동 대기")
+        self.chk_bet_close_wait.setChecked(True)
+        self.chk_auto_resume = QCheckBox("상태 복구 시 자동감시 재개")
+        self.chk_auto_resume.setChecked(True)
+        self.chk_parallel_dry = QCheckBox("READY 시 드라이런 병렬 실행 테스트")
+        self.chk_parallel_dry.setChecked(True)
+        self.chk_parallel_live = QCheckBox("실제 병렬 실행 (live_execution 필요)")
+        self.chk_parallel_live.setChecked(False)
+        self.spin_pre_dispatch_ms = QDoubleSpinBox()
+        self.spin_pre_dispatch_ms.setRange(10, 500)
+        self.spin_pre_dispatch_ms.setSuffix(" ms")
+        self.spin_odds_tolerance = QDoubleSpinBox()
+        self.spin_odds_tolerance.setRange(0, 1)
+        self.spin_odds_tolerance.setDecimals(3)
+        self.spin_odds_tolerance.setSingleStep(0.01)
         form.addRow("목표 수익률", self.spin_target)
         form.addRow("텐텐벳 배팅금액", self.spin_bti_stake)
         form.addRow("USDT/KRW 환율", self.lbl_fx_rate)
@@ -225,6 +244,12 @@ class MainWindow(QMainWindow):
         form.addRow("연속 동일 배당 확인", self.spin_stable_count)
         form.addRow(self.chk_dry)
         form.addRow(self.chk_confirm)
+        form.addRow(self.chk_bet_close_wait)
+        form.addRow(self.chk_auto_resume)
+        form.addRow(self.chk_parallel_dry)
+        form.addRow(self.chk_parallel_live)
+        form.addRow("최종 재검증 허용 시간", self.spin_pre_dispatch_ms)
+        form.addRow("배당 변동 허용치", self.spin_odds_tolerance)
         return box
 
     def _build_live_group(self) -> QGroupBox:
@@ -259,8 +284,12 @@ class MainWindow(QMainWindow):
         self.lbl_engine_state = QLabel("IDLE")
         self.lbl_engine_state.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
         self.lbl_engine_msg = QLabel("")
+        self.lbl_dispatch_note = QLabel("")
+        self.lbl_dispatch_note.setWordWrap(True)
+        self.lbl_dispatch_note.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self.lbl_engine_state)
         layout.addWidget(self.lbl_engine_msg)
+        layout.addWidget(self.lbl_dispatch_note)
         return box
 
     def _build_buttons_group(self) -> QWidget:
@@ -319,6 +348,12 @@ class MainWindow(QMainWindow):
         self.spin_stabilize.setValue(s.stabilize_seconds)
         self.spin_stable_count.setValue(s.stable_count_required)
         self.chk_dry.setChecked(s.dry_run)
+        self.chk_bet_close_wait.setChecked(s.bet_close_auto_wait)
+        self.chk_auto_resume.setChecked(s.auto_resume_on_recovery)
+        self.chk_parallel_dry.setChecked(s.parallel_dry_run_on_ready)
+        self.chk_parallel_live.setChecked(s.parallel_execution_enabled)
+        self.spin_pre_dispatch_ms.setValue(s.pre_dispatch_verify_ms)
+        self.spin_odds_tolerance.setValue(s.odds_change_tolerance)
         self._set_combo_value(self.combo_round_krw, str(s.round_unit_krw))
         self._set_combo_value(self.combo_round_usdt, str(s.round_unit_usdt))
         self._on_confirm_toggled(self.chk_confirm.isChecked())
@@ -348,6 +383,12 @@ class MainWindow(QMainWindow):
         s.stabilize_seconds = self.spin_stabilize.value()
         s.stable_count_required = self.spin_stable_count.value()
         s.dry_run = self.chk_dry.isChecked()
+        s.bet_close_auto_wait = self.chk_bet_close_wait.isChecked()
+        s.auto_resume_on_recovery = self.chk_auto_resume.isChecked()
+        s.parallel_dry_run_on_ready = self.chk_parallel_dry.isChecked()
+        s.parallel_execution_enabled = self.chk_parallel_live.isChecked()
+        s.pre_dispatch_verify_ms = self.spin_pre_dispatch_ms.value()
+        s.odds_change_tolerance = self.spin_odds_tolerance.value()
         s.round_unit_krw = int(self.combo_round_krw.currentText())
         s.round_unit_usdt = float(self.combo_round_usdt.currentText())
         return s
@@ -411,6 +452,9 @@ class MainWindow(QMainWindow):
             )
 
     def _on_live_metrics(self, m: WatchMetrics) -> None:
+        self.lbl_x10_site.setText(f"텐텐벳: {m.x10_site_label}")
+        self.lbl_bc_site.setText(f"BC.Game: {m.bc_site_label}")
+        self.lbl_dispatch_note.setText(m.dispatch_note)
         self._apply_metrics(m)
 
     def _on_confirm_toggled(self, checked: bool) -> None:
@@ -423,7 +467,18 @@ class MainWindow(QMainWindow):
     def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
         self.lbl_engine_state.setText(state)
         self.lbl_engine_msg.setText(message)
+        self.lbl_x10_site.setText(f"텐텐벳: {metrics.x10_site_label}")
+        self.lbl_bc_site.setText(f"BC.Game: {metrics.bc_site_label}")
+        self.lbl_dispatch_note.setText(metrics.dispatch_note)
         self._apply_metrics(metrics)
+        if state in ("PARTIAL BET", "FAILED"):
+            self.lbl_engine_state.setStyleSheet("color: #ff6b6b; font-weight: bold;")
+        elif state == "READY":
+            self.lbl_engine_state.setStyleSheet("color: #7ee787; font-weight: bold;")
+        elif state == "AUTO BET WAIT":
+            self.lbl_engine_state.setStyleSheet("color: #f0c674; font-weight: bold;")
+        else:
+            self.lbl_engine_state.setStyleSheet("")
 
     def _on_worker_log(self, site: str, status: str, odds: str, profit: str, message: str, dedup: str) -> None:
         self._log.log(site=site, status=status, odds=odds, profit=profit, message=message, dedup_key=dedup)

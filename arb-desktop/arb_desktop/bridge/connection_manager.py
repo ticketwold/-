@@ -138,10 +138,15 @@ class ConnectionManager:
 
 
 def _slip_state_from_read(read: BetSlipReadResult) -> str:
-    if read.first and read.first.status == SlipStatus.SUSPENDED:
-        return "suspended"
-    if read.first and read.first.status == SlipStatus.ACTIVE:
+    from arb_desktop.ui.site_status import slip_status_from_read
+
+    status = slip_status_from_read(read)
+    if status.value == "ACTIVE":
         return "active"
+    if status.value in {"SUSPENDED", "CLOSED"}:
+        return "suspended"
+    if status.value == "ODDS_MISSING":
+        return "empty"
     return "empty"
 
 

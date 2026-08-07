@@ -101,3 +101,94 @@ def test_watch_engine_blocks_event_parse_reasons() -> None:
     )
     assert err != "event-parse-incomplete"
     assert err != "unknown-market"
+
+
+def test_watch_engine_auto_bet_wait_on_closed_site() -> None:
+    engine = WatchEngine()
+    engine.start_watch(user_confirmed=True)
+    settings = AppSettings(
+        target_profit_pct=0.1,
+        bti_stake_krw=10000,
+        stabilize_seconds=0,
+        stable_count_required=1,
+        fx_auto_enabled=False,
+        usdt_rate=1400.0,
+        bet_close_auto_wait=True,
+    )
+    bc = BetSlipReadResult(
+        site="bc",
+        ok=True,
+        empty=False,
+        items=[BetSlipItem(site="bc", event="", market="", selection="", odds=2.1, status=SlipStatus.ACTIVE)],
+    )
+    bti = BetSlipReadResult(
+        site="bti",
+        ok=True,
+        empty=False,
+        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.CLOSED)],
+    )
+    engine._site_debounce._confirmed["x10"] = SlipStatus.CLOSED
+    state, _, err = engine.tick(
+        bridge_connected=True,
+        bc=bc,
+        bti=bti,
+        settings=settings,
+        fx=_fx(),
+        user_confirmed=True,
+    )
+    assert state == WatchState.AUTO_BET_WAIT
+    assert err == "auto-bet-wait"
+
+
+def test_watch_engine_recovers_after_closed() -> None:
+    engine = WatchEngine()
+    engine.start_watch(user_confirmed=True)
+    settings = AppSettings(
+        target_profit_pct=0.1,
+        bti_stake_krw=10000,
+        stabilize_seconds=0,
+        stable_count_required=1,
+        fx_auto_enabled=False,
+        usdt_rate=1400.0,
+        bet_close_auto_wait=True,
+        auto_resume_on_recovery=True,
+    )
+    bc = BetSlipReadResult(
+        site="bc",
+        ok=True,
+        empty=False,
+        items=[BetSlipItem(site="bc", event="", market="", selection="", odds=2.1, status=SlipStatus.ACTIVE)],
+    )
+    bti_closed = BetSlipReadResult(
+        site="bti",
+        ok=True,
+        empty=False,
+        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.CLOSED)],
+    )
+    bti_active = BetSlipReadResult(
+        site="bti",
+        ok=True,
+        empty=False,
+        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.ACTIVE)],
+    )
+    engine._site_debounce._confirmed["x10"] = SlipStatus.CLOSED
+    engine.tick(
+        bridge_connected=True,
+        bc=bc,
+        bti=bti_closed,
+        settings=settings,
+        fx=_fx(),
+        user_confirmed=True,
+    )
+    assert engine.state == WatchState.AUTO_BET_WAIT
+    engine._site_debounce._confirmed["x10"] = SlipStatus.ACTIVE
+    engine._site_debounce._confirmed["bc"] = SlipStatus.ACTIVE
+    state, _, _ = engine.tick(
+        bridge_connected=True,
+        bc=bc,
+        bti=bti_active,
+        settings=settings,
+        fx=_fx(),
+        user_confirmed=True,
+    )
+    assert state in {WatchState.TARGET_WAIT, WatchState.STABILIZING, WatchState.READY}

@@ -10,6 +10,34 @@ let slipStatus = { bc: "empty", x10: "empty" };
 const bestSlip = { bc: null, x10: null };
 const lastSentSlipKey = { bc: "", x10: "" };
 const lastDebugKeys = new Set();
+const siteStatusDebounce = {
+  bc: { code: "empty", hits: 0, since: 0, confirmed: "empty" },
+  x10: { code: "empty", hits: 0, since: 0, confirmed: "empty" },
+};
+
+function mapRawSlipStatus(result) {
+  if (!result || result.empty || !result.items?.length) return "empty";
+  const st = String(result.items[0]?.status || "empty").toLowerCase();
+  if (["active", "suspended", "closed", "odds_missing"].includes(st)) return st;
+  return "empty";
+}
+
+function confirmSiteStatus(site, rawCode) {
+  const key = site === "bc" ? "bc" : "x10";
+  const d = siteStatusDebounce[key];
+  const now = Date.now();
+  if (rawCode === d.code) {
+    d.hits += 1;
+  } else {
+    d.code = rawCode;
+    d.hits = 1;
+    d.since = now;
+  }
+  if (d.hits >= 2 || now - d.since >= 200) {
+    d.confirmed = rawCode;
+  }
+  return d.confirmed;
+}
 
 function slipScore(result) {
   if (!result) return 0;
@@ -50,15 +78,9 @@ function sendStatus() {
 
 function updateSlipStatus(site, result) {
   const key = site === "bc" ? "bc" : "x10";
-  if (!result || result.empty || !result.items?.length) {
-    slipStatus[key] = "empty";
-  } else if (result.items[0]?.status === "suspended") {
-    slipStatus[key] = "suspended";
-  } else if (result.items[0]?.status === "active") {
-    slipStatus[key] = "active";
-  } else {
-    slipStatus[key] = "empty";
-  }
+  const raw = mapRawSlipStatus(result);
+  const confirmed = confirmSiteStatus(site, raw);
+  slipStatus[key] = confirmed;
 }
 
 function maybeForwardSlip(site, result, meta) {

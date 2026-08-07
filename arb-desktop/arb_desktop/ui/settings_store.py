@@ -31,6 +31,12 @@ class AppSettings:
     fx_auto_enabled: bool = True
     fx_refresh_seconds: float = 2.0
     fx_max_stale_seconds: float = 30.0
+    bet_close_auto_wait: bool = True
+    auto_resume_on_recovery: bool = True
+    pre_dispatch_verify_ms: float = 100.0
+    odds_change_tolerance: float = 0.0
+    parallel_execution_enabled: bool = False
+    parallel_dry_run_on_ready: bool = True
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 18765
     bridge_pair_port: int = 18766
