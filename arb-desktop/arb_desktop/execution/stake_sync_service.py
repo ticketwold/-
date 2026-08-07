@@ -11,7 +11,7 @@ from arb_desktop.ui.settings_store import AppSettings
 from arb_desktop.ui.site_status import both_sites_active, slip_status_from_read
 
 REASON_MESSAGES = {
-    "stake-input-not-found": "입력창을 찾지 못함",
+    "stake-input-not-found": "Stake input not found",
     "frame-not-found": "BetSlip 프레임을 찾지 못함",
     "value-not-applied": "입력값이 적용되지 않음",
     "react-reset-value": "사이트가 입력값을 다시 초기화함",
@@ -142,7 +142,18 @@ class StakeSyncService:
             return self.last_status
 
         actual = write.actual
-        ok = actual is not None and abs(actual - target) <= 0.15
+        if actual is None:
+            self.last_status = StakeSyncStatus(
+                state=StakeSyncState.INPUT_NOT_FOUND,
+                calculated_usdt=target,
+                actual_usdt=None,
+                reason="stake-input-not-found",
+                message=_reason_message("stake-input-not-found"),
+                debug=debug if isinstance(debug, dict) else {},
+            )
+            return self.last_status
+
+        ok = abs(actual - target) <= 0.15
         self.last_status = StakeSyncStatus(
             state=StakeSyncState.OK if ok else StakeSyncState.FAILED,
             calculated_usdt=target,
@@ -151,6 +162,28 @@ class StakeSyncService:
             message="동기화 완료" if ok else _reason_message(reason or "value-not-applied"),
             debug=debug if isinstance(debug, dict) else {},
         )
+        return self.last_status
+
+    async def scan_bc_stake(self, *, server) -> StakeSyncStatus:
+        scan: CommandResult = await server.send_command("bc", "scan_bc_stake")
+        debug = scan.raw.get("debug") if isinstance(scan.raw.get("debug"), dict) else scan.raw
+        found = bool(scan.raw.get("found")) or bool(scan.ok and scan.raw.get("selector"))
+        reason = scan.reason or scan.error or ("ok" if found else "stake-input-not-found")
+        self.last_status = StakeSyncStatus(
+            state=StakeSyncState.OK if found else StakeSyncState.INPUT_NOT_FOUND,
+            actual_usdt=scan.actual,
+            reason=reason,
+            message="FOUND" if found else _reason_message("stake-input-not-found"),
+            debug=debug if isinstance(debug, dict) else {},
+        )
+        if isinstance(debug, dict):
+            self.last_status.debug = {
+                **debug,
+                "found": found,
+                "selector": scan.raw.get("selector") or debug.get("selector"),
+                "frame_url": scan.raw.get("frame_url") or debug.get("frame_url"),
+                "current_value": scan.raw.get("current_value") or debug.get("current_value"),
+            }
         return self.last_status
 
     async def test_bc_stake(self, *, server, amount_usdt: float) -> StakeSyncStatus:
@@ -163,9 +196,9 @@ class StakeSyncService:
         )
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
         reason = write.reason or write.error or "stake-input-not-found"
-        ok = bool(write.ok)
+        ok = bool(write.ok and write.actual is not None)
         self.last_status = StakeSyncStatus(
-            state=StakeSyncState.OK if ok else StakeSyncState.FAILED,
+            state=StakeSyncState.OK if ok else StakeSyncState.INPUT_NOT_FOUND if "not-found" in reason else StakeSyncState.FAILED,
             calculated_usdt=target,
             actual_usdt=write.actual,
             reason=reason,

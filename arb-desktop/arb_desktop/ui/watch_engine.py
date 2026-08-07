@@ -97,6 +97,7 @@ class WatchMetrics:
     stake_sync_message: str = ""
     stake_sync_reason: str = ""
     stake_sync_debug: dict = field(default_factory=dict)
+    bc_stake_input_found: bool = False
     execution_phase: str = "IDLE"
     execution_message: str = ""
     dispatch_gap_ms: float = 0.0

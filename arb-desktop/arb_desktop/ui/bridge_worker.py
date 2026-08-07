@@ -12,6 +12,7 @@ from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
 from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
 from arb_desktop.execution.execution_engine import ExecutionEngine
+from arb_desktop.execution.stake_sync_service import StakeSyncState
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
 from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
 from arb_desktop.ui.odds_log_manager import OddsLogManager
@@ -257,6 +258,29 @@ class BridgeWorker(QObject):
         metrics.stake_sync_message = status.message
         metrics.stake_sync_reason = status.reason
         metrics.stake_sync_debug = status.debug or {}
+        metrics.bc_stake_input_found = bool(status.debug.get("found")) if status.debug else False
+
+        if metrics.stake_sync_enabled:
+            calc = status.calculated_usdt
+            if calc is None and metrics.bc_stake_usdt:
+                calc = metrics.bc_stake_usdt
+                metrics.stake_sync_calculated_usdt = calc
+            actual = status.actual_usdt
+            state = metrics.stake_sync_state
+            if calc is not None and actual is None and state in {"IDLE", "WAITING", ""}:
+                metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
+                metrics.stake_sync_message = "Stake input not found"
+                metrics.stake_sync_reason = "stake-input-not-found"
+            elif calc is not None and actual is None and state == "FAILED" and "not-found" in (status.reason or ""):
+                metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
+                metrics.stake_sync_message = "Stake input not found"
+            elif calc is not None and actual is None and state == "SYNCING":
+                pass
+            elif calc is not None and actual is None and state not in {"OK", "SYNCING"}:
+                if status.reason == "stake-input-not-found" or not metrics.bc_stake_input_found:
+                    metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
+                    metrics.stake_sync_message = "Stake input not found"
+
         metrics.execution_phase = self._execution.state.phase.value
         metrics.execution_message = self._execution.state.message
         metrics.dispatch_gap_ms = self._execution.state.dispatch_gap_ms
@@ -418,6 +442,29 @@ class BridgeWorker(QObject):
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._test_bc_stake(amount_usdt), self._loop)
 
+    @pyqtSlot()
+    def scan_bc_stake(self) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._scan_bc_stake(), self._loop)
+
+    async def _scan_bc_stake(self) -> None:
+        if not self._runtime:
+            return
+        status = await self._execution.stake_sync.scan_bc_stake(server=self._runtime.server)
+        debug = status.debug or {}
+        payload = {
+            "block": "BC INPUT SCAN",
+            "site": "bc",
+            "found": bool(debug.get("found")),
+            "selector": debug.get("selector"),
+            "frame_url": debug.get("frame_url"),
+            "current_value": debug.get("current_value"),
+            "debug": debug,
+            **debug,
+        }
+        self.bc_stake_debug.emit(payload)
+        self._emit_live_metrics()
+
     async def _test_bc_stake(self, amount_usdt: float) -> None:
         if not self._runtime:
             return
@@ -429,7 +476,8 @@ class BridgeWorker(QObject):
         payload = {
             "block": "BC STAKE TEST",
             "site": "bc",
-            "success": status.state.name == "OK",
+            "success": status.state == StakeSyncState.OK,
+            "test": True,
             "requested": status.calculated_usdt,
             "actual": status.actual_usdt,
             "reason": status.reason,

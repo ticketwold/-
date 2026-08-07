@@ -5,7 +5,6 @@ from typing import Any
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -22,105 +21,109 @@ from PyQt6.QtWidgets import (
 class BcStakeDebugPanel(QWidget):
     """BC stake input locator / sync diagnostics."""
 
+    scan_requested = pyqtSignal()
     test_requested = pyqtSignal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._mono = QFont("Consolas", 9)
 
-        test_box = QGroupBox("BC 금액 입력 테스트")
-        test_row = QHBoxLayout(test_box)
-        self.spin_test_amount = QDoubleSpinBox()
-        self.spin_test_amount.setRange(0.1, 9999.0)
-        self.spin_test_amount.setSingleStep(0.1)
-        self.spin_test_amount.setDecimals(1)
-        self.spin_test_amount.setValue(1.0)
-        self.spin_test_amount.setSuffix(" USDT")
-        self.btn_test = QPushButton("BC 금액 입력 테스트")
-        self.btn_test.setProperty("class", "primary")
-        self.lbl_test_result = QLabel("—")
-        self.lbl_test_result.setWordWrap(True)
-        test_row.addWidget(QLabel("테스트 금액"))
-        test_row.addWidget(self.spin_test_amount)
-        test_row.addWidget(self.btn_test)
-        test_row.addWidget(self.lbl_test_result, 1)
-        self.btn_test.clicked.connect(self._on_test)
-
-        locator_box = QGroupBox("Stake Input Locator")
-        locator_form = QFormLayout(locator_box)
+        header_box = QGroupBox("BC Stake Input")
+        header_form = QFormLayout(header_box)
+        self.lbl_found = QLabel("—")
         self.lbl_selector = QLabel("—")
         self.lbl_frame_url = QLabel("—")
         self.lbl_current_value = QLabel("—")
-        self.lbl_status = QLabel("—")
-        for lbl in (self.lbl_selector, self.lbl_frame_url, self.lbl_current_value, self.lbl_status):
+        for lbl in (self.lbl_found, self.lbl_selector, self.lbl_frame_url, self.lbl_current_value):
             lbl.setFont(self._mono)
             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lbl.setWordWrap(True)
-        locator_form.addRow("selector", self.lbl_selector)
-        locator_form.addRow("frame_url", self.lbl_frame_url)
-        locator_form.addRow("current_value", self.lbl_current_value)
-        locator_form.addRow("상태", self.lbl_status)
+        header_form.addRow("상태", self.lbl_found)
+        header_form.addRow("Selector", self.lbl_selector)
+        header_form.addRow("Frame URL", self.lbl_frame_url)
+        header_form.addRow("Current Value", self.lbl_current_value)
 
-        verify_box = QGroupBox("입력 검증")
-        verify_form = QFormLayout(verify_box)
-        self.lbl_requested = QLabel("—")
-        self.lbl_before = QLabel("—")
-        self.lbl_after = QLabel("—")
-        self.lbl_v50 = QLabel("—")
-        self.lbl_v100 = QLabel("—")
-        self.lbl_v250 = QLabel("—")
-        self.lbl_disabled = QLabel("—")
-        self.lbl_react_reset = QLabel("—")
-        for lbl in (
-            self.lbl_requested,
-            self.lbl_before,
-            self.lbl_after,
-            self.lbl_v50,
-            self.lbl_v100,
-            self.lbl_v250,
-            self.lbl_disabled,
-            self.lbl_react_reset,
-        ):
-            lbl.setFont(self._mono)
-            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        verify_form.addRow("requested stake", self.lbl_requested)
-        verify_form.addRow("before value", self.lbl_before)
-        verify_form.addRow("after value", self.lbl_after)
-        verify_form.addRow("50ms value", self.lbl_v50)
-        verify_form.addRow("100ms value", self.lbl_v100)
-        verify_form.addRow("250ms value", self.lbl_v250)
-        verify_form.addRow("disabled/readonly", self.lbl_disabled)
-        verify_form.addRow("React reset", self.lbl_react_reset)
+        btn_row = QHBoxLayout()
+        self.btn_scan = QPushButton("BC INPUT SCAN")
+        self.btn_test = QPushButton("BC INPUT TEST")
+        self.btn_scan.setProperty("class", "primary")
+        self.btn_test.setProperty("class", "primary")
+        self.lbl_test_result = QLabel("—")
+        self.lbl_test_result.setWordWrap(True)
+        self.lbl_test_result.setFont(self._mono)
+        btn_row.addWidget(self.btn_scan)
+        btn_row.addWidget(self.btn_test)
+        btn_row.addWidget(self.lbl_test_result, 1)
+        self.btn_scan.clicked.connect(self._on_scan)
+        self.btn_test.clicked.connect(self._on_test)
 
-        scan_box = QGroupBox("BC STAKE INPUT SCAN")
+        scan_box = QGroupBox("[BC INPUT SCAN]")
         scan_layout = QVBoxLayout(scan_box)
-        self.tbl_scan = QTableWidget(0, 8)
+        self.tbl_scan = QTableWidget(0, 9)
         self.tbl_scan.setHorizontalHeaderLabels(
-            ["selector", "count", "placeholder", "type", "inputmode", "class", "data-editor-id", "value"]
+            [
+                "frame_url",
+                "selector",
+                "count",
+                "placeholder",
+                "type",
+                "inputmode",
+                "class",
+                "value",
+                "outerHTML",
+            ]
         )
         self.tbl_scan.horizontalHeader().setStretchLastSection(True)
         self.tbl_scan.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tbl_scan.setFont(self._mono)
         scan_layout.addWidget(self.tbl_scan)
 
-        log_box = QGroupBox("최근 sync 로그")
+        probe_box = QGroupBox("Input Probe (focus / disabled)")
+        probe_layout = QVBoxLayout(probe_box)
+        self.tbl_probe = QTableWidget(0, 8)
+        self.tbl_probe.setHorizontalHeaderLabels(
+            [
+                "frame_url",
+                "selector",
+                "focus",
+                "value",
+                "placeholder",
+                "disabled",
+                "readonly",
+                "aria-disabled",
+            ]
+        )
+        self.tbl_probe.horizontalHeader().setStretchLastSection(True)
+        self.tbl_probe.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_probe.setFont(self._mono)
+        probe_layout.addWidget(self.tbl_probe)
+
+        log_box = QGroupBox("Scan Log")
         log_layout = QVBoxLayout(log_box)
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setFont(self._mono)
-        self.txt_log.setMaximumHeight(160)
+        self.txt_log.setMaximumHeight(140)
         log_layout.addWidget(self.txt_log)
 
         root = QVBoxLayout(self)
-        root.addWidget(test_box)
-        root.addWidget(locator_box)
-        root.addWidget(verify_box)
+        root.addWidget(header_box)
+        root.addLayout(btn_row)
         root.addWidget(scan_box, 1)
+        root.addWidget(probe_box, 1)
         root.addWidget(log_box)
 
+    def _on_scan(self) -> None:
+        self.lbl_test_result.setText("스캔 중...")
+        self.scan_requested.emit()
+
     def _on_test(self) -> None:
-        self.lbl_test_result.setText("전송 중...")
-        self.test_requested.emit(float(self.spin_test_amount.value()))
+        self.lbl_test_result.setText("1.0 USDT 입력 테스트 중...")
+        self.test_requested.emit(1.0)
+
+    def set_scan_status(self, *, scanning: bool) -> None:
+        if scanning:
+            self.lbl_test_result.setText("스캔 중...")
 
     def set_test_result(self, *, ok: bool, actual: float | None, reason: str) -> None:
         if ok:
@@ -138,66 +141,113 @@ class BcStakeDebugPanel(QWidget):
         block = str(payload.get("block") or "").upper()
         debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else payload
 
-        if block in {"BC STAKE INPUT FOUND", "BC STAKE INPUT SCAN"} or payload.get("selected_selector"):
-            self.lbl_selector.setText(str(debug.get("selected_selector") or debug.get("selector") or payload.get("selector") or "—"))
-            self.lbl_frame_url.setText(str(debug.get("frame_url") or payload.get("frame_url") or "—"))
-            self.lbl_current_value.setText(str(debug.get("current_value") or debug.get("after_value") or payload.get("actual") or "—"))
+        found = payload.get("found")
+        if found is None and debug.get("found") is not None:
+            found = bool(debug.get("found"))
+        if found is None:
+            found = block in {"BC STAKE INPUT FOUND", "BC STAKE SYNC OK"} or bool(
+                payload.get("selected_selector") or debug.get("selected_selector")
+            )
+        if block in {"BC STAKE INPUT NOT FOUND", "BC INPUT SCAN"} and not debug.get("found") and not payload.get("selector"):
+            found = False
 
-        if block.startswith("BC STAKE"):
-            reason = str(payload.get("reason") or debug.get("reason") or "")
-            success = payload.get("success")
-            if success is True:
-                self.lbl_status.setText("동기화 완료")
-                self.lbl_status.setProperty("class", "status-ok")
-            elif success is False:
-                self.lbl_status.setText(_reason_label(reason))
-                self.lbl_status.setProperty("class", "status-bad")
-            self.lbl_status.style().unpolish(self.lbl_status)
-            self.lbl_status.style().polish(self.lbl_status)
+        self._set_found_status(bool(found))
 
-        self.lbl_requested.setText(str(debug.get("requested") or payload.get("requested") or "—"))
-        self.lbl_before.setText(str(debug.get("before_value") or "—"))
-        self.lbl_after.setText(str(debug.get("after_value") or payload.get("actual") or "—"))
-        self.lbl_v50.setText(str(debug.get("verify_50ms") or "—"))
-        self.lbl_v100.setText(str(debug.get("verify_100ms") or "—"))
-        self.lbl_v250.setText(str(debug.get("verify_250ms") or "—"))
-        disabled = debug.get("disabled") or debug.get("readonly") or debug.get("aria_disabled")
-        self.lbl_disabled.setText(str(disabled if disabled is not None else "—"))
-        self.lbl_react_reset.setText("yes" if debug.get("react_reset") else "no")
+        selector = (
+            str(payload.get("selector") or "")
+            or str(debug.get("selected_selector") or debug.get("selector") or "")
+            or str((debug.get("found") or {}).get("selector") or "")
+        )
+        frame_url = (
+            str(payload.get("frame_url") or "")
+            or str(debug.get("frame_url") or "")
+            or str((debug.get("found") or {}).get("frame_url") or "")
+        )
+        current_value = (
+            payload.get("current_value")
+            or debug.get("current_value")
+            or debug.get("after_value")
+            or payload.get("actual")
+            or (debug.get("found") or {}).get("current_value")
+        )
+        self.lbl_selector.setText(selector or "—")
+        self.lbl_frame_url.setText(frame_url or "—")
+        self.lbl_current_value.setText(str(current_value) if current_value is not None else "—")
 
         scans = debug.get("scans") or payload.get("scans") or []
         if scans:
             self._fill_scan_table(scans)
 
-        line = f"[{block}] requested={payload.get('requested')} actual={payload.get('actual')} reason={payload.get('reason')}"
-        self.txt_log.append(line)
+        candidates = debug.get("input_candidates") or payload.get("input_candidates") or []
+        if candidates:
+            self._fill_probe_table(candidates)
+
+        scan_lines = debug.get("scan_lines") or payload.get("scan_lines") or []
+        for line in scan_lines:
+            if line and line not in self.txt_log.toPlainText():
+                self.txt_log.append(str(line))
+
+        if block == "BC STAKE TEST":
+            self.set_test_result(
+                ok=bool(payload.get("success")),
+                actual=payload.get("actual"),
+                reason=str(payload.get("reason") or ""),
+            )
+        elif block in {"BC STAKE SYNC OK", "BC STAKE SYNC FAILED"} and payload.get("test"):
+            self.set_test_result(
+                ok=bool(payload.get("success")),
+                actual=payload.get("actual"),
+                reason=str(payload.get("reason") or ""),
+            )
+
+        if block.startswith("BC"):
+            line = f"[{block}] found={found} selector={selector or '-'} value={current_value}"
+            self.txt_log.append(line)
+
+    def _set_found_status(self, found: bool) -> None:
+        if found:
+            self.lbl_found.setText("FOUND")
+            self.lbl_found.setProperty("class", "status-ok")
+        else:
+            self.lbl_found.setText("NOT FOUND")
+            self.lbl_found.setProperty("class", "status-bad")
+        self.lbl_found.style().unpolish(self.lbl_found)
+        self.lbl_found.style().polish(self.lbl_found)
 
     def _fill_scan_table(self, scans: list[dict[str, Any]]) -> None:
         self.tbl_scan.setRowCount(len(scans))
         for row, scan in enumerate(scans):
             values = (
+                str(scan.get("frame_url") or ""),
                 str(scan.get("selector") or ""),
                 str(scan.get("count") or ""),
                 str(scan.get("placeholder") or ""),
                 str(scan.get("type") or ""),
                 str(scan.get("inputmode") or ""),
                 str(scan.get("class") or ""),
-                str(scan.get("data-editor-id") or ""),
                 str(scan.get("value") or ""),
+                str(scan.get("outerHTML") or ""),
             )
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.tbl_scan.setItem(row, col, item)
 
-
-def _reason_label(reason: str) -> str:
-    mapping = {
-        "stake-input-not-found": "입력창을 찾지 못함",
-        "frame-not-found": "BetSlip 프레임을 찾지 못함",
-        "value-not-applied": "입력값이 적용되지 않음",
-        "react-reset-value": "사이트가 입력값을 다시 초기화함",
-        "input-disabled": "입력창이 비활성화됨",
-        "command-timeout": "명령 시간 초과",
-    }
-    return mapping.get(reason, reason or "동기화 실패")
+    def _fill_probe_table(self, candidates: list[dict[str, Any]]) -> None:
+        self.tbl_probe.setRowCount(len(candidates))
+        for row, cand in enumerate(candidates):
+            probe = cand.get("probe") if isinstance(cand.get("probe"), dict) else {}
+            values = (
+                str(cand.get("frame_url") or ""),
+                str(cand.get("selector") or ""),
+                str(probe.get("focus_ok", "")),
+                str(probe.get("value", cand.get("value", ""))),
+                str(probe.get("placeholder", cand.get("placeholder", ""))),
+                str(probe.get("disabled", cand.get("disabled", ""))),
+                str(probe.get("readonly", cand.get("readonly", ""))),
+                str(probe.get("aria-disabled", cand.get("aria-disabled", ""))),
+            )
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.tbl_probe.setItem(row, col, item)

@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self._worker.bc_stake_debug.connect(self._on_bc_stake_debug)
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
+        self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
 
         self._wire_buttons()
         self._apply_watch_ui()

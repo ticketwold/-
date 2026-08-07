@@ -6,14 +6,20 @@
     '[data-editor-id="betslipSelection"]',
     '[data-editor-id="betslip"]',
     '[data-editor-id*="betslip"]',
+    '[data-testid*="betslip" i]',
     '[class*="betslip" i]',
     '[class*="bet-slip" i]',
+    '[class*="BetSlip" i]',
+    '[id*="betslip" i]',
+    '[class*="coupon" i]',
   ];
 
   const BC_INPUT_SELECTORS = [
     '[data-editor-id="betslipStakeInput"]',
     '[data-editor-id*="betslipStake"]',
     '[data-editor-id*="Stake"]',
+    '[data-testid*="stake" i]',
+    '[data-testid*="amount" i]',
     'input[inputmode="decimal"]',
     'input[inputmode="numeric"]',
     'input[type="text"]',
@@ -24,6 +30,10 @@
     'input[class*="amount" i]',
     'input[class*="bet" i]',
     '[role="spinbutton"]',
+    '[role="textbox"][contenteditable="true"]',
+    '[contenteditable="true"][inputmode="decimal"]',
+    '[contenteditable="true"][inputmode="numeric"]',
+    '[contenteditable="true"]',
   ];
 
   const VERIFY_DELAYS_MS = [50, 100, 250];
@@ -58,6 +68,21 @@
     return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set || null;
   }
 
+  function isEditableInput(el) {
+    if (!el) return false;
+    if (el instanceof HTMLInputElement) return el.type !== "hidden";
+    if (el instanceof HTMLTextAreaElement) return true;
+    if (el.isContentEditable) return true;
+    return el.getAttribute?.("role") === "textbox" || el.getAttribute?.("role") === "spinbutton";
+  }
+
+  function readInputValue(el) {
+    if (!el) return "";
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value || "";
+    if (el.isContentEditable) return text(el);
+    return el.getAttribute?.("value") || "";
+  }
+
   function dispatchInput(input, data, inputType) {
     try {
       input.dispatchEvent(
@@ -75,16 +100,27 @@
   }
 
   function setNativeValue(input, value) {
-    const setter = getValueSetter();
     const str = String(value);
+    if (input.isContentEditable) {
+      input.focus?.({ preventScroll: true });
+      input.textContent = str;
+      dispatchInput(input, str, "insertText");
+      return;
+    }
+    const setter = getValueSetter();
     if (setter) setter.call(input, str);
     else input.value = str;
     dispatchInput(input, str, "insertText");
   }
 
   function clearNativeValue(input) {
-    const setter = getValueSetter();
     input.focus?.();
+    if (input.isContentEditable) {
+      input.textContent = "";
+      dispatchInput(input, "", "deleteContentBackward");
+      return;
+    }
+    const setter = getValueSetter();
     if (setter) setter.call(input, "");
     else input.value = "";
     dispatchInput(input, "", "deleteContentBackward");
@@ -96,16 +132,33 @@
 
   function inputMeta(input) {
     return {
-      placeholder: input.placeholder || "",
-      type: input.type || "",
+      placeholder: input.placeholder || input.getAttribute?.("placeholder") || "",
+      type: input.type || input.tagName?.toLowerCase() || "",
       inputmode: input.getAttribute("inputmode") || "",
       class: input.className || "",
       "data-editor-id": input.getAttribute("data-editor-id") || "",
-      value: input.value,
+      "data-testid": input.getAttribute("data-testid") || "",
+      value: readInputValue(input),
       disabled: !!input.disabled,
       readonly: !!input.readOnly,
       "aria-disabled": input.getAttribute("aria-disabled") || "",
-      outerHTML: (input.outerHTML || "").slice(0, 240),
+      outerHTML: (input.outerHTML || "").slice(0, 320),
+    };
+  }
+
+  function probeInput(input) {
+    let focusOk = false;
+    try {
+      input.focus?.({ preventScroll: true });
+      focusOk = document.activeElement === input;
+    } catch (_err) {}
+    return {
+      focus_ok: focusOk,
+      value: readInputValue(input),
+      placeholder: input.placeholder || input.getAttribute?.("placeholder") || "",
+      disabled: !!input.disabled,
+      readonly: !!input.readOnly,
+      "aria-disabled": input.getAttribute("aria-disabled") || "",
     };
   }
 
@@ -130,93 +183,173 @@
     if (!visible(input)) return -1;
     if (input.disabled || input.readOnly) score -= 200;
     if (input.getAttribute("aria-disabled") === "true") score -= 200;
-    const blob = `${input.id} ${input.placeholder} ${input.className} ${input.getAttribute("data-editor-id") || ""}`.toLowerCase();
+    const blob = `${input.id} ${input.placeholder} ${input.className} ${input.getAttribute("data-editor-id") || ""} ${input.getAttribute("data-testid") || ""}`.toLowerCase();
     if (/stake|amount|usdt|counter|decimal|bet/i.test(blob)) score += 100;
     if (input.getAttribute("data-editor-id")?.includes("Stake")) score += 150;
     if (input.type === "number" || input.getAttribute("inputmode") === "decimal") score += 40;
+    if (input.isContentEditable) score += 20;
     return score;
   }
 
-  function scanBcStakeInputs({ debug = false, frameUrl = "" } = {}) {
+  function collectInputNodes(slipRoot, selector) {
+    const nodes = [];
+    try {
+      for (const el of slipRoot.querySelectorAll(selector)) {
+        if (!isEditableInput(el) || !visible(el)) continue;
+        nodes.push(el);
+      }
+    } catch (_err) {}
+    return nodes;
+  }
+
+  function scanBcStakeInputs({ debug = false, frameUrl = "", probe = false } = {}) {
+    const frame_url = frameUrl || location.href;
     const slip = findBcSlipRoot();
     const scans = [];
     const candidates = [];
+    const scanLines = [];
 
     if (!slip.root) {
+      const report = {
+        block: "BC INPUT SCAN",
+        frame_url,
+        slip_found: false,
+        slip_selector: "",
+        scans: [],
+        input_candidates: [],
+        scan_lines: scanLines,
+        found: null,
+        best: null,
+        selector: "",
+      };
       if (debug) {
-        _lastDebug = {
-          block: "BC STAKE INPUT SCAN",
-          frame_url: frameUrl || location.href,
-          slip_found: false,
-          scans: [],
-          found: null,
-        };
+        _lastDebug = report;
+        emitStakeDebug("BC INPUT SCAN", report);
       }
-      return { slip, candidates, scans, best: null, selector: "" };
+      return { slip, candidates, scans, scanLines, best: null, selector: "", input_candidates: [], report };
     }
 
     const seen = new Set();
     for (const sel of BC_INPUT_SELECTORS) {
-      let nodes = [];
-      try {
-        nodes = slip.root.querySelectorAll(sel);
-      } catch (_err) {
-        continue;
-      }
+      const nodes = collectInputNodes(slip.root, sel);
       const count = nodes.length;
       let sample = null;
       for (const el of nodes) {
-        if (!(el instanceof HTMLInputElement) || el.type === "hidden") continue;
-        if (!visible(el)) continue;
         if (seen.has(el)) continue;
         seen.add(el);
         const meta = inputMeta(el);
         const score = scoreBcStakeInput(el, slip);
         if (score < 0) continue;
-        candidates.push({ input: el, score, selector: sel, meta });
-        if (!sample) sample = meta;
-      }
-      if (debug) {
-        scans.push({
+        const probeInfo = probe ? probeInput(el) : null;
+        const candidate = {
+          input: el,
+          score,
           selector: sel,
-          count,
-          placeholder: sample?.placeholder || "",
-          type: sample?.type || "",
-          inputmode: sample?.inputmode || "",
-          class: sample?.class || "",
-          "data-editor-id": sample?.["data-editor-id"] || "",
-          value: sample?.value || "",
-          outerHTML: sample?.outerHTML || "",
-        });
+          meta,
+          frame_url,
+          probe: probeInfo,
+        };
+        candidates.push(candidate);
+        if (!sample) sample = meta;
+        if (probeInfo) {
+          scanLines.push(
+            `[BC INPUT SCAN] probe selector=${sel} focus=${probeInfo.focus_ok} value=${probeInfo.value} placeholder=${probeInfo.placeholder} disabled=${probeInfo.disabled} readonly=${probeInfo.readonly} aria-disabled=${probeInfo["aria-disabled"]}`
+          );
+        }
+      }
+      const row = {
+        frame_url,
+        selector: sel,
+        count,
+        placeholder: sample?.placeholder || "",
+        type: sample?.type || "",
+        inputmode: sample?.inputmode || "",
+        class: sample?.class || "",
+        value: sample?.value || "",
+        outerHTML: sample?.outerHTML || "",
+        "data-editor-id": sample?.["data-editor-id"] || "",
+      };
+      scans.push(row);
+      if (debug) {
+        scanLines.push(
+          `[BC INPUT SCAN] frame_url=${frame_url} selector=${sel} count=${count} placeholder=${row.placeholder} type=${row.type} inputmode=${row.inputmode} class=${row.class} value=${row.value} outerHTML=${row.outerHTML}`
+        );
       }
     }
 
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0] || null;
+    const input_candidates = candidates.map((c) => ({
+      selector: c.selector,
+      score: c.score,
+      frame_url,
+      ...c.meta,
+      probe: c.probe,
+    }));
+
+    const found = best
+      ? {
+          selector: best.selector,
+          frame_url,
+          current_value: readInputValue(best.input),
+          score: best.score,
+          ...best.meta,
+          probe: best.probe,
+        }
+      : null;
+
+    const report = {
+      block: "BC INPUT SCAN",
+      frame_url,
+      slip_selector: slip.selector,
+      slip_found: true,
+      scans,
+      input_candidates,
+      scan_lines: scanLines,
+      found,
+      best: best
+        ? {
+            selector: best.selector,
+            score: best.score,
+            frame_url,
+            current_value: readInputValue(best.input),
+            meta: best.meta,
+            probe: best.probe,
+          }
+        : null,
+      selector: best?.selector || "",
+    };
+
     if (debug) {
-      _lastDebug = {
-        block: "BC STAKE INPUT SCAN",
-        frame_url: frameUrl || location.href,
-        slip_selector: slip.selector,
-        slip_found: true,
-        scans,
-        found: best
-          ? {
-              selector: best.selector,
-              frame_url: frameUrl || location.href,
-              current_value: best.input.value,
-              ...best.meta,
-            }
-          : null,
-      };
+      _lastDebug = report;
+      for (const line of scanLines) {
+        try {
+          console.log(line);
+        } catch (_err) {}
+      }
+      emitStakeDebug("BC INPUT SCAN", report);
+      if (found) {
+        emitStakeDebug("BC STAKE INPUT FOUND", found);
+      } else {
+        emitStakeDebug("BC STAKE INPUT NOT FOUND", report);
+      }
     }
+
     return {
       slip,
       candidates,
       scans,
+      scanLines,
       best,
       selector: best?.selector || "",
+      input_candidates,
+      report,
+      found,
     };
+  }
+
+  function scanBcInputReport(opts = {}) {
+    return scanBcStakeInputs({ debug: true, probe: true, frameUrl: location.href, ...opts }).report;
   }
 
   function findBcStakeInput(opts) {
@@ -228,7 +361,7 @@
     return {
       selector: selector || "",
       frame_url: location.href,
-      current_value: input.value,
+      current_value: readInputValue(input),
       disabled: !!input.disabled,
       readonly: !!input.readOnly,
       "aria-disabled": input.getAttribute("aria-disabled") || "",
@@ -241,10 +374,10 @@
   }
 
   async function verifyStakeValue(input, want) {
-    const checks = { before: parseStakeValue(input.value) };
+    const checks = { before: parseStakeValue(readInputValue(input)) };
     for (const ms of VERIFY_DELAYS_MS) {
       await sleep(ms);
-      checks[`${ms}ms`] = parseStakeValue(input.value);
+      checks[`${ms}ms`] = parseStakeValue(readInputValue(input));
     }
     const final = checks["250ms"] ?? checks["100ms"] ?? checks["50ms"] ?? checks.before;
     const ok = final != null && Math.abs(final - want) <= TOLERANCE;
@@ -269,7 +402,7 @@
     const blocked = inputBlocked(input);
     if (blocked) return { ok: false, reason: blocked, actual: null, locator: buildLocator(input, selector) };
 
-    const before = parseStakeValue(input.value);
+    const before = parseStakeValue(readInputValue(input));
     input.focus?.({ preventScroll: true });
     clearNativeValue(input);
     await sleep(20);
@@ -322,9 +455,9 @@
     };
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
-      const scan = scanBcStakeInputs({ debug: debug || attempt === 0, frameUrl });
-      if (debug && scan.scans.length) {
-        lastResult.debug = _lastDebug;
+      const scan = scanBcStakeInputs({ debug: debug || attempt === 0, probe: true, frameUrl });
+      if (debug && scan.report) {
+        lastResult.debug = scan.report;
       }
       const best = scan.best;
       if (!best?.input) {
@@ -347,8 +480,9 @@
         frame_url: frameUrl,
         frame_has_input: true,
         attempt,
+        test,
         debug: {
-          ...(_lastDebug || {}),
+          ...(scan.report || _lastDebug || {}),
           requested: want,
           selected_selector: best.selector,
           frame_url: frameUrl,
@@ -382,15 +516,29 @@
     return lastResult;
   }
 
+  async function testBcStakeInput(amountUsdt = 1.0) {
+    const result = await setBcStake(amountUsdt, { debug: true, test: true });
+    return {
+      ok: !!result.ok,
+      success: !!result.ok,
+      reason: result.reason || (result.ok ? "ok" : "stake-input-not-found"),
+      requested: result.requested,
+      actual: result.actual,
+      frame_url: result.frame_url,
+      selector: result.selector,
+      debug: result.debug,
+    };
+  }
+
   function readBcStake() {
     const scan = scanBcStakeInputs({ debug: false });
     const input = scan.best?.input;
     if (!input) {
-      return { ok: false, reason: "stake-input-not-found", actual: null, frame_url: location.href };
+      return { ok: false, reason: "stake-input-not-found", actual: null, frame_url: location.href, deferred: true };
     }
     return {
       ok: true,
-      actual: parseStakeValue(input.value),
+      actual: parseStakeValue(readInputValue(input)),
       frame_url: location.href,
       selector: scan.selector,
       locator: buildLocator(input, scan.selector),
@@ -404,7 +552,7 @@
         block,
         site: "bc",
         frame_url: location.href,
-        ...payload,
+        ...(typeof payload === "object" && payload ? payload : { message: payload }),
       });
     } catch (_err) {}
   }
@@ -426,8 +574,11 @@
   }
 
   function registerBcStakeLocator() {
-    const scan = scanBcStakeInputs({ debug: true, frameUrl: location.href });
-    if (!scan.best?.input) return null;
+    const scan = scanBcStakeInputs({ debug: true, probe: true, frameUrl: location.href });
+    if (!scan.best?.input) {
+      emitStakeDebug("BC STAKE INPUT NOT FOUND", scan.report || { frame_url: location.href });
+      return null;
+    }
     const locator = {
       ...buildLocator(scan.best.input, scan.best.selector),
       score: scan.best.score,
@@ -439,11 +590,11 @@
         site: "bc",
         frame_url: location.href,
         locator,
-        current_value: scan.best.input.value,
+        current_value: readInputValue(scan.best.input),
       });
     } catch (_err) {}
-    if (_lastDebug?.found) {
-      emitStakeDebug("BC STAKE INPUT FOUND", _lastDebug.found);
+    if (scan.report?.found) {
+      emitStakeDebug("BC STAKE INPUT FOUND", scan.report.found);
     }
     return locator;
   }
@@ -592,11 +743,13 @@
   global.ArbStakeActions = {
     setBcStake,
     readBcStake,
+    testBcStakeInput,
     setX10Stake,
     placeBcBet,
     placeX10Bet,
     findBcStakeInput,
     scanBcStakeInputs,
+    scanBcInputReport,
     registerBcStakeLocator,
     watchBcStakeInput,
     getLastStakeDebug: () => _lastDebug,

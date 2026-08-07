@@ -68,6 +68,39 @@ async def test_stake_sync_writes_bc_input() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stake_sync_scan_not_found() -> None:
+    svc = StakeSyncService()
+    server = MagicMock()
+    server.send_command = AsyncMock(
+        return_value=MagicMock(
+            ok=False,
+            reason="stake-input-not-found",
+            actual=None,
+            raw={"found": False, "debug": {"found": False, "scans": []}},
+        )
+    )
+    status = await svc.scan_bc_stake(server=server)
+    assert status.state == StakeSyncState.INPUT_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_stake_sync_no_actual_not_ok() -> None:
+    svc = StakeSyncService()
+    bc, bti = _slips()
+    settings = AppSettings(bti_stake_krw=100_000, stake_sync_enabled=True)
+    fx = FxSnapshot(rate=1400.0, status=FxStatus.LIVE, updated_at=0.0, age_seconds=0.0)
+    metrics = svc.compute_metrics(bc=bc, bti=bti, settings=settings, fx=fx)
+    assert metrics
+
+    server = MagicMock()
+    server.send_command = AsyncMock(
+        return_value=MagicMock(ok=True, actual=None, reason="ok", raw={"debug": {}})
+    )
+    status = await svc.sync_bc_stake(server=server, metrics=metrics, settings=settings)
+    assert status.state == StakeSyncState.INPUT_NOT_FOUND
+
+
+@pytest.mark.asyncio
 async def test_stake_sync_input_not_found() -> None:
     svc = StakeSyncService()
     bc, bti = _slips()

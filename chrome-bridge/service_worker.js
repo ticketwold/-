@@ -176,7 +176,7 @@ async function sendMessageToFrame(tabId, frameId, message) {
   return chrome.tabs.sendMessage(tabId, message, { frameId });
 }
 
-async function iterateTabFrames(tabId, message) {
+async function iterateTabFrames(tabId, message, { collectAll = false } = {}) {
   /** @type {Array<{frameId:number, url?:string}>} */
   let frames = [];
   try {
@@ -187,11 +187,12 @@ async function iterateTabFrames(tabId, message) {
 
   let lastResult = { ok: false, error: "no-frame-response", reason: "no-frame-response" };
   const ranked = [];
+  const collected = [];
 
   const registered = bcStakeLocatorByTab[tabId];
   if (registered?.frameId != null && message.site === "bc") {
     frames = [
-      { frameId: registered.frameId },
+      { frameId: registered.frameId, url: registered.frame_url },
       ...frames.filter((f) => f.frameId !== registered.frameId),
     ];
   }
@@ -200,15 +201,111 @@ async function iterateTabFrames(tabId, message) {
     try {
       const result = await sendMessageToFrame(tabId, frame.frameId, message);
       if (!result) continue;
+      const merged = {
+        ...result,
+        frameId: frame.frameId,
+        frame_url: result.frame_url || frame.url || "",
+      };
+      if (collectAll) {
+        collected.push(merged);
+        continue;
+      }
       if (result.deferred) continue;
-      if (result.ok) return result;
-      ranked.push(result);
-      lastResult = result;
+      if (result.ok) return merged;
+      ranked.push(merged);
+      lastResult = merged;
     } catch (_err) {
       // frame may not have content script
     }
   }
+  if (collectAll) return collected;
   return ranked.sort((a, b) => (b.score || 0) - (a.score || 0))[0] || lastResult;
+}
+
+function mergeBcScanResults(frameResults) {
+  const scans = [];
+  const inputCandidates = [];
+  const scanLines = [];
+  let best = null;
+  let bestFrame = null;
+
+  for (const fr of frameResults) {
+    for (const row of fr.scans || []) {
+      scans.push({ ...row, frame_url: row.frame_url || fr.frame_url || "" });
+    }
+    for (const row of fr.input_candidates || []) {
+      inputCandidates.push({ ...row, frame_url: row.frame_url || fr.frame_url || "" });
+    }
+    for (const line of fr.scan_lines || []) {
+      scanLines.push(line);
+    }
+    const candidate = fr.best || fr.found;
+    const score = Number(candidate?.score || 0);
+    if (candidate && score >= Number(best?.score || 0)) {
+      best = candidate;
+      bestFrame = fr;
+    }
+  }
+
+  const found = !!best;
+  const frame_url = best?.frame_url || bestFrame?.frame_url || "";
+  const selector = best?.selector || "";
+  const current_value = best?.current_value ?? best?.meta?.value ?? null;
+
+  return {
+    ok: found,
+    found,
+    frame_url,
+    selector,
+    current_value,
+    scans,
+    input_candidates: inputCandidates,
+    scan_lines: scanLines,
+    best,
+    reason: found ? "ok" : "stake-input-not-found",
+    debug: {
+      block: "BC INPUT SCAN",
+      found: found
+        ? { selector, frame_url, current_value }
+        : null,
+      scans,
+      input_candidates: inputCandidates,
+      scan_lines: scanLines,
+      frame_count: frameResults.length,
+    },
+  };
+}
+
+async function scanBcStakeInputsAllFrames(message) {
+  const tabs = await chrome.tabs.query({ url: BC_URLS });
+  if (!tabs.length) {
+    return { ok: false, reason: "frame-not-found", found: false, scans: [], input_candidates: [] };
+  }
+
+  const payload = {
+    type: "bridge_command",
+    site: "bc",
+    command: "scan_bc_stake",
+    request_id: message.request_id,
+  };
+
+  const allFrameResults = [];
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const frameResults = await iterateTabFrames(tab.id, payload, { collectAll: true });
+    allFrameResults.push(...frameResults);
+  }
+
+  const merged = mergeBcScanResults(allFrameResults);
+  maybeForwardDebug({
+    block: merged.found ? "BC STAKE INPUT FOUND" : "BC STAKE INPUT NOT FOUND",
+    site: "bc",
+    frame_url: merged.frame_url,
+    selector: merged.selector,
+    current_value: merged.current_value,
+    ...merged.debug,
+  });
+  return merged;
 }
 
 async function executeBridgeCommand(message) {
@@ -267,7 +364,10 @@ async function startBridge() {
         return;
       }
       if (message.type === "bridge_command") {
-        const result = await executeBridgeCommand(message);
+        const result =
+          message.command === "scan_bc_stake" && message.site === "bc"
+            ? await scanBcStakeInputsAllFrames(message)
+            : await executeBridgeCommand(message);
         client?.send({
           type: "command_result",
           request_id: message.request_id,
@@ -275,6 +375,18 @@ async function startBridge() {
           site: message.site,
           ...result,
         });
+        if (message.command === "scan_bc_stake" && message.site === "bc") {
+          client?.send({
+            type: "bridge_debug",
+            block: result.found ? "BC STAKE INPUT FOUND" : "BC STAKE INPUT NOT FOUND",
+            site: "bc",
+            found: !!result.found,
+            frame_url: result.frame_url || "",
+            selector: result.selector || "",
+            current_value: result.current_value ?? null,
+            ...(result.debug || {}),
+          });
+        }
         if (message.command === "set_bc_stake" || message.command === "read_bc_stake") {
           client?.send({
             type: "stake_sync_result",

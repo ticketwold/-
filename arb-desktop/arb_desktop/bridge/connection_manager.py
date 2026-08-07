@@ -120,7 +120,7 @@ class ConnectionManager:
         block = str(payload.get("block") or "").upper()
         if site in {"x10", "bti"}:
             self.last_x10_debug = payload
-        if site == "bc" or block.startswith("BC STAKE"):
+        if block in {"BC STAKE INPUT FOUND", "BC STAKE INPUT NOT FOUND", "BC INPUT SCAN"} or block.startswith("BC STAKE"):
             self.last_bc_stake_debug = payload
         if self.on_debug:
             self.on_debug(payload)

@@ -71,16 +71,39 @@
     if (!actions) return { ok: false, error: "stake-actions-missing", frame_url: location.href };
     const cmd = message.command;
 
-    if (cmd === "set_bc_stake" || cmd === "read_bc_stake" || cmd === "scan_bc_stake") {
-      const scan = actions.scanBcStakeInputs?.({ debug: true, frameUrl: location.href });
+    if (cmd === "scan_bc_stake") {
+      const report = actions.scanBcInputReport?.() || actions.scanBcStakeInputs?.({ debug: true, probe: true, frameUrl: location.href });
+      const payload = report?.report || report || {};
+      const best = payload.best || report?.best;
+      return {
+        ok: !!best?.selector || !!payload.found,
+        frame_url: location.href,
+        slip_found: payload.slip_found ?? !!payload.slip?.root,
+        slip_selector: payload.slip_selector || "",
+        scans: payload.scans || report?.scans || [],
+        input_candidates: payload.input_candidates || report?.input_candidates || [],
+        scan_lines: payload.scan_lines || report?.scanLines || [],
+        found: payload.found || null,
+        best,
+        selector: best?.selector || payload.selector || "",
+        current_value: best?.current_value ?? payload.found?.current_value ?? null,
+        score: best?.score || 0,
+        deferred: false,
+      };
+    }
+
+    if (cmd === "set_bc_stake" || cmd === "read_bc_stake") {
+      if (cmd === "read_bc_stake") {
+        const read = actions.readBcStake();
+        if (!read.ok) return { ...read, deferred: true };
+        return read;
+      }
+      if (cmd === "set_bc_stake" && message.test && actions.testBcStakeInput) {
+        return actions.testBcStakeInput(Number(message.amount_usdt));
+      }
+      const scan = actions.scanBcStakeInputs?.({ debug: true, probe: true, frameUrl: location.href });
       if (!scan?.best?.input) {
         return { ok: false, reason: "stake-input-not-found", frame_url: location.href, deferred: true };
-      }
-      if (cmd === "scan_bc_stake") {
-        return { ok: true, frame_url: location.href, locator: scan.best, scans: scan.scans };
-      }
-      if (cmd === "read_bc_stake") {
-        return actions.readBcStake();
       }
       return actions.setBcStake(Number(message.amount_usdt), { debug: true, test: !!message.test });
     }

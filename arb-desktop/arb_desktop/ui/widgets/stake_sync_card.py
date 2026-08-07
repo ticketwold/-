@@ -47,7 +47,10 @@ class StakeSyncCard(CardFrame):
 
         calc = m.stake_sync_calculated_usdt
         actual = m.stake_sync_actual_usdt
-        self.lbl_calc.setText(f"{calc:.1f} USDT" if calc is not None else (f"{m.bc_stake_usdt:.1f} USDT" if m.bc_stake_usdt else "—"))
+        effective_calc = calc if calc is not None else (m.bc_stake_usdt if m.bc_stake_usdt else None)
+        self.lbl_calc.setText(
+            f"{effective_calc:.1f} USDT" if effective_calc is not None else "—"
+        )
         self.lbl_actual.setText(f"{actual:.1f} USDT" if actual is not None else "—")
 
         state = m.stake_sync_state or "IDLE"
@@ -55,7 +58,10 @@ class StakeSyncCard(CardFrame):
         if state == "OK":
             display = "동기화 완료"
             css = "status-ok"
-        elif state in {"FAILED", "INPUT_NOT_FOUND"}:
+        elif state == "INPUT_NOT_FOUND":
+            display = msg or "Stake input not found"
+            css = "status-bad"
+        elif state == "FAILED":
             display = msg or _reason_label(getattr(m, "stake_sync_reason", "") or state)
             css = "status-bad"
         elif state == "SYNCING":
@@ -64,6 +70,9 @@ class StakeSyncCard(CardFrame):
         elif not enabled:
             display = "추천 금액만 표시"
             css = "muted"
+        elif effective_calc is not None and actual is None and enabled:
+            display = "Stake input not found"
+            css = "status-bad"
         else:
             display = msg or "대기"
             css = "muted"
@@ -76,7 +85,7 @@ class StakeSyncCard(CardFrame):
 
 def _reason_label(reason: str) -> str:
     mapping = {
-        "stake-input-not-found": "입력창을 찾지 못함",
+        "stake-input-not-found": "Stake input not found",
         "react-reset-value": "사이트가 입력값을 다시 초기화함",
         "value-not-applied": "입력값이 적용되지 않음",
         "input-disabled": "입력창이 비활성화됨",
