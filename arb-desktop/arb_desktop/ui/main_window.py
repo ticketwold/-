@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("arb-desktop — 양방 배팅 데스크톱")
-        self.resize(980, 820)
+        self.resize(900, 680)
 
         self._store = SettingsStore()
         self._settings = self._store.load()
