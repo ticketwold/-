@@ -150,9 +150,11 @@ class MainWindow(QMainWindow):
         self._worker.pipeline_overlay_updated.connect(self._on_pipeline_overlay)
         self.pipeline_overlay.rescan_x10_requested.connect(self._on_rescan_x10)
         self.pipeline_overlay.rescan_bc_requested.connect(self._on_rescan_bc)
+        self.pipeline_overlay.bc_stake_scan_requested.connect(self._worker.scan_bc_stake)
         self.pipeline_overlay.bc_stake_test_requested.connect(lambda: self._worker.test_bc_stake(1.0))
         self.pipeline_overlay.x10_bet_button_requested.connect(self._worker.scan_x10_bet_button)
         self.pipeline_overlay.bc_bet_button_requested.connect(self._worker.scan_bc_bet_button)
+        self.pipeline_overlay.dry_run_dispatch_requested.connect(self._on_dry_run_dispatch)
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
         self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
@@ -206,7 +208,7 @@ class MainWindow(QMainWindow):
         self.btn_watch_stop.setEnabled(False)
         self.btn_watch_stop.setProperty("class", "danger-outline")
         self.btn_watch_stop.setMinimumHeight(48)
-        self.btn_manual = QPushButton("⚡ 양쪽 수동배팅 실행")
+        self.btn_manual = QPushButton("⚡ 양쪽 즉시배팅")
         self.btn_manual.setProperty("class", "manual-bet")
         self.btn_manual.setMinimumHeight(50)
         self.btn_settings = QPushButton("설정")
@@ -327,6 +329,10 @@ class MainWindow(QMainWindow):
     def _on_pipeline_overlay(self, payload: dict) -> None:
         self.pipeline_overlay.update_payload(payload)
         self.monitor.update_pipeline_overlay(payload)
+
+    def _on_dry_run_dispatch(self) -> None:
+        self.pipeline_overlay.set_action_result("Dry-run dispatch 요청…")
+        self._worker.dry_run_dispatch()
 
     def _on_rescan_x10(self) -> None:
         self.pipeline_overlay.set_action_result("X10 재스캔 요청…")

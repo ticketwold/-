@@ -183,6 +183,7 @@ class ExecutionEngine:
         fx: FxSnapshot | None,
         manual: bool = False,
         skip_target_check: bool = False,
+        force_dry: bool = False,
         get_reads: Callable[[], tuple[BetSlipReadResult, BetSlipReadResult]] | None = None,
     ) -> DispatchResult:
         if self.is_locked:
@@ -228,6 +229,24 @@ class ExecutionEngine:
                     outcome=BetOutcome.CANCELLED,
                     abort_reason="bc-stake-sync-failed",
                 )
+            if settings.stake_sync_enabled and server:
+                read_back = await server.send_command("bc", "read_bc_stake")
+                actual = getattr(read_back, "actual", None)
+                target = float(ctx.metrics.bc_stake_usdt)
+                verify_ok = actual is not None and abs(float(actual) - target) <= 0.15
+                get_exec_logger().log(
+                    "BC STAKE",
+                    step="VERIFY_INPUT",
+                    verify=actual,
+                    success=verify_ok,
+                    requested=target,
+                )
+                if not verify_ok:
+                    return DispatchResult(
+                        execution_id="",
+                        outcome=BetOutcome.CANCELLED,
+                        abort_reason="bc-stake-verify-failed",
+                    )
 
             # 최신 slip 기준으로 metrics 재계산
             if get_reads:
@@ -270,19 +289,26 @@ class ExecutionEngine:
                 return result
 
             live = settings.live_execution_enabled
-            if manual and live:
+            if force_dry:
+                dry = True
+            elif manual and live:
                 dry = False
             else:
                 dry = settings.dry_run or not live
 
-            if not live:
+            if force_dry:
+                self.state.message = "Dry Run — 양쪽 병렬 배팅 시뮬레이션"
+            elif not live:
                 get_exec_logger().log("DISPATCH", ok=False, reason="live_execution_disabled")
             elif dry:
                 get_exec_logger().log("DISPATCH", ok=False, reason="dry_run_enabled")
 
             self.state.phase = ExecutionPhase.DISPATCH
-            self.state.message = "양쪽 배팅 전송 중..." if not dry else "Dry Run — 양쪽 배팅 시뮬레이션..."
-            get_exec_logger().log("DISPATCH", ok=live and not dry)
+            if force_dry or dry:
+                self.state.message = "Dry Run — 양쪽 병렬 배팅 시뮬레이션"
+            else:
+                self.state.message = "양쪽 병렬 배팅 전송 중"
+            get_exec_logger().log("DISPATCH", ok=(live and not dry) or force_dry)
 
             x10_button_ok = True
             bc_button_ok = True
@@ -370,8 +396,8 @@ class ExecutionEngine:
 
             result = await self._orchestrator.dispatch(
                 ctx,
-                dry_run=dry,
-                live_enabled=live,
+                dry_run=dry or force_dry,
+                live_enabled=live and not force_dry,
                 x10_click=x10_click_fn,
                 bc_click=bc_click_fn,
                 manual=manual,

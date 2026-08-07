@@ -120,9 +120,11 @@ class PipelineDebugOverlay(QFrame):
 
     rescan_x10_requested = pyqtSignal()
     rescan_bc_requested = pyqtSignal()
+    bc_stake_scan_requested = pyqtSignal()
     bc_stake_test_requested = pyqtSignal()
     x10_bet_button_requested = pyqtSignal()
     bc_bet_button_requested = pyqtSignal()
+    dry_run_dispatch_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -133,29 +135,35 @@ class PipelineDebugOverlay(QFrame):
         root.addWidget(title)
 
         btn_row = QHBoxLayout()
+        self.btn_bc_stake_scan = QPushButton("BC Stake Input 찾기")
+        self.btn_bc_stake = QPushButton("BC 1.0 USDT 입력 테스트")
+        self.btn_x10_bet = QPushButton("X10 Bet 버튼 찾기")
+        self.btn_bc_bet = QPushButton("BC Bet 버튼 찾기")
+        self.btn_dry_run = QPushButton("양쪽 Dry-run Dispatch")
         self.btn_rescan_x10 = QPushButton("X10 카트 재스캔")
         self.btn_rescan_bc = QPushButton("BC 카트 재스캔")
-        self.btn_bc_stake = QPushButton("BC 1.0 USDT 테스트")
-        self.btn_x10_bet = QPushButton("X10 Bet 버튼")
-        self.btn_bc_bet = QPushButton("BC Bet 버튼")
         self.lbl_action_result = QLabel("—")
         self.lbl_action_result.setWordWrap(True)
         mono = QFont("Consolas", 9)
         self.lbl_action_result.setFont(mono)
         for btn in (
-            self.btn_rescan_x10,
-            self.btn_rescan_bc,
+            self.btn_bc_stake_scan,
             self.btn_bc_stake,
             self.btn_x10_bet,
             self.btn_bc_bet,
+            self.btn_dry_run,
+            self.btn_rescan_x10,
+            self.btn_rescan_bc,
         ):
             btn.setProperty("class", "primary")
             btn_row.addWidget(btn)
-        self.btn_rescan_x10.clicked.connect(self.rescan_x10_requested.emit)
-        self.btn_rescan_bc.clicked.connect(self.rescan_bc_requested.emit)
+        self.btn_bc_stake_scan.clicked.connect(self.bc_stake_scan_requested.emit)
         self.btn_bc_stake.clicked.connect(self.bc_stake_test_requested.emit)
         self.btn_x10_bet.clicked.connect(self.x10_bet_button_requested.emit)
         self.btn_bc_bet.clicked.connect(self.bc_bet_button_requested.emit)
+        self.btn_dry_run.clicked.connect(self.dry_run_dispatch_requested.emit)
+        self.btn_rescan_x10.clicked.connect(self.rescan_x10_requested.emit)
+        self.btn_rescan_bc.clicked.connect(self.rescan_bc_requested.emit)
         root.addLayout(btn_row)
         root.addWidget(self.lbl_action_result)
 

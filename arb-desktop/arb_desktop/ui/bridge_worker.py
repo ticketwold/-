@@ -10,7 +10,11 @@ from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
 from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
-from arb_desktop.execution.dispatch_readiness import assess_dispatch_readiness
+from arb_desktop.execution.dispatch_readiness import (
+    assess_auto_dispatch_readiness,
+    assess_manual_dispatch_readiness,
+    build_exec_checklist,
+)
 from arb_desktop.execution.exec_logger import get_exec_logger
 from arb_desktop.execution.execution_engine import ExecutionEngine
 from arb_desktop.execution.stake_sync_service import StakeSyncState
@@ -106,6 +110,16 @@ class BridgeWorker(QObject):
         self._store.apply_to_runtime(app_settings)
         self._fx._refresh_interval = app_settings.fx_refresh_seconds
         self._fx._max_stale_seconds = app_settings.fx_max_stale_seconds
+        from arb_desktop.config import settings as runtime_settings
+
+        gui_live = app_settings.live_execution_enabled
+        runtime_live = bool(getattr(runtime_settings, "live_execution_enabled", False))
+        get_exec_logger().log(
+            "LIVE_EXECUTION",
+            gui_live_execution=gui_live,
+            runtime_live_execution=runtime_live,
+            match=gui_live == runtime_live,
+        )
         self._emit_live_metrics()
 
     def set_user_confirmed(self, confirmed: bool) -> None:
@@ -322,6 +336,7 @@ class BridgeWorker(QObject):
                 if self._runtime:
                     await self._runtime.server.request_status()
                     self._emit_live_metrics()
+                    await self._maybe_stake_sync()
                     if self._watching:
                         await self._evaluate_watch()
             except Exception:
@@ -372,7 +387,19 @@ class BridgeWorker(QObject):
                 metrics.stake_sync_message = status.message or "동기화 중..."
 
         if self._runtime:
-            readiness = assess_dispatch_readiness(
+            readiness = build_exec_checklist(
+                metrics=metrics,
+                settings=self._app_settings,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                bc=self._runtime.manager.get_bc_read(),
+                bti=self._runtime.manager.get_bti_read(),
+                fx=self._fx_snapshot,
+                stake_sync=self._execution.stake_sync,
+                x10_bet_button=self._bet_button_cache.get("x10", "?"),
+                bc_bet_button=self._bet_button_cache.get("bc", "?"),
+            )
+            metrics.exec_checklist = readiness
+            auto_ready = assess_auto_dispatch_readiness(
                 metrics=metrics,
                 settings=self._app_settings,
                 bridge_connected=self._runtime.manager.bridge_connected,
@@ -382,11 +409,10 @@ class BridgeWorker(QObject):
                 stake_sync=self._execution.stake_sync,
                 watch_state=self._watch_engine.state,
                 watch_enabled=self._watching,
+                x10_bet_button=self._bet_button_cache.get("x10", "?"),
+                bc_bet_button=self._bet_button_cache.get("bc", "?"),
             )
-            readiness.checklist["X10 Bet Button"] = self._bet_button_cache.get("x10", "?")
-            readiness.checklist["BC Bet Button"] = self._bet_button_cache.get("bc", "?")
-            metrics.exec_checklist = readiness.checklist
-            metrics.dispatch_block_reason = readiness.first_failure
+            metrics.dispatch_block_reason = auto_ready.first_failure if self._watching else ""
             metrics.live_execution_on = self._app_settings.live_execution_enabled
             metrics.dry_run_on = self._app_settings.dry_run
 
@@ -469,18 +495,47 @@ class BridgeWorker(QObject):
             )
             if self._watch_engine.consume_ready_for_dispatch():
                 live = self._app_settings.live_execution_enabled
-                should_dispatch = live and not self._app_settings.dry_run
-                if not should_dispatch:
-                    reason = "live_execution_disabled"
-                    if not live:
-                        reason = "live_execution_disabled"
-                    elif self._app_settings.dry_run:
-                        reason = "dry_run_enabled"
+                dry = self._app_settings.dry_run
+                auto_ready = assess_auto_dispatch_readiness(
+                    metrics=metrics,
+                    settings=self._app_settings,
+                    bridge_connected=self._runtime.manager.bridge_connected,
+                    bc=bc,
+                    bti=bti,
+                    fx=self._fx_snapshot,
+                    stake_sync=self._execution.stake_sync,
+                    watch_state=state,
+                    watch_enabled=True,
+                    x10_bet_button=self._bet_button_cache.get("x10", "?"),
+                    bc_bet_button=self._bet_button_cache.get("bc", "?"),
+                )
+                if not auto_ready.can_dispatch:
+                    get_exec_logger().log("DISPATCH", ok=False, reason=auto_ready.first_failure or "not_ready")
+                    if self._app_settings.parallel_dry_run_on_ready and dry:
+                        asyncio.create_task(self._run_parallel_dispatch(manual=False, force_dry=True))
+                    return
+                should_dispatch = False
+                force_dry = False
+                if live and not dry:
+                    should_dispatch = True
+                elif self._app_settings.parallel_dry_run_on_ready and dry:
+                    should_dispatch = True
+                    force_dry = True
+                else:
+                    reason = "live_execution_disabled" if not live else "dry_run_enabled"
                     get_exec_logger().log("DISPATCH", ok=False, reason=reason)
                 if should_dispatch:
-                    asyncio.create_task(self._run_parallel_dispatch(manual=False))
+                    asyncio.create_task(
+                        self._run_parallel_dispatch(manual=False, force_dry=force_dry),
+                    )
 
-    async def _run_parallel_dispatch(self, *, manual: bool = False, skip_target_check: bool = False) -> None:
+    async def _run_parallel_dispatch(
+        self,
+        *,
+        manual: bool = False,
+        skip_target_check: bool = False,
+        force_dry: bool = False,
+    ) -> None:
         if not self._runtime or self._dispatch_running:
             return
         self._dispatch_running = True
@@ -491,7 +546,7 @@ class BridgeWorker(QObject):
                 if manual:
                     get_exec_logger().log("MANUAL_BET", execution_engine_called="FAIL", reason="bridge-disconnected")
                 return
-            if manual:
+            if manual and not force_dry:
                 live = self._app_settings.live_execution_enabled
                 if not live:
                     get_exec_logger().log("MANUAL_BET", dispatch_started="FAIL", reason="live_execution_disabled")
@@ -511,6 +566,40 @@ class BridgeWorker(QObject):
                 await asyncio.sleep(0.25)
             bc = self._runtime.manager.get_bc_read()
             bti = self._runtime.manager.get_bti_read()
+            metrics = self._watch_engine.compute_live_metrics(
+                bc=bc,
+                bti=bti,
+                settings=self._app_settings,
+                fx=self._fx_snapshot,
+            )
+            if manual and not force_dry:
+                manual_ready = assess_manual_dispatch_readiness(
+                    metrics=metrics,
+                    settings=self._app_settings,
+                    bridge_connected=self._runtime.manager.bridge_connected,
+                    bc=bc,
+                    bti=bti,
+                    fx=self._fx_snapshot,
+                    stake_sync=self._execution.stake_sync,
+                    x10_bet_button=self._bet_button_cache.get("x10", "?"),
+                    bc_bet_button=self._bet_button_cache.get("bc", "?"),
+                )
+                if not manual_ready.can_dispatch:
+                    get_exec_logger().log(
+                        "MANUAL_BET",
+                        dispatch_started="FAIL",
+                        reason=manual_ready.first_failure or "not_ready",
+                    )
+                    self.log_message.emit(
+                        "BET",
+                        "BLOCKED",
+                        "-",
+                        "-",
+                        manual_ready.first_failure or "not_ready",
+                        f"MANUAL BET|{manual_ready.first_failure}",
+                    )
+                    self.execution_update.emit(self._execution.state)
+                    return
             if manual:
                 self._watch_engine.set_dispatch_state(WatchState.PREPARING, "수동 배팅 준비")
             else:
@@ -531,6 +620,7 @@ class BridgeWorker(QObject):
                 fx=self._fx_snapshot,
                 manual=manual,
                 skip_target_check=skip_target_check,
+                force_dry=force_dry,
                 get_reads=lambda: (
                     self._runtime.manager.get_bc_read(),
                     self._runtime.manager.get_bti_read(),
@@ -759,7 +849,7 @@ class BridgeWorker(QObject):
             return
         result = await self._runtime.server.send_command(site, "scan_bet_buttons")
         ok = bool(result.ok)
-        self._bet_button_cache[site] = "OK" if ok else "FAIL"
+        self._bet_button_cache[site] = "PASS" if ok else "FAIL"
         label = "X10" if site == "x10" else "BC"
         block = f"{label} BET BUTTON"
         payload = {
@@ -788,8 +878,8 @@ class BridgeWorker(QObject):
         bc = await self._runtime.server.send_command("bc", "scan_bet_buttons")
         x10_ok = bool(x10.ok)
         bc_ok = bool(bc.ok)
-        self._bet_button_cache["x10"] = "OK" if x10_ok else "FAIL"
-        self._bet_button_cache["bc"] = "OK" if bc_ok else "FAIL"
+        self._bet_button_cache["x10"] = "PASS" if x10_ok else "FAIL"
+        self._bet_button_cache["bc"] = "PASS" if bc_ok else "FAIL"
         get_exec_logger().log("X10_BET_BUTTON", ok=x10_ok, reason=x10.reason or x10.error or "")
         get_exec_logger().log("BC_BET_BUTTON", ok=bc_ok, reason=bc.reason or bc.error or "")
         payload = {
@@ -824,13 +914,21 @@ class BridgeWorker(QObject):
             "block": "BC INPUT SCAN",
             "site": "bc",
             "found": bool(debug.get("found")),
+            "ok": bool(debug.get("found")),
             "selector": debug.get("selector"),
             "frame_url": debug.get("frame_url"),
             "current_value": debug.get("current_value"),
+            "reason": status.reason,
             "debug": debug,
-            **debug,
         }
+        get_exec_logger().log(
+            "BC STAKE",
+            step="LOCATE_INPUT",
+            input_found=bool(debug.get("found")),
+            selector=debug.get("selector"),
+        )
         self.bc_stake_debug.emit(payload)
+        self.pipeline_overlay_updated.emit(self._pipeline_overlay.to_payload())
         self._emit_live_metrics()
 
     async def _test_bc_stake(self, amount_usdt: float) -> None:
@@ -852,6 +950,14 @@ class BridgeWorker(QObject):
             "debug": status.debug,
         }
         self.bc_stake_debug.emit(payload)
+
+    @pyqtSlot()
+    def dry_run_dispatch(self) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self._run_parallel_dispatch(manual=True, skip_target_check=True, force_dry=True),
+                self._loop,
+            )
 
     @pyqtSlot(bool)
     def manual_bet(self, skip_target_check: bool = False) -> None:

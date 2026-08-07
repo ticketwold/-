@@ -75,7 +75,7 @@ async def test_execution_engine_live_click_callbacks() -> None:
             return MagicMock(ok=True, actual=target, reason="ok")
         if command == "read_bc_stake":
             return MagicMock(ok=True, actual=target, reason="")
-        if command in {"place_x10_bet", "place_bc_bet"}:
+        if command in {"place_x10_bet", "place_bc_bet", "scan_bet_buttons"}:
             return MagicMock(ok=True)
         return MagicMock(ok=True)
 

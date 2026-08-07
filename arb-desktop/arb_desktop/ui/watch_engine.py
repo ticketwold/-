@@ -391,9 +391,11 @@ class WatchEngine:
 
         bc_hash = bc_item.dom_hash if bc_item else ""
         x10_hash = bti_item.dom_hash if bti_item else ""
+        bc_rev = _slip_revision_raw(bc)
+        x10_rev = _slip_revision_raw(bti)
         odds_key = (
             f"{bc_item.odds:.4f}|{bti_item.odds:.4f}|{usdt_rate:.2f}|"
-            f"{calc.bc_stake_usdt:.2f}|{bc_hash}|{x10_hash}"
+            f"{calc.bc_stake_usdt:.2f}|{bc_hash}|{x10_hash}|{bc_rev}|{x10_rev}"
         )
         if odds_key != self._last_odds_key:
             self._last_odds_key = odds_key
@@ -450,6 +452,13 @@ class WatchEngine:
     def _reset_stabilize(self) -> None:
         self._stable_since = None
         self._stable_count = 0
+
+
+def _slip_revision_raw(read: BetSlipReadResult) -> int:
+    try:
+        return int((read.raw or {}).get("revision") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _collect_site_wait_reason(bc_status: SlipStatus, x10_status: SlipStatus) -> str | None:
