@@ -1,4 +1,4 @@
-import { createWebSocketClient, ensurePaired } from "./websocket_client.js";
+import { createWebSocketClient, ensurePaired, loadBridgeConfig } from "./websocket_client.js";
 
 const BC_URLS = ["*://*.bc.game/*", "*://bc.game/*"];
 const X10_URLS = ["*://*.x10x10s.com/*", "*://x10x10s.com/*"];
@@ -146,13 +146,14 @@ async function refreshTabsAndScan() {
 }
 
 async function startBridge() {
+  console.log("[BRIDGE] service worker started");
   try {
     await ensurePaired();
-  } catch (_err) {
-    // ArbDesktop may not be running yet — client will retry pairing on reconnect
+  } catch (err) {
+    console.warn("[PAIR] pairing deferred — ArbDesktop may be offline:", err?.message || err);
   }
 
-  const config = await (await import("./websocket_client.js")).loadBridgeConfig();
+  const config = await loadBridgeConfig();
   client = createWebSocketClient({
     host: config.host,
     port: config.port,
@@ -160,6 +161,7 @@ async function startBridge() {
     extensionId: config.extensionId,
     onConnectionChange: (connected) => {
       if (connected) {
+        console.log("[BRIDGE] connected");
         refreshTabsAndScan();
       } else {
         sendStatus();
@@ -188,14 +190,20 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  startBridge();
+  startBridge().catch((error) => {
+    console.error("[BRIDGE START ERROR]", error);
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  startBridge();
+  startBridge().catch((error) => {
+    console.error("[BRIDGE START ERROR]", error);
+  });
 });
 
-startBridge();
+startBridge().catch((error) => {
+  console.error("[BRIDGE START ERROR]", error);
+});
 setInterval(() => {
   refreshTabsAndScan();
 }, 3000);

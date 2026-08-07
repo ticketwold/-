@@ -73,6 +73,7 @@ export function createWebSocketClient({
 
     try {
       socket = new WebSocket(`ws://${config.host || host}:${config.port || port}/`);
+      console.log(`[WS] connecting ws://${config.host || host}:${config.port || port}/`);
     } catch (_err) {
       notifyConnection(false);
       scheduleReconnect();
@@ -87,7 +88,7 @@ export function createWebSocketClient({
         extension_id: extId,
         credential: cred,
         source: "chrome-bridge",
-        version: "1.1.0",
+        version: "1.2.0",
       });
     });
 
@@ -101,6 +102,7 @@ export function createWebSocketClient({
       if (message.type === "hello_ack" && message.authenticated) {
         authed = true;
         reconnectAttempt = 0;
+        console.log("[WS] authenticated");
         notifyConnection(true);
       } else if (message.type === "auth_fail") {
         authed = false;
@@ -219,6 +221,7 @@ export async function ensurePaired() {
   }
 
   const pairPort = config.pairPort || DEFAULT_PAIR_PORT;
+  console.log("[PAIR] requesting pairing");
   const request = await pairRequest(extensionId, pairPort);
   if (!request?.ok || !request.nonce) {
     throw new Error("pair-request-invalid");
@@ -235,6 +238,8 @@ export async function ensurePaired() {
     bridgeExtensionId: extensionId,
   });
   await chrome.storage.local.remove(["bridgeToken"]);
+
+  console.log("[PAIR] pairing success");
 
   return {
     host: confirmed.host || DEFAULT_HOST,
