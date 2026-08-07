@@ -29,6 +29,7 @@ class BridgeWorker(QObject):
     fx_updated = pyqtSignal(object)
     execution_update = pyqtSignal(object)
     bc_stake_debug = pyqtSignal(object)
+    bc_slip_debug = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -162,24 +163,32 @@ class BridgeWorker(QObject):
         def on_debug(payload: dict[str, Any]) -> None:
             site = str(payload.get("site") or "").lower()
             block = str(payload.get("block") or "").upper()
-            if site == "bc" or block.startswith("BC STAKE"):
-                self.bc_stake_debug.emit(payload)
-            if site not in {"x10", "bti"}:
-                return
-            if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN"}:
-                self.x10_debug.emit(payload)
-            if block == "X10 DEBUG":
-                inner = str(payload.get("slip_inner_text") or "")[:1000]
-                found = payload.get("slip_root_found") or payload.get("found") or "?"
-                reason = payload.get("reason") or ""
-                self.log_message.emit(
-                    "X10DBG",
-                    reason,
-                    str(found),
-                    str(payload.get("body_text_length", "")),
-                    inner[:120],
-                    f"X10DBG|{reason}|{found}|{payload.get('frame_url', '')}",
-                )
+            if site == "bc":
+                if block.startswith("BC STAKE") or block == "BC INPUT SCAN":
+                    self.bc_stake_debug.emit(payload)
+                if block in {
+                    "BC DEBUG",
+                    "BC FRAME",
+                    "CONTENT SCRIPT LOADED",
+                    "SLIP ITEM",
+                    "SLIP ROOT FOUND",
+                } or payload.get("slip_root_found"):
+                    self.bc_slip_debug.emit(payload)
+            if site in {"x10", "bti"}:
+                if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN", "CONTENT SCRIPT LOADED"}:
+                    self.x10_debug.emit(payload)
+                if block == "X10 DEBUG":
+                    inner = str(payload.get("slip_inner_text") or "")[:1000]
+                    found = payload.get("slip_root_found") or payload.get("found") or "?"
+                    reason = payload.get("reason") or ""
+                    self.log_message.emit(
+                        "X10DBG",
+                        reason,
+                        str(found),
+                        str(payload.get("body_text_length", "")),
+                        inner[:120],
+                        f"X10DBG|{reason}|{found}|{payload.get('frame_url', '')}",
+                    )
 
         def on_stake_input_changed() -> None:
             if self._loop:

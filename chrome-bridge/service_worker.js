@@ -15,6 +15,35 @@ const siteStatusDebounce = {
   x10: { code: "empty", hits: 0, since: 0, confirmed: "empty" },
 };
 
+/** Per-site best-frame cache and per-frame latest results. */
+const siteState = {
+  bc: {
+    best_frame_id: null,
+    best_frame_url: "",
+    best_priority: 0,
+    last_valid_slip: null,
+    last_odds: null,
+    last_status: "empty",
+    last_update_ts: 0,
+    injected_frames: 0,
+  },
+  x10: {
+    best_frame_id: null,
+    best_frame_url: "",
+    best_priority: 0,
+    last_valid_slip: null,
+    last_odds: null,
+    last_status: "empty",
+    last_update_ts: 0,
+    injected_frames: 0,
+  },
+};
+
+/** @type {Record<string, { result: object, meta: object, priority: number, ts: number }>} */
+const frameSlipCache = {};
+
+const FRAME_CACHE_TTL_MS = 45_000;
+
 /** @type {Record<number, { frameId: number, frame_url: string, selector: string, score: number }>} */
 const bcStakeLocatorByTab = {};
 
@@ -42,15 +71,63 @@ function confirmSiteStatus(site, rawCode) {
   return d.confirmed;
 }
 
-function slipScore(result) {
+function slipPriority(result) {
   if (!result) return 0;
   if (!result.empty && result.items?.length) {
-    const item = result.items[0];
-    return 100 + (item.odds ? 10 : 0) + (item.event ? 5 : 0) + (item.selection ? 5 : 0);
+    const st = String(result.items[0]?.status || "active").toLowerCase();
+    if (st === "active") return 100;
+    if (st === "closed" || st === "suspended" || st === "disabled" || st === "closed_pending") return 80;
+    if (st === "odds_missing") return 60;
+    return 55;
   }
-  if (result.reason === "no-slip-root") return 1;
-  if (result.reason === "empty-slip") return 2;
-  return 3;
+  if (result.slip_root_found === "YES" || (result.slip_count || 0) > 0) return 60;
+  if (result.reason === "empty-slip") return 10;
+  if (result.reason === "no-slip-root") return 0;
+  return 5;
+}
+
+function slipScore(result) {
+  return slipPriority(result);
+}
+
+function frameCacheKey(site, tabId, frameId) {
+  return `${site}:${tabId ?? "x"}:${frameId ?? 0}`;
+}
+
+function pruneFrameCache() {
+  const now = Date.now();
+  for (const [key, entry] of Object.entries(frameSlipCache)) {
+    if (now - entry.ts > FRAME_CACHE_TTL_MS) delete frameSlipCache[key];
+  }
+}
+
+function pickBestSiteResult(site) {
+  pruneFrameCache();
+  let best = null;
+  let bestPriority = -1;
+  for (const [key, entry] of Object.entries(frameSlipCache)) {
+    if (!key.startsWith(`${site}:`)) continue;
+    if (entry.priority > bestPriority) {
+      bestPriority = entry.priority;
+      best = entry;
+    }
+  }
+  return best;
+}
+
+function updateSiteStateFromBest(site) {
+  const best = pickBestSiteResult(site);
+  const state = siteState[site];
+  if (!best) return null;
+  state.best_frame_id = best.meta?.frame_id ?? null;
+  state.best_frame_url = best.meta?.frame_url || best.result?.frame_url || "";
+  state.best_priority = best.priority;
+  state.last_valid_slip = best.result;
+  state.last_update_ts = best.ts;
+  const item = best.result?.items?.[0];
+  state.last_odds = item?.odds ?? best.result?.extracted_odds ?? null;
+  state.last_status = item?.status || best.result?.parsed_status || (best.result?.empty ? "empty" : "unknown");
+  return best;
 }
 
 function slipPayloadKey(result) {
@@ -89,23 +166,50 @@ function updateSlipStatus(site, result) {
 }
 
 function maybeForwardSlip(site, result, meta) {
-  const prev = bestSlip[site];
-  if (slipScore(result) >= slipScore(prev)) {
-    bestSlip[site] = result;
-  }
+  const tabId = meta?.tab_id;
+  const frameId = meta?.frame_id;
+  const priority = slipPriority(result);
+  const key = frameCacheKey(site, tabId, frameId);
 
-  const best = bestSlip[site];
-  const key = slipPayloadKey(best);
-  if (key === lastSentSlipKey[site]) return;
-  lastSentSlipKey[site] = key;
+  frameSlipCache[key] = {
+    result,
+    meta: {
+      ...meta,
+      tab_id: tabId ?? null,
+      frame_id: frameId ?? null,
+      frame_url: meta?.frame_url || result?.frame_url || "",
+    },
+    priority,
+    ts: Date.now(),
+  };
 
+  const bestEntry = updateSiteStateFromBest(site);
+  if (!bestEntry) return;
+
+  const best = bestEntry.result;
+  const bestMeta = bestEntry.meta;
+  const payloadKey = slipPayloadKey(best);
+  if (payloadKey === lastSentSlipKey[site]) return;
+  lastSentSlipKey[site] = payloadKey;
+
+  bestSlip[site] = best;
   updateSlipStatus(site, best);
   client?.send({
     type: "slip_update",
     site,
-    frame_url: meta?.frame_url || best?.frame_url || "",
-    frame_depth: meta?.frame_depth,
+    tab_id: bestMeta.tab_id,
+    frame_id: bestMeta.frame_id,
+    frame_url: bestMeta.frame_url || best?.frame_url || "",
+    frame_depth: bestMeta.frame_depth,
     result: best,
+    site_state: {
+      injected_frames: siteState[site].injected_frames,
+      best_frame_id: siteState[site].best_frame_id,
+      best_frame_url: siteState[site].best_frame_url,
+      best_priority: siteState[site].best_priority,
+      last_status: siteState[site].last_status,
+      last_odds: siteState[site].last_odds,
+    },
   });
   sendStatus();
 }
@@ -408,8 +512,31 @@ async function startBridge() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
+  if (message?.type === "content_script_loaded") {
+    const site = message.site === "bc" ? "bc" : message.site === "x10" ? "x10" : null;
+    if (site) {
+      siteState[site].injected_frames += 1;
+      maybeForwardDebug({
+        block: "CONTENT SCRIPT LOADED",
+        site,
+        tab_id: sender.tab?.id ?? null,
+        frame_id: sender.frameId ?? null,
+        frame_url: message.frame_url || sender.url || "",
+        readyState: message.readyState || "",
+        injected_frames: siteState[site].injected_frames,
+      });
+    }
+    return;
+  }
+
   if (message?.type === "bridge_debug") {
-    maybeForwardDebug(message);
+    const enriched = {
+      ...message,
+      tab_id: message.tab_id ?? sender.tab?.id ?? null,
+      frame_id: message.frame_id ?? sender.frameId ?? null,
+      frame_url: message.frame_url || sender.url || "",
+    };
+    maybeForwardDebug(enriched);
     return;
   }
 
@@ -457,7 +584,12 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
 
   const site = message.site === "bc" ? "bc" : "x10";
   tabStatus[site] = "found";
-  maybeForwardSlip(site, message.result, message);
+  maybeForwardSlip(site, message.result, {
+    tab_id: sender.tab?.id ?? message.tab_id ?? null,
+    frame_id: sender.frameId ?? message.frame_id ?? null,
+    frame_url: message.frame_url || sender.url || "",
+    frame_depth: message.frame_depth,
+  });
 });
 
 chrome.runtime.onInstalled.addListener(() => {

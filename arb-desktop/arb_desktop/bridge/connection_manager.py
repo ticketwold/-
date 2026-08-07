@@ -96,6 +96,10 @@ class ConnectionManager:
         site_key = "bc" if message.site == "bc" else "x10"
         site = "bc" if message.site == "bc" else "bti"
         read = _result_to_read(site, message.result, frame_url=message.frame_url)
+        if message.site_state:
+            read.raw = {**read.raw, "site_state": message.site_state}
+        if message.tab_id is not None:
+            read.raw = {**read.raw, "tab_id": message.tab_id, "frame_id": message.frame_id}
 
         current = self.bc_slip if site_key == "bc" else self.x10_slip
         if not _should_replace_slip(current, read):

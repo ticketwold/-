@@ -28,31 +28,46 @@ class X10DebugPanel(QWidget):
         self.lbl_frame_url = QLabel("—")
         self.lbl_document_location = QLabel("—")
         self.lbl_frame_depth = QLabel("—")
+        self.lbl_match_count = QLabel("—")
+        self.lbl_slip_count = QLabel("—")
         self.lbl_document_ready = QLabel("—")
         self.lbl_body_text_length = QLabel("—")
         self.lbl_reason = QLabel("—")
+        self.lbl_injected = QLabel("—")
+        self.lbl_selected_frame = QLabel("—")
         self.lbl_slip_root = QLabel("—")
+        self.lbl_status_summary = QLabel("—")
         self.lbl_extracted_odds = QLabel("—")
         for lbl in (
-            self.lbl_frame_url,
+            self.lbl_injected,
+        self.lbl_selected_frame,
+        self.lbl_frame_url,
             self.lbl_document_location,
             self.lbl_frame_depth,
+            self.lbl_match_count,
+            self.lbl_slip_count,
             self.lbl_document_ready,
             self.lbl_body_text_length,
             self.lbl_reason,
             self.lbl_slip_root,
+            self.lbl_status_summary,
             self.lbl_extracted_odds,
         ):
             lbl.setFont(self._mono)
             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lbl.setWordWrap(True)
+        meta_form.addRow("Injected frames", self.lbl_injected)
+        meta_form.addRow("Selected frame", self.lbl_selected_frame)
         meta_form.addRow("Frame URL", self.lbl_frame_url)
         meta_form.addRow("document.location.href", self.lbl_document_location)
         meta_form.addRow("iframe depth", self.lbl_frame_depth)
+        meta_form.addRow("Match count", self.lbl_match_count)
+        meta_form.addRow("Slip count", self.lbl_slip_count)
         meta_form.addRow("document.readyState", self.lbl_document_ready)
         meta_form.addRow("body text length", self.lbl_body_text_length)
         meta_form.addRow("slip reason", self.lbl_reason)
         meta_form.addRow("SLIP ROOT FOUND", self.lbl_slip_root)
+        meta_form.addRow("Status", self.lbl_status_summary)
         meta_form.addRow("extracted odds", self.lbl_extracted_odds)
 
         odds_box = QGroupBox("배당 후보 / 제외 이유")
@@ -159,6 +174,16 @@ class X10DebugPanel(QWidget):
         if not payload:
             return
         self.lbl_frame_url.setText(str(payload.get("frame_url") or "—"))
+        frame_id = payload.get("frame_id")
+        if frame_id is not None:
+            self.lbl_selected_frame.setText(f"id={frame_id} | {payload.get('frame_url', '—')}")
+        elif payload.get("best_frame_id") is not None:
+            self.lbl_selected_frame.setText(
+                f"id={payload.get('best_frame_id')} | {payload.get('best_frame_url', '—')}"
+            )
+        injected = payload.get("injected_frames")
+        if injected is not None:
+            self.lbl_injected.setText(str(injected))
         self.lbl_document_location.setText(str(payload.get("document_location") or payload.get("frame_url") or "—"))
         self.lbl_frame_depth.setText(str(payload.get("frame_depth", "—")))
         self.lbl_document_ready.setText(str(payload.get("document_ready") or "—"))
@@ -167,6 +192,12 @@ class X10DebugPanel(QWidget):
 
         found = payload.get("slip_root_found") or payload.get("found") or "—"
         self.lbl_slip_root.setText(str(found))
+        if payload.get("slip_root_count") is not None:
+            self.lbl_slip_count.setText(str(payload.get("slip_root_count")))
+        hits = payload.get("selector_hits") or payload.get("selector_scans") or []
+        if hits:
+            top = max((int(h.get("match_count") or 0) for h in hits), default=0)
+            self.lbl_match_count.setText(str(top))
         if str(found).upper() == "YES":
             self.lbl_slip_root.setStyleSheet("color: #1b8f3a; font-weight: bold;")
         elif str(found).upper() == "NO":
@@ -197,6 +228,7 @@ class X10DebugPanel(QWidget):
         self.lbl_matched_keyword.setText(str(diag.get("matched_keyword") or payload.get("matched_keyword") or "—"))
         parsed = str(diag.get("parsed_status") or payload.get("parsed_status") or "—")
         self.lbl_parsed_status.setText(parsed)
+        self.lbl_status_summary.setText(parsed)
         reason = str(diag.get("reason") or payload.get("status_reason") or payload.get("reason") or "—")
         self.lbl_status_reason.setText(reason)
         if parsed.upper() in {"CLOSED", "SUSPENDED", "DISABLED"}:

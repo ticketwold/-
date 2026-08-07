@@ -169,9 +169,24 @@
       site,
       frame_url: location.href,
       frame_depth: frameDepth,
-      frame_id: frameDepth,
+      frame_id: null,
       tab_id: null,
     });
+
+    function emitContentScriptLoaded() {
+      try {
+        chrome.runtime.sendMessage({
+          type: "content_script_loaded",
+          site,
+          frame_url: location.href,
+          readyState: documentReady(),
+        });
+      } catch (_err) {}
+      sendDebug("CONTENT SCRIPT LOADED", {
+        ...meta(),
+        readyState: documentReady(),
+      });
+    }
 
     function runDiagnostics(result) {
       if (site === "x10" && scanner.buildX10DebugSnapshot) {
@@ -198,6 +213,29 @@
 
       const diag =
         site === "bc" ? scanner.diagnoseBcFrame() : scanner.diagnoseX10Frame(frameDepth);
+
+      if (site === "bc") {
+        for (const scan of diag.selector_scans || []) {
+          sendDebug("BC FRAME", {
+            ...meta(),
+            readyState: documentReady(),
+            selector: scan.selector,
+            match_count: scan.match_count,
+            sample_text: scan.sample_text,
+          });
+        }
+        sendDebug("BC DEBUG", {
+          ...meta(),
+          slip_root_found: result?.slip_root_found || (result?.empty ? "NO" : "YES"),
+          slip_count: result?.slip_count ?? 0,
+          selector: result?.container_selector || "",
+          match_count: diag.betslip_selection_count ?? 0,
+          extracted_odds: result?.extracted_odds ?? result?.items?.[0]?.odds ?? null,
+          parsed_status: result?.parsed_status || result?.items?.[0]?.status || result?.reason || "",
+          slip_inner_text: (result?.slip_inner_text || "").slice(0, 1000),
+          selector_hits: result?.selector_hits || diag.selector_scans || [],
+        });
+      }
 
       sendDebug("FRAME DEBUG", {
         ...meta(),
@@ -260,6 +298,7 @@
     }
 
     function bootstrap() {
+      emitContentScriptLoaded();
       scan(true);
       if (disconnectObservers) disconnectObservers();
       disconnectObservers = attachObservers(scan);
@@ -283,9 +322,6 @@
 
       const timer = setInterval(() => {
         scan(false);
-        if (Date.now() - startedAt > WATCH_MS) {
-          clearInterval(timer);
-        }
       }, POLL_MS);
     }
 

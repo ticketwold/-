@@ -28,6 +28,10 @@ class SlipUpdateMessage(BaseModel):
     type: str = "slip_update"
     site: str
     frame_url: str = ""
+    tab_id: int | None = None
+    frame_id: int | None = None
+    frame_depth: int | None = None
+    site_state: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] = Field(default_factory=dict)
 
 

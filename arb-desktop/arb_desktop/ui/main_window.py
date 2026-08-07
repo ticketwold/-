@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from arb_desktop.bridge.instance_lock import ensure_single_instance
 from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus
+from arb_desktop.ui.bc_slip_debug_panel import BcSlipDebugPanel
 from arb_desktop.ui.bc_stake_debug_panel import BcStakeDebugPanel
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
@@ -102,9 +103,11 @@ class MainWindow(QMainWindow):
         self.odds_log_panel = OddsLogPanel(self._odds_log, self._store.logs_dir)
         self.tabs.addTab(self.odds_log_panel, "배당 로그")
         self.x10_debug_panel = X10DebugPanel()
+        self.bc_slip_debug_panel = BcSlipDebugPanel()
         self.bc_stake_debug_panel = BcStakeDebugPanel()
         debug_page = QWidget()
         debug_layout = QVBoxLayout(debug_page)
+        debug_layout.addWidget(self.bc_slip_debug_panel)
         debug_layout.addWidget(self.bc_stake_debug_panel)
         debug_layout.addWidget(self.x10_debug_panel, 1)
         debug_scroll = _VerticalScrollArea(debug_page)
@@ -129,6 +132,7 @@ class MainWindow(QMainWindow):
         self._worker.fx_updated.connect(self._on_fx_updated)
         self._worker.execution_update.connect(self._on_execution_update)
         self._worker.bc_stake_debug.connect(self._on_bc_stake_debug)
+        self._worker.bc_slip_debug.connect(self._on_bc_slip_debug)
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
         self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
@@ -270,6 +274,8 @@ class MainWindow(QMainWindow):
     def _on_slip_updated(self, site: str, read) -> None:
         if site == "bti" and getattr(read, "raw", None):
             self.x10_debug_panel.update_from_slip_raw(read.raw)
+        if site == "bc" and getattr(read, "raw", None):
+            self.bc_slip_debug_panel.update_from_payload(read.raw)
         self._request_metrics_refresh()
 
     def _on_fx_updated(self, snap) -> None:
@@ -281,6 +287,11 @@ class MainWindow(QMainWindow):
         self.monitor.update_all(m, state=state)
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
+
+    def _on_bc_slip_debug(self, payload: dict) -> None:
+        self.bc_slip_debug_panel.update_from_payload(payload)
+        if payload.get("site_state"):
+            self.bc_slip_debug_panel.update_site_state(payload.get("site_state"))
 
     def _on_bc_stake_debug(self, payload: dict) -> None:
         self.bc_stake_debug_panel.update_from_payload(payload)

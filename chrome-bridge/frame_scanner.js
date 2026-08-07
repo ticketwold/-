@@ -206,7 +206,7 @@
       return finalize("closed", "closed-class", extractedOdds);
     }
 
-    if extracted_odds == null) {
+    if (extractedOdds == null) {
       const wasActive =
         x10SlipState.lastActiveOdds != null &&
         (x10SlipState.lastStatus === "active" || x10SlipState.lastStatus === "closed_pending");
@@ -425,6 +425,22 @@
     return false;
   }
 
+  function countBcSelections() {
+    let count = 0;
+    for (const sel of [
+      '[data-editor-id="betslipSelection"]',
+      '[data-editor-id*="betslipSelection"]',
+    ]) {
+      for (const el of collectIn(document.documentElement, sel)) {
+        if (!visible(el) || isInsideBetHistory(el)) continue;
+        const editorId = el.getAttribute?.("data-editor-id") || "";
+        if (/betslipSelections$/i.test(editorId)) continue;
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   function findBcSelectionElement() {
     for (const sel of [
       '[data-editor-id="betslipSelection"]',
@@ -509,21 +525,43 @@
   }
 
   function readBcSlip() {
+    const selectorHits = scanSelectors(BC_SELECTOR_CANDIDATES);
     const selectionEl = findBcSelectionElement();
-    if (!selectionEl) {
+    const slipCount = countBcSelections();
+
+    if (!selectionEl && slipCount < 1) {
       return {
         ok: false,
         empty: true,
         items: [],
         reason: "no-slip-root",
         frame_url: location.href,
-        selector_hits: scanSelectors(BC_SELECTOR_CANDIDATES),
+        slip_root_found: "NO",
+        slip_count: 0,
+        selector_hits: selectorHits,
       };
     }
 
-    const slip = findBcSlipRoot(selectionEl);
-    const blockText = text(selectionEl);
-    if (EMPTY_RE.test(text(slip)) && blockText.length < 4) {
+    const selection = selectionEl || collectIn(document.documentElement, '[data-editor-id="betslipSelection"]').find(
+      (el) => visible(el) && !isInsideBetHistory(el),
+    );
+    if (!selection) {
+      return {
+        ok: false,
+        empty: true,
+        items: [],
+        reason: "no-slip-root",
+        frame_url: location.href,
+        slip_root_found: "NO",
+        slip_count: slipCount,
+        selector_hits: selectorHits,
+      };
+    }
+
+    const slip = findBcSlipRoot(selection);
+    const blockText = text(selection);
+    const slipInnerText = text(slip).slice(0, 1000);
+    if (EMPTY_RE.test(text(slip)) && blockText.length < 4 && slipCount < 1) {
       return {
         ok: true,
         empty: true,
@@ -531,31 +569,65 @@
         reason: "empty-slip",
         frame_url: location.href,
         container_selector: selectorHint(slip),
+        slip_root_found: "YES",
+        slip_count: slipCount,
+        selector_hits: selectorHits,
+        slip_inner_text: slipInnerText,
       };
     }
 
-    const event = readDomField(selectionEl, ["eventName", "EventName", "event"]);
-    const market = readDomField(selectionEl, ["marketName", "MarketName", "market"]);
-    const selection = readDomField(selectionEl, ["outcomeName", "OutcomeName", "selection", "Selection"]);
+    const event = readDomField(selection, ["eventName", "EventName", "event"]);
+    const market = readDomField(selection, ["marketName", "MarketName", "market"]);
+    const selectionName = readDomField(selection, ["outcomeName", "OutcomeName", "selection", "Selection"]);
     const stake = readBcStake(slip);
-    const odds = extractBcOdds(selectionEl, slip);
-    const status = classifySlipStatus(blockText, odds, slip);
+    const odds = extractBcOdds(selection, slip);
+    const status = classifySlipStatus(blockText || slipInnerText, odds, slip);
 
     const item = enrichItem(
       {
         event,
         market,
-        selection,
+        selection: selectionName,
         odds: status === "active" ? odds : null,
-        status,
+        status: odds != null ? status : slipCount >= 1 || blockText.length >= 4 ? (status === "empty" ? "odds_missing" : status) : status,
         stake,
-        container_selector: selectorHint(selectionEl),
+        container_selector: selectorHint(selection),
         dom_hash: domHash(slip),
       },
       event,
     );
 
-    if (!event && !selection && !odds) {
+    if (!event && !selectionName && odds == null) {
+      if (slipCount >= 1 || blockText.length >= 4 || slipInnerText.length >= 8) {
+        return {
+          ok: true,
+          empty: false,
+          items: [
+            enrichItem(
+              {
+                event,
+                market,
+                selection: selectionName || blockText.slice(0, 120),
+                odds: null,
+                status: "odds_missing",
+                stake,
+                container_selector: selectorHint(selection),
+                dom_hash: domHash(slip),
+              },
+              event,
+            ),
+          ],
+          source: "dom",
+          frame_url: location.href,
+          container_selector: selectorHint(slip),
+          slip_root_found: "YES",
+          slip_count: slipCount,
+          selector_hits: selectorHits,
+          slip_inner_text: slipInnerText,
+          parsed_status: "odds_missing",
+          status_reason: "root-found-no-odds",
+        };
+      }
       return {
         ok: true,
         empty: true,
@@ -563,6 +635,10 @@
         reason: "empty-slip",
         frame_url: location.href,
         container_selector: selectorHint(slip),
+        slip_root_found: "YES",
+        slip_count: slipCount,
+        selector_hits: selectorHits,
+        slip_inner_text: slipInnerText,
       };
     }
 
@@ -573,6 +649,12 @@
       source: "dom",
       frame_url: location.href,
       container_selector: selectorHint(slip),
+      slip_root_found: "YES",
+      slip_count: Math.max(slipCount, 1),
+      selector_hits: selectorHits,
+      slip_inner_text: slipInnerText,
+      parsed_status: item.status,
+      extracted_odds: odds,
     };
   }
 
@@ -625,6 +707,16 @@
       parsed_status: statusProbe.status || "empty",
       status_reason: statusProbe.reason || "",
     };
+  }
+
+  function hasX10SlipContent(rootText, odds) {
+    if (odds != null) return true;
+    const blob = String(rootText || "");
+    return (
+      /베팅\s*슬립\s*\d+|베팅슬립\s*\d+/i.test(blob) ||
+      /\b싱글\b/i.test(blob) ||
+      /베팅하기|배당\s*수락/i.test(blob)
+    );
   }
 
   function findX10SlipRoots() {
@@ -852,6 +944,40 @@
         parsed_status: lastStatus.status,
         status_reason: lastStatus.reason,
         status_diagnostics: lastStatus.diagnostics,
+      };
+    }
+
+    if (lastRoot && hasX10SlipContent(text(lastRoot), lastProbe.odds)) {
+      const parsed = parseX10SlipText(text(lastRoot));
+      return {
+        ok: true,
+        empty: false,
+        items: [
+          enrichItem(
+            {
+              event: parsed.event,
+              market: parsed.market,
+              selection: parsed.selection,
+              odds: lastProbe.odds,
+              status: lastProbe.odds != null ? "active" : "odds_missing",
+              status_reason: lastProbe.odds != null ? "active" : "root-found-no-odds",
+              stake: lastStake,
+              container_selector: selectorHint(lastRoot),
+              status_diagnostics: lastStatus.diagnostics || {},
+            },
+            parsed.event,
+          ),
+        ],
+        source: "dom",
+        frame_url: location.href,
+        container_selector: selectorHint(lastRoot),
+        slip_root_found: "YES",
+        slip_inner_text: slipInnerText,
+        selector_hits: selectorHits,
+        odds_candidates: lastProbe.candidates,
+        extracted_odds: lastProbe.odds,
+        parsed_status: lastProbe.odds != null ? "active" : "odds_missing",
+        status_reason: lastProbe.odds != null ? "active" : "root-found-no-odds",
       };
     }
 
