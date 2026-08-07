@@ -136,12 +136,22 @@
     let selection = "";
     const vs = useful.find((l) => /\bvs\.?\b/i.test(l));
     if (vs) event = vs;
-    const ou = useful.find((l) => /\b(over|under|오버|언더)\b/i.test(l));
+    const totalMarketRe =
+      /토탈\s*골|토탈골|총\s*골|총\s*득점|합계\s*득점|총점|득점\s*합계|total\s*goals?|total\s*goal|goals?\s*total|total\s*points?|game\s*total|match\s*total|\btotals?\b|\bo\s*\/\s*u\b|over\s*\/\s*under|언더\s*\/\s*오버|오버\s*\/\s*언더/i;
+    const ou = useful.find(
+      (l) =>
+        /\b(over|under|오버|언더|이상|이하)\b/i.test(l) ||
+        /\b[ou]\s*[+-]?\d/i.test(l) ||
+        /\b[ou]\s*\(\s*\d/i.test(l),
+    );
     const hc = useful.find((l) => /[+-]\d+(?:\.\d+)?/.test(l));
     const win = useful.find((l) => /\b(승|win|winner|w[12])\b/i.test(l) && !/\b(over|under|오버|언더)\b/i.test(l));
     if (ou) {
       selection = ou;
-      market = useful.find((l) => /\b(total|합계|득점|언더\/오버|over\/under)\b/i.test(l)) || "언더/오버";
+      market =
+        useful.find((l) => totalMarketRe.test(l) && l !== ou) ||
+        useful.find((l) => /\b(total|합계|득점|언더\/오버|over\/under)\b/i.test(l) && l !== ou) ||
+        "언더/오버";
     } else if (hc) {
       selection = hc;
       market = useful.find((l) => /handicap|핸디|spread/i.test(l)) || "핸디캡";

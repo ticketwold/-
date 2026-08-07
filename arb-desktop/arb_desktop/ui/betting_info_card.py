@@ -51,10 +51,11 @@ class BettingInfoPanel(QGroupBox):
         s_layout = QVBoxLayout(summary)
         s_layout.setContentsMargins(0, 8, 0, 0)
         self.lbl_combined_type = QLabel("배팅 타입: —")
+        self.lbl_raw_market = QLabel("원본 마켓: —")
         self.lbl_period = QLabel("경기 구간: —")
         self.lbl_line = QLabel("기준점: 없음")
         self.lbl_verify = QLabel("검증: —")
-        for lbl in (self.lbl_combined_type, self.lbl_period, self.lbl_line, self.lbl_verify):
+        for lbl in (self.lbl_combined_type, self.lbl_raw_market, self.lbl_period, self.lbl_line, self.lbl_verify):
             lbl.setWordWrap(True)
             s_layout.addWidget(lbl)
         grid.addWidget(summary, 1, 0, 1, 2)
@@ -73,6 +74,7 @@ class BettingInfoPanel(QGroupBox):
             status_label=m.bc_site_label,
         )
         self.lbl_combined_type.setText(f"배팅 타입: {m.combined_bet_type_label}")
+        self.lbl_raw_market.setText(f"원본 마켓: {m.x10_raw_market}")
         self.lbl_period.setText(f"경기 구간: {m.period_label}")
         self.lbl_line.setText(f"기준점: {m.line_label}")
         self.lbl_verify.setText(f"검증: {m.verify_label}")

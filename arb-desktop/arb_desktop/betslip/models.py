@@ -66,6 +66,7 @@ class BetSlipItem:
             period=self.period,
             line=self.line,
             side=self.side,
+            odds=self.odds,
         )
 
     @classmethod

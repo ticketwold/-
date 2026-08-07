@@ -335,6 +335,8 @@ class MainWindow(QMainWindow):
     def _on_live_metrics(self, m: WatchMetrics) -> None:
         self.betting_panel.update_metrics(m)
         self._apply_metrics(m)
+        if m.x10_parse_debug:
+            self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
 
     def _on_confirm_toggled(self, checked: bool) -> None:
         self._worker.set_user_confirmed(checked)

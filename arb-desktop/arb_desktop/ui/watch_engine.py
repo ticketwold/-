@@ -72,6 +72,9 @@ class WatchMetrics:
     line_label: str = "없음"
     verify_label: str = "—"
     bet_mismatch_kind: str = ""
+    x10_raw_market: str = "—"
+    bc_raw_market: str = "—"
+    x10_parse_debug: dict[str, str] = field(default_factory=dict)
     message: str = ""
 
 
@@ -436,6 +439,17 @@ def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: Bet
     metrics.bc_display_selection = bc_parsed.display_selection or "—"
     metrics.x10_bet_type_label = x10_parsed.bet_type_label
     metrics.bc_bet_type_label = bc_parsed.bet_type_label
+    metrics.x10_raw_market = x10_parsed.raw_market_text or bti_item.market or "—"
+    metrics.bc_raw_market = bc_parsed.raw_market_text or bc_item.market or "—"
+    metrics.x10_parse_debug = {
+        "raw_market_text": x10_parsed.raw_market_text,
+        "raw_selection_text": x10_parsed.raw_selection_text,
+        "normalized_bet_type": x10_parsed.bet_type.value,
+        "parsed_side": x10_parsed.side.value,
+        "parsed_line": "" if x10_parsed.line is None else f"{x10_parsed.line:g}",
+        "parsed_odds": "" if bti_item.odds is None else f"{bti_item.odds:g}",
+        "parse_reason": x10_parsed.parse_reason or "—",
+    }
     pair = validate_bet_pair(x10_parsed, bc_parsed)
     metrics.combined_bet_type_label = pair.combined_type_label or x10_parsed.bet_type_label
     metrics.period_label = x10_parsed.period_label
