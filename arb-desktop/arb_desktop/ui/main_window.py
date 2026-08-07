@@ -37,6 +37,21 @@ from arb_desktop.ui.log_window import LogWindow
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.setup_wizard import SetupWizard
 from arb_desktop.ui.watch_engine import WatchMetrics
+
+
+STATE_DISPLAY: dict[str, str] = {
+    "IDLE": "IDLE",
+    "TARGET WAIT": "목표 수익률 대기",
+    "STABILIZING": "배당 안정화 중",
+    "READY": "READY",
+    "AUTO BET WAIT": "자동배팅 대기",
+    "PREPARING": "동시 배팅 준비",
+    "DISPATCHING": "양쪽 병렬 배팅 실행 중",
+    "VERIFYING RESULT": "결과 확인",
+    "SUCCESS": "SUCCESS",
+    "PARTIAL BET": "PARTIAL BET — 수동 확인 필요",
+    "FAILED": "FAILED",
+}
 from arb_desktop.ui.x10_debug_panel import X10DebugPanel
 
 
@@ -465,7 +480,7 @@ class MainWindow(QMainWindow):
         self.x10_debug_panel.update_from_payload(payload)
 
     def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
-        self.lbl_engine_state.setText(state)
+        self.lbl_engine_state.setText(STATE_DISPLAY.get(state, state))
         self.lbl_engine_msg.setText(message)
         self.lbl_x10_site.setText(f"텐텐벳: {metrics.x10_site_label}")
         self.lbl_bc_site.setText(f"BC.Game: {metrics.bc_site_label}")
