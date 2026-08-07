@@ -71,6 +71,10 @@
     if (!actions) return { ok: false, error: "stake-actions-missing", frame_url: location.href };
     const cmd = message.command;
 
+    if (cmd === "scan_bet_buttons") {
+      return actions.scanBetButton?.(site) || { ok: false, reason: "not-found", frame_url: location.href, deferred: true };
+    }
+
     if (cmd === "scan_bc_stake") {
       const report = actions.scanBcInputReport?.() || actions.scanBcStakeInputs?.({ debug: true, probe: true, frameUrl: location.href });
       const payload = report?.report || report || {};

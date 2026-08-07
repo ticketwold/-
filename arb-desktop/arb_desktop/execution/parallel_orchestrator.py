@@ -227,7 +227,7 @@ class ParallelBetOrchestrator:
             )
 
             lines = [
-                "[BET PREPARE]",
+                "[DISPATCH PREPARED]",
                 f"x10_ready={x10_ready}",
                 f"bc_ready={bc_ready}",
                 f"target_rate={ctx.settings.target_profit_pct:.2f}%",
@@ -243,9 +243,13 @@ class ParallelBetOrchestrator:
             x10_task = asyncio.create_task(click_leg("x10", result.x10, x10_click))
             bc_task = asyncio.create_task(click_leg("bc", result.bc, bc_click))
             start_event.set()
-            lines.append("[BET DISPATCH]")
-            lines.append(f"dispatch_started_at={result.dispatch_started_at:.6f}")
-            result.log_lines.extend(lines)
+            dispatch_ts = time.perf_counter_ns()
+            result.log_lines.extend(
+                [
+                    "[DISPATCH START]",
+                    f"timestamp_ns={dispatch_ts}",
+                ]
+            )
 
             x10_res, bc_res = await asyncio.gather(x10_task, bc_task, return_exceptions=True)
 
@@ -277,6 +281,12 @@ class ParallelBetOrchestrator:
 
             result.log_lines.extend(
                 [
+                    "[X10 CLICK START]",
+                    f"timestamp_ns={int(result.x10.click_started_at * 1e9) if result.x10.click_started_at else 0}",
+                    "[BC CLICK START]",
+                    f"timestamp_ns={int(result.bc.click_started_at * 1e9) if result.bc.click_started_at else 0}",
+                    "[DISPATCH GAP]",
+                    f"ms={result.dispatch_gap_ms:.2f}",
                     "[X10 BET]",
                     f"click_started_at={result.x10.click_started_at:.6f}",
                     f"click_completed_at={result.x10.click_completed_at:.6f}",

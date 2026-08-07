@@ -18,25 +18,15 @@
     '[data-editor-id="betslipStakeInput"]',
     '[data-editor-id*="betslipStake"]',
     '[data-editor-id*="Stake"]',
-    '[data-testid*="stake" i]',
-    '[data-testid*="amount" i]',
-    'input[inputmode="decimal"]',
-    'input[inputmode="numeric"]',
     'input[type="text"]',
     'input[type="number"]',
-    'input[placeholder]',
-    'input[data-editor-id]',
+    'input[inputmode="decimal"]',
+    'input[inputmode="numeric"]',
     'input[class*="stake" i]',
     'input[class*="amount" i]',
-    'input[class*="bet" i]',
-    '[role="spinbutton"]',
-    '[role="textbox"][contenteditable="true"]',
-    '[contenteditable="true"][inputmode="decimal"]',
-    '[contenteditable="true"][inputmode="numeric"]',
-    '[contenteditable="true"]',
   ];
 
-  const VERIFY_DELAYS_MS = [50, 100, 250];
+  const VERIFY_DELAYS_MS = [0, 50, 100, 250];
   const MAX_RETRIES = 2;
   const TOLERANCE = 0.15;
 
@@ -266,8 +256,10 @@
         inputmode: sample?.inputmode || "",
         class: sample?.class || "",
         value: sample?.value || "",
+        disabled: sample?.disabled ?? "",
+        readonly: sample?.readonly ?? "",
+        "aria-disabled": sample?.["aria-disabled"] || "",
         outerHTML: sample?.outerHTML || "",
-        "data-editor-id": sample?.["data-editor-id"] || "",
       };
       scans.push(row);
       if (debug) {
@@ -499,7 +491,14 @@
       };
 
       if (applied.ok) {
-        if (debug) emitStakeDebug("BC STAKE INPUT FOUND", lastResult.debug);
+        if (debug) {
+          emitStakeDebug("BC STAKE INPUT FOUND", {
+            ...lastResult.debug,
+            frame_url: frameUrl,
+            selector: best.selector,
+            before_value: applied.before,
+          });
+        }
         emitStakeSyncResult(lastResult);
         return lastResult;
       }
@@ -511,7 +510,11 @@
       break;
     }
 
-    emitStakeDebug("BC STAKE SYNC FAILED", lastResult.debug || lastResult);
+    emitStakeDebug("BC STAKE INPUT FAILED", {
+      ...(lastResult.debug || {}),
+      reason: lastResult.reason === "stake-input-not-found" ? "not-found" : lastResult.reason,
+      frame_url: frameUrl,
+    });
     emitStakeSyncResult(lastResult);
     return lastResult;
   }
@@ -740,6 +743,27 @@
     return { ok: true, reason: "ok", frame_url: location.href, button_text: text(btn) };
   }
 
+  function scanBetButton(site) {
+    if (site === "bc") {
+      const btn = findBcBetButton();
+      return {
+        ok: !!btn,
+        found: !!btn,
+        reason: btn ? "ok" : "not-found",
+        frame_url: location.href,
+        button_text: btn ? text(btn) : "",
+      };
+    }
+    const btn = findX10BetButton();
+    return {
+      ok: !!btn,
+      found: !!btn,
+      reason: btn ? "ok" : "not-found",
+      frame_url: location.href,
+      button_text: btn ? text(btn) : "",
+    };
+  }
+
   global.ArbStakeActions = {
     setBcStake,
     readBcStake,
@@ -752,6 +776,7 @@
     scanBcInputReport,
     registerBcStakeLocator,
     watchBcStakeInput,
+    scanBetButton,
     getLastStakeDebug: () => _lastDebug,
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

@@ -59,7 +59,7 @@ class StakeSyncCard(CardFrame):
             display = "동기화 완료"
             css = "status-ok"
         elif state == "INPUT_NOT_FOUND":
-            display = msg or "Stake input not found"
+            display = msg or "input-not-found"
             css = "status-bad"
         elif state == "FAILED":
             display = msg or _reason_label(getattr(m, "stake_sync_reason", "") or state)

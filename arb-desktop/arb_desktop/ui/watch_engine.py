@@ -101,6 +101,10 @@ class WatchMetrics:
     execution_phase: str = "IDLE"
     execution_message: str = ""
     dispatch_gap_ms: float = 0.0
+    exec_checklist: dict[str, str] = field(default_factory=dict)
+    dispatch_block_reason: str = ""
+    live_execution_on: bool = False
+    dry_run_on: bool = True
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:

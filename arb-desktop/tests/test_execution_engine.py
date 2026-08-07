@@ -32,7 +32,7 @@ async def test_execution_engine_dry_run_manual() -> None:
     engine = ExecutionEngine()
     engine._orchestrator._min_redispatch_sec = 0
     bc, bti = _reads()
-    settings = AppSettings(target_profit_pct=0.1, bti_stake_krw=10_000, dry_run=True)
+    settings = AppSettings(target_profit_pct=0.1, bti_stake_krw=10_000, dry_run=True, stake_sync_enabled=False)
     fx = FxSnapshot(rate=1400.0, status=FxStatus.LIVE, updated_at=0.0, age_seconds=0.0)
     server = MagicMock()
     server.send_command = AsyncMock(return_value=MagicMock(ok=True, actual=7.5))
@@ -62,14 +62,17 @@ async def test_execution_engine_live_click_callbacks() -> None:
         dry_run=False,
         live_execution_enabled=True,
         parallel_execution_enabled=True,
+        stake_sync_enabled=True,
     )
     fx = FxSnapshot(rate=1400.0, status=FxStatus.LIVE, updated_at=0.0, age_seconds=0.0)
     server = MagicMock()
-    target = 7.5
+    calc = engine.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
+    assert calc
+    target = calc.metrics.bc_stake_usdt
 
     async def _cmd(site, command, **kwargs):
         if command == "set_bc_stake":
-            return MagicMock(ok=True, actual=target, reason="")
+            return MagicMock(ok=True, actual=target, reason="ok")
         if command == "read_bc_stake":
             return MagicMock(ok=True, actual=target, reason="")
         if command in {"place_x10_bet", "place_bc_bet"}:

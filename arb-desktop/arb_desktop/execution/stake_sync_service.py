@@ -5,20 +5,41 @@ from enum import Enum
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
 from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics, odds_in_range
-from arb_desktop.bridge.command_bus import CommandResult
+from arb_desktop.execution.exec_logger import get_exec_logger
 from arb_desktop.market_data.bithumb_fx import FxSnapshot
 from arb_desktop.ui.settings_store import AppSettings
 from arb_desktop.ui.site_status import both_sites_active, slip_status_from_read
 
 REASON_MESSAGES = {
-    "stake-input-not-found": "Stake input not found",
-    "frame-not-found": "BetSlip 프레임을 찾지 못함",
-    "value-not-applied": "입력값이 적용되지 않음",
-    "react-reset-value": "사이트가 입력값을 다시 초기화함",
-    "input-disabled": "입력창이 비활성화됨",
-    "command-timeout": "명령 시간 초과",
-    "stake-sync-failed": "동기화 실패",
+    "input-not-found": "input-not-found",
+    "stake-input-not-found": "input-not-found",
+    "frame-not-found": "frame-lost",
+    "frame-lost": "frame-lost",
+    "value-not-applied": "value-not-applied",
+    "react-reset-value": "react-reset",
+    "react-reset": "react-reset",
+    "input-disabled": "disabled",
+    "disabled": "disabled",
+    "readonly": "readonly",
+    "command-timeout": "command-timeout",
+    "stake-sync-failed": "stake-sync-failed",
+    "ok": "ok",
 }
+
+
+def normalize_reason(reason: str) -> str:
+    r = (reason or "").strip().lower()
+    if r in REASON_MESSAGES:
+        return REASON_MESSAGES[r]
+    if "not-found" in r:
+        return "input-not-found"
+    if "disabled" in r:
+        return "disabled"
+    if "react-reset" in r:
+        return "react-reset"
+    if "frame" in r:
+        return "frame-lost"
+    return r or "stake-sync-failed"
 
 
 class StakeSyncState(str, Enum):
@@ -109,6 +130,13 @@ class StakeSyncService:
             return self.last_status
 
         target = float(metrics.bc_stake_usdt)
+        get_exec_logger().log(
+            "CALCULATE",
+            ok=True,
+            x10_odds=metrics.bti_odds,
+            bc_odds=metrics.bc_odds,
+            bc_stake=target,
+        )
         if self._last_target is not None and abs(self._last_target - target) < 0.05:
             if self.last_status.state == StakeSyncState.OK and self.last_status.actual_usdt is not None:
                 if abs(self.last_status.actual_usdt - target) <= 0.15:
@@ -120,6 +148,7 @@ class StakeSyncService:
             calculated_usdt=target,
             message="동기화 중...",
         )
+        get_exec_logger().log("SYNC_BC_STAKE", requested=target)
 
         write: CommandResult = await server.send_command(
             "bc",
@@ -127,10 +156,10 @@ class StakeSyncService:
             amount_usdt=target,
         )
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
-        reason = write.reason or write.error or ""
+        reason = normalize_reason(write.reason or write.error or "")
 
         if not write.ok:
-            state = StakeSyncState.INPUT_NOT_FOUND if "not-found" in reason else StakeSyncState.FAILED
+            state = StakeSyncState.INPUT_NOT_FOUND if reason == "input-not-found" else StakeSyncState.FAILED
             self.last_status = StakeSyncStatus(
                 state=state,
                 calculated_usdt=target,
@@ -139,6 +168,7 @@ class StakeSyncService:
                 message=_reason_message(reason),
                 debug=debug if isinstance(debug, dict) else {},
             )
+            get_exec_logger().log("VERIFY_BC_STAKE", actual=write.actual, ok=False, reason=reason)
             return self.last_status
 
         actual = write.actual
@@ -147,10 +177,11 @@ class StakeSyncService:
                 state=StakeSyncState.INPUT_NOT_FOUND,
                 calculated_usdt=target,
                 actual_usdt=None,
-                reason="stake-input-not-found",
-                message=_reason_message("stake-input-not-found"),
+                reason="input-not-found",
+                message="input-not-found",
                 debug=debug if isinstance(debug, dict) else {},
             )
+            get_exec_logger().log("VERIFY_BC_STAKE", actual=None, ok=False, reason="input-not-found")
             return self.last_status
 
         ok = abs(actual - target) <= 0.15
@@ -162,6 +193,7 @@ class StakeSyncService:
             message="동기화 완료" if ok else _reason_message(reason or "value-not-applied"),
             debug=debug if isinstance(debug, dict) else {},
         )
+        get_exec_logger().log("VERIFY_BC_STAKE", actual=actual, ok=ok, reason=self.last_status.reason)
         return self.last_status
 
     async def scan_bc_stake(self, *, server) -> StakeSyncStatus:
@@ -209,7 +241,10 @@ class StakeSyncService:
 
 
 def _reason_message(reason: str) -> str:
-    return REASON_MESSAGES.get(reason, reason.replace("-", " ") if reason else "동기화 실패")
+    norm = normalize_reason(reason)
+    if norm == "ok":
+        return "동기화 완료"
+    return norm
 
 
 def _fx_rate(settings: AppSettings, fx: FxSnapshot | None) -> float | None:

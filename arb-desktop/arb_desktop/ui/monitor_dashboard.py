@@ -263,11 +263,23 @@ class MonitorDashboard(QWidget):
         exec_row = QHBoxLayout()
         self.lbl_watch = QLabel("○ 자동감시 OFF")
         self.lbl_watch.setProperty("class", "watch-off")
+        self.lbl_live_exec = QLabel("실제 배팅 실행 OFF")
+        self.lbl_live_exec.setProperty("class", "watch-off")
         self.lbl_exec_state = QLabel("시세 감시 준비됨")
         self.lbl_exec_state.setProperty("class", "muted")
+        self.lbl_block_reason = QLabel("")
+        self.lbl_block_reason.setProperty("class", "status-bad")
+        self.lbl_block_reason.setWordWrap(True)
         exec_row.addWidget(self.lbl_watch)
+        exec_row.addWidget(self.lbl_live_exec)
         exec_row.addWidget(self.lbl_exec_state, 1)
         root.addLayout(exec_row)
+        root.addWidget(self.lbl_block_reason)
+
+        self.lbl_checklist = QLabel("")
+        self.lbl_checklist.setProperty("class", "mono")
+        self.lbl_checklist.setWordWrap(True)
+        root.addWidget(self.lbl_checklist)
 
         self.ticker = CompactTicker()
         root.addWidget(self.ticker)
@@ -316,6 +328,30 @@ class MonitorDashboard(QWidget):
         self.lbl_watch.style().polish(self.lbl_watch)
 
         self.lbl_exec_state.setText(message or m.execution_message or m.message or _idle_label(m, state))
+
+        live_on = m.live_execution_on
+        self.lbl_live_exec.setText(f"실제 배팅 실행 {'ON' if live_on else 'OFF'}")
+        self.lbl_live_exec.setProperty("class", "watch-on" if live_on else "watch-off")
+        self.lbl_live_exec.style().unpolish(self.lbl_live_exec)
+        self.lbl_live_exec.style().polish(self.lbl_live_exec)
+
+        if m.watch_enabled and m.dispatch_block_reason and state not in {"READY", "DISPATCHING", "PREPARING"}:
+            self.lbl_block_reason.setText(f"자동배팅 대기 — 사유: {m.dispatch_block_reason}")
+            self.lbl_block_reason.show()
+        elif state == "READY" and not live_on:
+            self.lbl_block_reason.setText("READY — live_execution_disabled (실제 배팅 실행 OFF)")
+            self.lbl_block_reason.show()
+        elif state == "READY" and m.dry_run_on:
+            self.lbl_block_reason.setText("READY — dry_run_enabled")
+            self.lbl_block_reason.show()
+        else:
+            self.lbl_block_reason.hide()
+
+        if m.exec_checklist:
+            parts = [f"{k}: {v}" for k, v in m.exec_checklist.items()]
+            self.lbl_checklist.setText(" | ".join(parts))
+        else:
+            self.lbl_checklist.setText("")
 
         self._update_banner(m, state, message)
         self._update_glow(m, state)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 
 from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics
+from arb_desktop.execution.exec_logger import get_exec_logger
 from arb_desktop.execution.parallel_orchestrator import (
     BetOutcome,
     DispatchContext,
@@ -75,6 +77,7 @@ class ExecutionEngine:
             settings=settings,
         )
         if block:
+            get_exec_logger().log("SYNC_BC_STAKE", ok=False, reason=block)
             self.state.stake_sync = StakeSyncStatus(
                 message=block,
             )
@@ -142,9 +145,11 @@ class ExecutionEngine:
         self._locked = True
         self.state.phase = ExecutionPhase.PREPARE
         self.state.message = "양쪽 병렬 배팅 준비 중"
+        get_exec_logger().log("PREPARE")
 
         try:
             if not bridge_connected:
+                get_exec_logger().log("PREPARE", ok=False, reason="bridge-disconnected")
                 return DispatchResult(
                     execution_id="",
                     outcome=BetOutcome.CANCELLED,
@@ -156,7 +161,15 @@ class ExecutionEngine:
                 return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
 
             self.state.phase = ExecutionPhase.SYNC_STAKES
-            await self._stake_sync.sync_bc_stake(server=server, metrics=ctx.metrics, settings=settings)
+            sync_status = await self._stake_sync.sync_bc_stake(server=server, metrics=ctx.metrics, settings=settings)
+            self.state.stake_sync = sync_status
+            if settings.stake_sync_enabled and sync_status.state.name != "OK":
+                get_exec_logger().log("PREPARE", ok=False, reason="bc_stake_sync_failed")
+                return DispatchResult(
+                    execution_id="",
+                    outcome=BetOutcome.CANCELLED,
+                    abort_reason="bc-stake-sync-failed",
+                )
 
             # 최신 slip 기준으로 metrics 재계산
             ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
@@ -168,6 +181,13 @@ class ExecutionEngine:
                 ctx,
                 manual=manual,
                 skip_target_check=skip_target_check,
+            )
+            profit_ok = ctx.metrics.current_profit_rate >= ctx.settings.target_profit_pct
+            get_exec_logger().log(
+                "FINAL_RECHECK",
+                ok=abort is None,
+                profit_rate=f"{ctx.metrics.current_profit_rate:.2f}",
+                reason=abort or "",
             )
             skippable = {
                 "target-lost-before-dispatch",
@@ -186,17 +206,25 @@ class ExecutionEngine:
             else:
                 dry = settings.dry_run or not live
 
+            if not live:
+                get_exec_logger().log("DISPATCH", ok=False, reason="live_execution_disabled")
+            elif dry:
+                get_exec_logger().log("DISPATCH", ok=False, reason="dry_run_enabled")
+
             self.state.phase = ExecutionPhase.DISPATCH
             self.state.message = "양쪽 배팅 전송 중..." if not dry else "Dry Run — 양쪽 배팅 시뮬레이션..."
+            get_exec_logger().log("DISPATCH", ok=live and not dry)
 
             x10_click_fn = None
             bc_click_fn = None
             if live and not dry and server:
 
                 async def _x10_click():
+                    get_exec_logger().log("X10_CLICK_START", timestamp_ns=time.time_ns())
                     return await server.send_command("x10", "place_x10_bet")
 
                 async def _bc_click():
+                    get_exec_logger().log("BC_CLICK_START", timestamp_ns=time.time_ns())
                     return await server.send_command("bc", "place_bc_bet")
 
                 x10_click_fn = _x10_click
@@ -215,6 +243,7 @@ class ExecutionEngine:
             self.state.dispatch_gap_ms = result.dispatch_gap_ms
             self.state.last_result = result
             self.state.phase = self._phase_from_result(result)
+            get_exec_logger().log("VERIFY_RESULT", ok=result.outcome.name.endswith("SUCCESS"), outcome=result.outcome.value)
             if result.abort_reason:
                 self.state.message = _abort_message(result.abort_reason)
             elif dry and result.outcome == BetOutcome.DRY_RUN_MOCK:
@@ -248,6 +277,7 @@ _ABORT_MESSAGES = {
     "duplicate-execution-blocked": "중복 실행 차단",
     "redispatch-cooldown": "재실행 대기 중",
     "execution-lock-active": "실행 잠금",
+    "bc-stake-sync-failed": "BC stake sync failed",
     "locked": "실행 잠금",
 }
 

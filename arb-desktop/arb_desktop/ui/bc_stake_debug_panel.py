@@ -23,6 +23,7 @@ class BcStakeDebugPanel(QWidget):
 
     scan_requested = pyqtSignal()
     test_requested = pyqtSignal(float)
+    bet_buttons_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -44,18 +45,22 @@ class BcStakeDebugPanel(QWidget):
         header_form.addRow("Current Value", self.lbl_current_value)
 
         btn_row = QHBoxLayout()
-        self.btn_scan = QPushButton("BC INPUT SCAN")
-        self.btn_test = QPushButton("BC INPUT TEST")
+        self.btn_scan = QPushButton("BC Stake Input 찾기")
+        self.btn_test = QPushButton("BC 1.0 USDT 입력 테스트")
+        self.btn_bet_buttons = QPushButton("양쪽 Bet 버튼 찾기")
         self.btn_scan.setProperty("class", "primary")
         self.btn_test.setProperty("class", "primary")
+        self.btn_bet_buttons.setProperty("class", "primary")
         self.lbl_test_result = QLabel("—")
         self.lbl_test_result.setWordWrap(True)
         self.lbl_test_result.setFont(self._mono)
         btn_row.addWidget(self.btn_scan)
         btn_row.addWidget(self.btn_test)
+        btn_row.addWidget(self.btn_bet_buttons)
         btn_row.addWidget(self.lbl_test_result, 1)
         self.btn_scan.clicked.connect(self._on_scan)
         self.btn_test.clicked.connect(self._on_test)
+        self.btn_bet_buttons.clicked.connect(self._on_bet_buttons)
 
         scan_box = QGroupBox("[BC INPUT SCAN]")
         scan_layout = QVBoxLayout(scan_box)
@@ -120,6 +125,10 @@ class BcStakeDebugPanel(QWidget):
     def _on_test(self) -> None:
         self.lbl_test_result.setText("1.0 USDT 입력 테스트 중...")
         self.test_requested.emit(1.0)
+
+    def _on_bet_buttons(self) -> None:
+        self.lbl_test_result.setText("Bet 버튼 탐색 중...")
+        self.bet_buttons_requested.emit()
 
     def set_scan_status(self, *, scanning: bool) -> None:
         if scanning:
@@ -193,6 +202,10 @@ class BcStakeDebugPanel(QWidget):
                 actual=payload.get("actual"),
                 reason=str(payload.get("reason") or ""),
             )
+        elif block == "BET BUTTON SCAN":
+            x10 = "OK" if payload.get("x10_found") else "FAIL"
+            bc = "OK" if payload.get("bc_found") else "FAIL"
+            self.lbl_test_result.setText(f"X10 Bet: {x10}\nBC Bet: {bc}")
         elif block in {"BC STAKE SYNC OK", "BC STAKE SYNC FAILED"} and payload.get("test"):
             self.set_test_result(
                 ok=bool(payload.get("success")),

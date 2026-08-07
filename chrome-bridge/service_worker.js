@@ -430,6 +430,17 @@ async function executeBridgeCommand(message) {
     test: message.test,
   };
 
+  if (message.command === "scan_bet_buttons") {
+    let last = { ok: false, reason: "not-found", frame_url: "" };
+    for (const tab of tabs) {
+      if (!tab.id) continue;
+      const result = await iterateTabFrames(tab.id, payload);
+      if (result?.ok) return result;
+      last = result || last;
+    }
+    return last;
+  }
+
   let lastResult = { ok: false, error: "no-frame-response", reason: "no-frame-response" };
   for (const tab of tabs) {
     if (!tab.id) continue;

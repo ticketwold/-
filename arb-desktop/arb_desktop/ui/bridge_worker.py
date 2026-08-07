@@ -11,6 +11,8 @@ from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
 from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
+from arb_desktop.execution.dispatch_readiness import assess_dispatch_readiness
+from arb_desktop.execution.exec_logger import get_exec_logger
 from arb_desktop.execution.execution_engine import ExecutionEngine
 from arb_desktop.execution.stake_sync_service import StakeSyncState
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
@@ -60,6 +62,12 @@ class BridgeWorker(QObject):
         self._stake_sync_running = False
         self._odds_log: OddsLogManager | None = None
         self._last_engine_log_state: str = ""
+        self._bet_button_cache: dict[str, str] = {"x10": "?", "bc": "?"}
+        get_exec_logger().set_log_dir(store.logs_dir)
+        get_exec_logger().add_listener(self._on_exec_log)
+
+    def _on_exec_log(self, line: str, _payload: dict[str, Any]) -> None:
+        self.log_message.emit("EXEC", "-", "-", "-", line, line)
 
     def attach_odds_log(self, manager: OddsLogManager) -> None:
         self._odds_log = manager
@@ -272,23 +280,34 @@ class BridgeWorker(QObject):
         if metrics.stake_sync_enabled:
             calc = status.calculated_usdt
             if calc is None and metrics.bc_stake_usdt:
-                calc = metrics.bc_stake_usdt
-                metrics.stake_sync_calculated_usdt = calc
-            actual = status.actual_usdt
+                metrics.stake_sync_calculated_usdt = metrics.bc_stake_usdt
             state = metrics.stake_sync_state
-            if calc is not None and actual is None and state in {"IDLE", "WAITING", ""}:
-                metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
-                metrics.stake_sync_message = "Stake input not found"
-                metrics.stake_sync_reason = "stake-input-not-found"
-            elif calc is not None and actual is None and state == "FAILED" and "not-found" in (status.reason or ""):
-                metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
-                metrics.stake_sync_message = "Stake input not found"
-            elif calc is not None and actual is None and state == "SYNCING":
-                pass
-            elif calc is not None and actual is None and state not in {"OK", "SYNCING"}:
-                if status.reason == "stake-input-not-found" or not metrics.bc_stake_input_found:
-                    metrics.stake_sync_state = StakeSyncState.INPUT_NOT_FOUND.value
-                    metrics.stake_sync_message = "Stake input not found"
+            if state in {StakeSyncState.INPUT_NOT_FOUND.value, StakeSyncState.FAILED.value}:
+                if status.reason in {"input-not-found", "stake-input-not-found"} or "not-found" in (status.reason or ""):
+                    metrics.stake_sync_message = status.message or "input-not-found"
+            elif state == StakeSyncState.SYNCING.value:
+                metrics.stake_sync_message = status.message or "동기화 중..."
+
+        if self._runtime:
+            readiness = assess_dispatch_readiness(
+                metrics=metrics,
+                settings=self._app_settings,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                bc=self._runtime.manager.get_bc_read(),
+                bti=self._runtime.manager.get_bti_read(),
+                fx=self._fx_snapshot,
+                stake_sync=self._execution.stake_sync,
+                watch_state=self._watch_engine.state,
+                watch_enabled=self._watching,
+            )
+            readiness.checklist["X10 Bet Button"] = self._bet_button_cache.get("x10", "?")
+            readiness.checklist["BC Bet Button"] = self._bet_button_cache.get("bc", "?")
+            metrics.exec_checklist = readiness.checklist
+            metrics.dispatch_block_reason = readiness.first_failure
+            metrics.live_execution_on = (
+                self._app_settings.live_execution_enabled and self._app_settings.parallel_execution_enabled
+            )
+            metrics.dry_run_on = self._app_settings.dry_run
 
         metrics.execution_phase = self._execution.state.phase.value
         metrics.execution_message = self._execution.state.message
@@ -347,6 +366,7 @@ class BridgeWorker(QObject):
             fx=self._fx_snapshot,
             user_confirmed=self._user_confirmed,
         )
+        get_exec_logger().log("WATCH", ok=True, state=state.value, reason=err_key or "")
         self._emit_watch_state(metrics, err_key)
         if err_key == "below-target":
             self.log_message.emit(
@@ -371,9 +391,14 @@ class BridgeWorker(QObject):
                     self._app_settings.live_execution_enabled
                     and self._app_settings.parallel_execution_enabled
                 )
-                should_dispatch = (
-                    self._app_settings.parallel_dry_run_on_ready and self._app_settings.dry_run
-                ) or (live and not self._app_settings.dry_run)
+                should_dispatch = live and not self._app_settings.dry_run
+                if not should_dispatch:
+                    reason = "live_execution_disabled"
+                    if not live:
+                        reason = "live_execution_disabled"
+                    elif self._app_settings.dry_run:
+                        reason = "dry_run_enabled"
+                    get_exec_logger().log("DISPATCH", ok=False, reason=reason)
                 if should_dispatch:
                     asyncio.create_task(self._run_parallel_dispatch(manual=False))
 
@@ -445,6 +470,33 @@ class BridgeWorker(QObject):
             self._emit_watch_state()
         finally:
             self._dispatch_running = False
+
+    @pyqtSlot()
+    def scan_bet_buttons(self) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._scan_bet_buttons(), self._loop)
+
+    async def _scan_bet_buttons(self) -> None:
+        if not self._runtime:
+            return
+        x10 = await self._runtime.server.send_command("x10", "scan_bet_buttons")
+        bc = await self._runtime.server.send_command("bc", "scan_bet_buttons")
+        x10_ok = bool(x10.ok)
+        bc_ok = bool(bc.ok)
+        self._bet_button_cache["x10"] = "OK" if x10_ok else "FAIL"
+        self._bet_button_cache["bc"] = "OK" if bc_ok else "FAIL"
+        payload = {
+            "block": "BET BUTTON SCAN",
+            "site": "bc",
+            "x10_found": x10_ok,
+            "bc_found": bc_ok,
+            "x10_reason": x10.reason or x10.error or "",
+            "bc_reason": bc.reason or bc.error or "",
+            "x10_raw": x10.raw,
+            "bc_raw": bc.raw,
+        }
+        self.bc_stake_debug.emit(payload)
+        self._emit_live_metrics()
 
     @pyqtSlot(float)
     def test_bc_stake(self, amount_usdt: float = 1.0) -> None:
