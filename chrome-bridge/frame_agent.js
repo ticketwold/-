@@ -34,7 +34,12 @@
 
   function resultKey(result) {
     const hash = global.ArbFrameScanner?.domHash?.(document) || String(bodyTextLength());
-    return `${result?.reason || ""}|${location.href}|${hash}`;
+    const item = result?.items?.[0] || {};
+    const status = item.status || result?.parsed_status || result?.reason || "";
+    const reason = item.status_reason || result?.status_reason || "";
+    const odds = String(item.odds ?? result?.extracted_odds ?? "");
+    const prev = String(item.previous_odds ?? "");
+    return `${status}|${reason}|${odds}|${prev}|${location.href}|${hash}`;
   }
 
   function sendDebug(block, payload) {
@@ -63,15 +68,22 @@
 
   function attachObservers(onChange) {
     const observers = [];
+    let debounceTimer = null;
+
+    function schedule() {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => onChange(false), 30);
+    }
 
     function addObserver(target) {
       if (!target) return;
-      const obs = new MutationObserver(() => onChange(false));
+      const obs = new MutationObserver(() => schedule());
       obs.observe(target, {
         childList: true,
         subtree: true,
         characterData: true,
         attributes: true,
+        attributeFilter: ["class", "disabled", "aria-disabled", "data-status", "style"],
       });
       observers.push(obs);
     }
@@ -111,10 +123,13 @@
         sendDebug("X10 DEBUG", {
           ...meta(),
           ...snapshot,
-          reason: result?.reason || "",
+          reason: result?.status_reason || result?.reason || "",
           slip_root_found: snapshot.slip_root_found || result?.slip_root_found || "NO",
           odds_candidates: result?.odds_candidates || snapshot.odds_candidates || [],
           extracted_odds: result?.extracted_odds ?? snapshot.extracted_odds ?? null,
+          status_diagnostics: result?.status_diagnostics || snapshot.status_diagnostics || {},
+          parsed_status: result?.parsed_status || snapshot.parsed_status || "",
+          status_reason: result?.status_reason || snapshot.status_reason || "",
         });
         sendDebug("SLIP ROOT FOUND", {
           ...meta(),
@@ -180,6 +195,8 @@
           odds: item.odds ?? "",
           stake: item.stake ?? "",
           status: item.status || "",
+          status_reason: item.status_reason || "",
+          previous_odds: item.previous_odds ?? "",
         });
       }
 

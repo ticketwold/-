@@ -112,8 +112,44 @@ class X10DebugPanel(QWidget):
         parse_form.addRow("parsed_odds", self.lbl_parsed_odds)
         parse_form.addRow("파싱 실패 사유", self.lbl_parse_reason)
 
+        status_box = QGroupBox("x10 상태 진단")
+        status_form = QFormLayout(status_box)
+        self.lbl_raw_status_text = QLabel("—")
+        self.lbl_odds_present = QLabel("—")
+        self.lbl_odds_disabled = QLabel("—")
+        self.lbl_slip_root_class = QLabel("—")
+        self.lbl_bet_btn_disabled = QLabel("—")
+        self.lbl_aria_disabled = QLabel("—")
+        self.lbl_matched_keyword = QLabel("—")
+        self.lbl_parsed_status = QLabel("—")
+        self.lbl_status_reason = QLabel("—")
+        for lbl in (
+            self.lbl_raw_status_text,
+            self.lbl_odds_present,
+            self.lbl_odds_disabled,
+            self.lbl_slip_root_class,
+            self.lbl_bet_btn_disabled,
+            self.lbl_aria_disabled,
+            self.lbl_matched_keyword,
+            self.lbl_parsed_status,
+            self.lbl_status_reason,
+        ):
+            lbl.setFont(self._mono)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lbl.setWordWrap(True)
+        status_form.addRow("raw status text", self.lbl_raw_status_text)
+        status_form.addRow("odds element 존재", self.lbl_odds_present)
+        status_form.addRow("odds element disabled", self.lbl_odds_disabled)
+        status_form.addRow("slip root className", self.lbl_slip_root_class)
+        status_form.addRow("Bet button disabled", self.lbl_bet_btn_disabled)
+        status_form.addRow("aria-disabled", self.lbl_aria_disabled)
+        status_form.addRow("matched closed keyword", self.lbl_matched_keyword)
+        status_form.addRow("parsed_status", self.lbl_parsed_status)
+        status_form.addRow("reason", self.lbl_status_reason)
+
         root = QVBoxLayout(self)
         root.addWidget(meta_box)
+        root.addWidget(status_box)
         root.addWidget(parse_box)
         root.addWidget(odds_box)
         root.addWidget(selector_box, 1)
@@ -148,10 +184,32 @@ class X10DebugPanel(QWidget):
         inner = str(payload.get("slip_inner_text") or payload.get("text") or "")
         self.txt_slip_inner.setPlainText(inner[:1000])
         self._update_parse_fields(payload)
+        self._update_status_fields(payload)
+
+    def _update_status_fields(self, payload: dict[str, Any]) -> None:
+        diag = payload.get("status_diagnostics") or {}
+        self.lbl_raw_status_text.setText(str(diag.get("raw_status_text") or payload.get("raw_status_text") or "—"))
+        self.lbl_odds_present.setText(str(diag.get("odds_element_present", payload.get("odds_element_present", "—"))))
+        self.lbl_odds_disabled.setText(str(diag.get("odds_element_disabled", payload.get("odds_element_disabled", "—"))))
+        self.lbl_slip_root_class.setText(str(diag.get("slip_root_class") or payload.get("slip_root_class") or "—"))
+        self.lbl_bet_btn_disabled.setText(str(diag.get("bet_button_disabled", payload.get("bet_button_disabled", "—"))))
+        self.lbl_aria_disabled.setText(str(diag.get("aria_disabled", payload.get("aria_disabled", "—"))))
+        self.lbl_matched_keyword.setText(str(diag.get("matched_keyword") or payload.get("matched_keyword") or "—"))
+        parsed = str(diag.get("parsed_status") or payload.get("parsed_status") or "—")
+        self.lbl_parsed_status.setText(parsed)
+        reason = str(diag.get("reason") or payload.get("status_reason") or payload.get("reason") or "—")
+        self.lbl_status_reason.setText(reason)
+        if parsed.upper() in {"CLOSED", "SUSPENDED", "DISABLED"}:
+            self.lbl_parsed_status.setStyleSheet("color: #c0392b; font-weight: bold;")
+        elif parsed.upper() == "ACTIVE":
+            self.lbl_parsed_status.setStyleSheet("color: #1b8f3a; font-weight: bold;")
+        else:
+            self.lbl_parsed_status.setStyleSheet("")
 
     def update_parse_debug(self, fields: dict[str, Any] | None) -> None:
         if fields:
             self._update_parse_fields(fields)
+            self._update_status_fields(fields)
 
     def update_from_slip_item(self, item: dict[str, Any] | None) -> None:
         if not item:

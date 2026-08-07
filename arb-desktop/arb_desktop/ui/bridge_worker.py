@@ -240,9 +240,11 @@ class BridgeWorker(QObject):
         self._odds_log.observe_site(
             site="X10",
             odds=metrics.bti_odds,
+            display_odds=metrics.bti_display_odds,
             status=metrics.x10_site_label,
             watch_enabled=watch,
             profit_rate=profit,
+            status_reason=metrics.x10_status_reason,
         )
         self._odds_log.observe_site(
             site="BC",

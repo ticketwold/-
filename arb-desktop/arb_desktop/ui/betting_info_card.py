@@ -38,9 +38,14 @@ class SiteBetCard(QGroupBox):
         status_label: str,
         odds_dir: int = 0,
         odds_changed_at: str = "",
+        display_odds: float | None = None,
     ) -> None:
         self.lbl_selection.setText(selection or "—")
-        self.lbl_odds.setText(f"{odds:.3f}" if odds else "—")
+        show_odds = odds if odds is not None else display_odds
+        odds_text = f"{show_odds:.2f}" if show_odds else "—"
+        if show_odds and odds is None and status_label and status_label != "ACTIVE":
+            odds_text = f"{show_odds:.2f} (마지막 배당)"
+        self.lbl_odds.setText(odds_text)
         arrow = "↑" if odds_dir > 0 else "↓" if odds_dir < 0 else ""
         self.lbl_odds_arrow.setText(arrow)
         arrow_css = "odds-up" if odds_dir > 0 else "odds-down" if odds_dir < 0 else "odds-flat"
@@ -53,8 +58,10 @@ class SiteBetCard(QGroupBox):
         status_css = (
             "status-ok"
             if status_label == "ACTIVE"
+            else "status-bad"
+            if status_label and ("닫" in status_label or "불가" in status_label)
             else "status-warn"
-            if status_label and ("정지" in status_label or "닫" in status_label)
+            if status_label and "정지" in status_label
             else "status-idle"
         )
         self.lbl_status.setProperty("class", status_css)
@@ -79,6 +86,7 @@ class BettingInfoPanel(QGroupBox):
         self.card_x10.update_from(
             selection=m.x10_display_selection,
             odds=m.bti_odds,
+            display_odds=m.bti_display_odds,
             status_label=m.x10_site_label,
             odds_dir=m.bti_odds_dir,
             odds_changed_at=m.bti_odds_changed_at,

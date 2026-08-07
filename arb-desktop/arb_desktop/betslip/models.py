@@ -12,6 +12,7 @@ class SlipStatus(str, Enum):
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
     CLOSED = "CLOSED"
+    DISABLED = "DISABLED"
     ODDS_MISSING = "ODDS_MISSING"
     EMPTY = "EMPTY"
     ERROR = "ERROR"
@@ -22,6 +23,8 @@ _STATUS_MAP = {
     "active": SlipStatus.ACTIVE,
     "suspended": SlipStatus.SUSPENDED,
     "closed": SlipStatus.CLOSED,
+    "disabled": SlipStatus.DISABLED,
+    "closed_pending": SlipStatus.CLOSED,
     "odds_missing": SlipStatus.ODDS_MISSING,
     "empty": SlipStatus.EMPTY,
     "error": SlipStatus.ERROR,
@@ -52,6 +55,8 @@ class BetSlipItem:
     line: float | None = None
     side: str = ""
     dom_hash: str = ""
+    previous_odds: float | None = None
+    status_reason: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     def parsed(self) -> ParsedBet:
@@ -125,6 +130,16 @@ class BetSlipItem:
             except (TypeError, ValueError):
                 line_val = None
 
+        prev_raw = data.get("previous_odds")
+        previous_odds: float | None
+        if prev_raw is None or prev_raw == "":
+            previous_odds = None
+        else:
+            try:
+                previous_odds = float(prev_raw)
+            except (TypeError, ValueError):
+                previous_odds = None
+
         return cls(
             site=site,
             event=str(data.get("event") or "").strip(),
@@ -147,6 +162,8 @@ class BetSlipItem:
             line=line_val,
             side=str(data.get("side") or "").strip().upper(),
             dom_hash=str(data.get("dom_hash") or "").strip(),
+            previous_odds=previous_odds,
+            status_reason=str(data.get("status_reason") or "").strip(),
             raw=data,
         )
 

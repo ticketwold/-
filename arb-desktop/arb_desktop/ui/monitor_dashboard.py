@@ -204,10 +204,16 @@ class OddsTickerCard(QFrame):
         direction: int,
         changed_at: str,
         stake_text: str = "",
+        display_odds: float | None = None,
+        status_label: str = "",
     ) -> None:
-        self.lbl_odds.setText(f"{odds:.3f}" if odds else "—")
+        show = odds if odds is not None else display_odds
+        label = f"{show:.3f}" if show else "—"
+        if show and odds is None and status_label and status_label != "ACTIVE":
+            label = f"{show:.2f} (마지막)"
+        self.lbl_odds.setText(label)
         arrow = _odds_arrow(direction)
-        self.lbl_arrow.setText(arrow if odds else "")
+        self.lbl_arrow.setText(arrow if show else "")
         css = _odds_dir_class(direction)
         self.lbl_arrow.setProperty("class", css)
         self.lbl_arrow.style().unpolish(self.lbl_arrow)
@@ -436,6 +442,8 @@ class MonitorDashboard(QWidget):
         self.profit_hero.update_metrics(m)
         self.odds_x10.update_odds(
             odds=m.bti_odds,
+            display_odds=m.bti_display_odds,
+            status_label=m.x10_site_label,
             direction=m.bti_odds_dir,
             changed_at=m.bti_odds_changed_at,
             stake_text=f"{m.bti_stake_krw:,.0f} KRW" if m.bti_stake_krw else "",
