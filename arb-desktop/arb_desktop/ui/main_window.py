@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from arb_desktop.bridge.instance_lock import ensure_single_instance
 from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus
+from arb_desktop.ui.bc_stake_debug_panel import BcStakeDebugPanel
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
 from arb_desktop.ui.log_window import LogWindow
@@ -101,7 +102,13 @@ class MainWindow(QMainWindow):
         self.odds_log_panel = OddsLogPanel(self._odds_log, self._store.logs_dir)
         self.tabs.addTab(self.odds_log_panel, "배당 로그")
         self.x10_debug_panel = X10DebugPanel()
-        self.tabs.addTab(self.x10_debug_panel, "Debug")
+        self.bc_stake_debug_panel = BcStakeDebugPanel()
+        debug_page = QWidget()
+        debug_layout = QVBoxLayout(debug_page)
+        debug_layout.addWidget(self.bc_stake_debug_panel)
+        debug_layout.addWidget(self.x10_debug_panel, 1)
+        debug_scroll = _VerticalScrollArea(debug_page)
+        self.tabs.addTab(debug_scroll, "Debug")
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
@@ -121,7 +128,9 @@ class MainWindow(QMainWindow):
         self._worker.live_metrics.connect(self._on_live_metrics)
         self._worker.fx_updated.connect(self._on_fx_updated)
         self._worker.execution_update.connect(self._on_execution_update)
+        self._worker.bc_stake_debug.connect(self._on_bc_stake_debug)
         self._worker.log_message.connect(self._on_worker_log)
+        self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
 
         self._wire_buttons()
         self._apply_watch_ui()
@@ -271,6 +280,15 @@ class MainWindow(QMainWindow):
         self.monitor.update_all(m, state=state)
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
+
+    def _on_bc_stake_debug(self, payload: dict) -> None:
+        self.bc_stake_debug_panel.update_from_payload(payload)
+        if payload.get("block") == "BC STAKE TEST":
+            self.bc_stake_debug_panel.set_test_result(
+                ok=bool(payload.get("success")),
+                actual=payload.get("actual"),
+                reason=str(payload.get("reason") or ""),
+            )
 
     def _on_execution_update(self, state) -> None:
         m = self._metrics_with_watch(self._worker.watch_metrics)

@@ -26,7 +26,7 @@ class BridgeCommandBus:
 
     def __init__(self) -> None:
         self._pending: dict[str, asyncio.Future[CommandResult]] = {}
-        self._timeout_sec = 5.0
+        self._timeout_sec = 8.0
 
     def resolve(self, payload: dict[str, Any]) -> None:
         request_id = str(payload.get("request_id") or "")
@@ -34,10 +34,10 @@ class BridgeCommandBus:
         if not fut or fut.done():
             return
         result = CommandResult(
-            ok=bool(payload.get("ok")),
+            ok=bool(payload.get("ok") or payload.get("success")),
             command=str(payload.get("command") or ""),
             site=str(payload.get("site") or ""),
-            expected=_float_or_none(payload.get("expected")),
+            expected=_float_or_none(payload.get("expected") or payload.get("requested")),
             actual=_float_or_none(payload.get("actual")),
             reason=str(payload.get("reason") or payload.get("error") or ""),
             error=str(payload.get("error") or ""),

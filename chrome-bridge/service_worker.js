@@ -15,6 +15,9 @@ const siteStatusDebounce = {
   x10: { code: "empty", hits: 0, since: 0, confirmed: "empty" },
 };
 
+/** @type {Record<number, { frameId: number, frame_url: string, selector: string, score: number }>} */
+const bcStakeLocatorByTab = {};
+
 function mapRawSlipStatus(result) {
   if (!result || result.empty || !result.items?.length) return "empty";
   const st = String(result.items[0]?.status || "empty").toLowerCase();
@@ -169,30 +172,69 @@ async function refreshTabsAndScan() {
   await requestSlipScan("x10", x10Tabs);
 }
 
+async function sendMessageToFrame(tabId, frameId, message) {
+  return chrome.tabs.sendMessage(tabId, message, { frameId });
+}
+
+async function iterateTabFrames(tabId, message) {
+  /** @type {Array<{frameId:number, url?:string}>} */
+  let frames = [];
+  try {
+    frames = await chrome.webNavigation.getAllFrames({ tabId });
+  } catch (_err) {
+    frames = [{ frameId: 0 }];
+  }
+
+  let lastResult = { ok: false, error: "no-frame-response", reason: "no-frame-response" };
+  const ranked = [];
+
+  const registered = bcStakeLocatorByTab[tabId];
+  if (registered?.frameId != null && message.site === "bc") {
+    frames = [
+      { frameId: registered.frameId },
+      ...frames.filter((f) => f.frameId !== registered.frameId),
+    ];
+  }
+
+  for (const frame of frames) {
+    try {
+      const result = await sendMessageToFrame(tabId, frame.frameId, message);
+      if (!result) continue;
+      if (result.deferred) continue;
+      if (result.ok) return result;
+      ranked.push(result);
+      lastResult = result;
+    } catch (_err) {
+      // frame may not have content script
+    }
+  }
+  return ranked.sort((a, b) => (b.score || 0) - (a.score || 0))[0] || lastResult;
+}
+
 async function executeBridgeCommand(message) {
   const site = message.site === "bc" ? "bc" : "x10";
   const urls = site === "bc" ? BC_URLS : X10_URLS;
   const tabs = await chrome.tabs.query({ url: urls });
   if (!tabs.length) {
-    return { ok: false, error: `${site}-tab-not-found` };
+    return { ok: false, error: `${site}-tab-not-found`, reason: "frame-not-found" };
   }
-  let lastResult = { ok: false, error: "no-frame-response" };
+
+  const payload = {
+    type: "bridge_command",
+    site,
+    command: message.command,
+    amount_usdt: message.amount_usdt,
+    amount_krw: message.amount_krw,
+    request_id: message.request_id,
+    test: message.test,
+  };
+
+  let lastResult = { ok: false, error: "no-frame-response", reason: "no-frame-response" };
   for (const tab of tabs) {
     if (!tab.id) continue;
-    try {
-      const result = await chrome.tabs.sendMessage(tab.id, {
-        type: "bridge_command",
-        site,
-        command: message.command,
-        amount_usdt: message.amount_usdt,
-        amount_krw: message.amount_krw,
-        request_id: message.request_id,
-      });
-      if (result?.ok) return result;
-      lastResult = result || lastResult;
-    } catch (_err) {
-      // try next tab
-    }
+    const result = await iterateTabFrames(tab.id, payload);
+    if (result?.ok) return result;
+    lastResult = result || lastResult;
   }
   return lastResult;
 }
@@ -233,15 +275,69 @@ async function startBridge() {
           site: message.site,
           ...result,
         });
+        if (message.command === "set_bc_stake" || message.command === "read_bc_stake") {
+          client?.send({
+            type: "stake_sync_result",
+            request_id: message.request_id,
+            site: "bc",
+            requested: result.requested ?? result.expected ?? message.amount_usdt,
+            actual: result.actual ?? null,
+            success: !!result.ok,
+            reason: result.reason || result.error || (result.ok ? "ok" : "failed"),
+            frame_url: result.frame_url || "",
+            selector: result.selector || "",
+            debug: result.debug || null,
+          });
+        }
       }
     },
   });
   client.start();
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   if (message?.type === "bridge_debug") {
     maybeForwardDebug(message);
+    return;
+  }
+
+  if (message?.type === "stake_input_register" && message.site === "bc") {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId;
+    if (tabId != null && frameId != null && message.locator) {
+      const prev = bcStakeLocatorByTab[tabId];
+      const score = Number(message.locator.score || 0);
+      if (!prev || score >= (prev.score || 0)) {
+        bcStakeLocatorByTab[tabId] = {
+          frameId,
+          frame_url: message.frame_url || message.locator.frame_url || "",
+          selector: message.locator.selector || "",
+          score,
+        };
+      }
+    }
+    maybeForwardDebug({
+      block: "BC STAKE INPUT FOUND",
+      site: "bc",
+      frame_url: message.frame_url,
+      ...message.locator,
+    });
+    return;
+  }
+
+  if (message?.type === "stake_sync_result") {
+    client?.send({ type: "stake_sync_result", ...message });
+    maybeForwardDebug({
+      block: message.success ? "BC STAKE SYNC OK" : "BC STAKE SYNC FAILED",
+      site: "bc",
+      ...message,
+      ...(message.debug || {}),
+    });
+    return;
+  }
+
+  if (message?.type === "stake_input_changed" && message.site === "bc") {
+    client?.send({ type: "stake_input_changed", site: "bc", frame_url: message.frame_url || "" });
     return;
   }
 

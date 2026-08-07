@@ -56,7 +56,7 @@ class StakeSyncCard(CardFrame):
             display = "동기화 완료"
             css = "status-ok"
         elif state in {"FAILED", "INPUT_NOT_FOUND"}:
-            display = msg
+            display = msg or _reason_label(getattr(m, "stake_sync_reason", "") or state)
             css = "status-bad"
         elif state == "SYNCING":
             display = "동기화 중..."
@@ -72,3 +72,14 @@ class StakeSyncCard(CardFrame):
         self.lbl_state.setProperty("class", css)
         self.lbl_state.style().unpolish(self.lbl_state)
         self.lbl_state.style().polish(self.lbl_state)
+
+
+def _reason_label(reason: str) -> str:
+    mapping = {
+        "stake-input-not-found": "입력창을 찾지 못함",
+        "react-reset-value": "사이트가 입력값을 다시 초기화함",
+        "value-not-applied": "입력값이 적용되지 않음",
+        "input-disabled": "입력창이 비활성화됨",
+        "frame-not-found": "BetSlip 프레임을 찾지 못함",
+    }
+    return mapping.get(reason, reason)

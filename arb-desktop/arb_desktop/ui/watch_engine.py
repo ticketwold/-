@@ -95,6 +95,8 @@ class WatchMetrics:
     stake_sync_calculated_usdt: float | None = None
     stake_sync_actual_usdt: float | None = None
     stake_sync_message: str = ""
+    stake_sync_reason: str = ""
+    stake_sync_debug: dict = field(default_factory=dict)
     execution_phase: str = "IDLE"
     execution_message: str = ""
     dispatch_gap_ms: float = 0.0

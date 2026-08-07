@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
@@ -9,6 +9,16 @@ from arb_desktop.bridge.command_bus import CommandResult
 from arb_desktop.market_data.bithumb_fx import FxSnapshot
 from arb_desktop.ui.settings_store import AppSettings
 from arb_desktop.ui.site_status import both_sites_active, slip_status_from_read
+
+REASON_MESSAGES = {
+    "stake-input-not-found": "입력창을 찾지 못함",
+    "frame-not-found": "BetSlip 프레임을 찾지 못함",
+    "value-not-applied": "입력값이 적용되지 않음",
+    "react-reset-value": "사이트가 입력값을 다시 초기화함",
+    "input-disabled": "입력창이 비활성화됨",
+    "command-timeout": "명령 시간 초과",
+    "stake-sync-failed": "동기화 실패",
+}
 
 
 class StakeSyncState(str, Enum):
@@ -26,6 +36,8 @@ class StakeSyncStatus:
     calculated_usdt: float | None = None
     actual_usdt: float | None = None
     message: str = ""
+    reason: str = ""
+    debug: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -33,6 +45,7 @@ class StakeSyncService:
     """BC stake 상시 자동동기화 — watch_enabled와 독립."""
 
     last_status: StakeSyncStatus = None  # type: ignore[assignment]
+    _last_target: float | None = None
 
     def __post_init__(self) -> None:
         self.last_status = StakeSyncStatus()
@@ -96,6 +109,12 @@ class StakeSyncService:
             return self.last_status
 
         target = float(metrics.bc_stake_usdt)
+        if self._last_target is not None and abs(self._last_target - target) < 0.05:
+            if self.last_status.state == StakeSyncState.OK and self.last_status.actual_usdt is not None:
+                if abs(self.last_status.actual_usdt - target) <= 0.15:
+                    return self.last_status
+
+        self._last_target = target
         self.last_status = StakeSyncStatus(
             state=StakeSyncState.SYNCING,
             calculated_usdt=target,
@@ -107,31 +126,57 @@ class StakeSyncService:
             "set_bc_stake",
             amount_usdt=target,
         )
+        debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
+        reason = write.reason or write.error or ""
+
         if not write.ok:
-            reason = write.reason or write.error or "stake-sync-failed"
-            state = (
-                StakeSyncState.INPUT_NOT_FOUND
-                if "not-found" in reason
-                else StakeSyncState.FAILED
-            )
+            state = StakeSyncState.INPUT_NOT_FOUND if "not-found" in reason else StakeSyncState.FAILED
             self.last_status = StakeSyncStatus(
                 state=state,
                 calculated_usdt=target,
                 actual_usdt=write.actual,
-                message=reason.upper().replace("-", " "),
+                reason=reason,
+                message=_reason_message(reason),
+                debug=debug if isinstance(debug, dict) else {},
             )
             return self.last_status
 
-        read: CommandResult = await server.send_command("bc", "read_bc_stake")
-        actual = read.actual if read.ok else write.actual
+        actual = write.actual
         ok = actual is not None and abs(actual - target) <= 0.15
         self.last_status = StakeSyncStatus(
             state=StakeSyncState.OK if ok else StakeSyncState.FAILED,
             calculated_usdt=target,
             actual_usdt=actual,
-            message="동기화 완료" if ok else "STAKE SYNC FAILED",
+            reason=reason or ("ok" if ok else "value-not-applied"),
+            message="동기화 완료" if ok else _reason_message(reason or "value-not-applied"),
+            debug=debug if isinstance(debug, dict) else {},
         )
         return self.last_status
+
+    async def test_bc_stake(self, *, server, amount_usdt: float) -> StakeSyncStatus:
+        target = max(0.1, round(float(amount_usdt), 1))
+        write: CommandResult = await server.send_command(
+            "bc",
+            "set_bc_stake",
+            amount_usdt=target,
+            test=True,
+        )
+        debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
+        reason = write.reason or write.error or "stake-input-not-found"
+        ok = bool(write.ok)
+        self.last_status = StakeSyncStatus(
+            state=StakeSyncState.OK if ok else StakeSyncState.FAILED,
+            calculated_usdt=target,
+            actual_usdt=write.actual,
+            reason=reason,
+            message="테스트 성공" if ok else _reason_message(reason),
+            debug=debug if isinstance(debug, dict) else {},
+        )
+        return self.last_status
+
+
+def _reason_message(reason: str) -> str:
+    return REASON_MESSAGES.get(reason, reason.replace("-", " ") if reason else "동기화 실패")
 
 
 def _fx_rate(settings: AppSettings, fx: FxSnapshot | None) -> float | None:

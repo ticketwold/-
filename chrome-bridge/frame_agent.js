@@ -68,24 +68,33 @@
 
   async function handleBridgeCommand(message) {
     const actions = global.ArbStakeActions;
-    if (!actions) return { ok: false, error: "stake-actions-missing" };
+    if (!actions) return { ok: false, error: "stake-actions-missing", frame_url: location.href };
     const cmd = message.command;
-    if (cmd === "set_bc_stake") {
-      return actions.setBcStake(Number(message.amount_usdt));
+
+    if (cmd === "set_bc_stake" || cmd === "read_bc_stake" || cmd === "scan_bc_stake") {
+      const scan = actions.scanBcStakeInputs?.({ debug: true, frameUrl: location.href });
+      if (!scan?.best?.input) {
+        return { ok: false, reason: "stake-input-not-found", frame_url: location.href, deferred: true };
+      }
+      if (cmd === "scan_bc_stake") {
+        return { ok: true, frame_url: location.href, locator: scan.best, scans: scan.scans };
+      }
+      if (cmd === "read_bc_stake") {
+        return actions.readBcStake();
+      }
+      return actions.setBcStake(Number(message.amount_usdt), { debug: true, test: !!message.test });
     }
-    if (cmd === "read_bc_stake") {
-      return actions.readBcStake();
+
+    if (cmd === "set_x10_stake") {
+      return actions.setX10Stake(Number(message.amount_krw));
     }
     if (cmd === "place_bc_bet") {
       return actions.placeBcBet();
     }
-    if (cmd === "set_x10_stake") {
-      return actions.setX10Stake(Number(message.amount_krw));
-    }
     if (cmd === "place_x10_bet") {
       return actions.placeX10Bet();
     }
-    return { ok: false, error: "unknown-command" };
+    return { ok: false, error: "unknown-command", frame_url: location.href };
   }
 
   function attachObservers(onChange) {
@@ -229,6 +238,23 @@
       scan(true);
       if (disconnectObservers) disconnectObservers();
       disconnectObservers = attachObservers(scan);
+
+      if (site === "bc" && global.ArbStakeActions) {
+        const registerStake = () => {
+          try {
+            global.ArbStakeActions.registerBcStakeLocator?.();
+          } catch (_err) {}
+        };
+        registerStake();
+        global.ArbStakeActions.watchBcStakeInput?.(() => {
+          registerStake();
+          chrome.runtime.sendMessage({
+            type: "stake_input_changed",
+            site: "bc",
+            frame_url: location.href,
+          });
+        });
+      }
 
       const timer = setInterval(() => {
         scan(false);

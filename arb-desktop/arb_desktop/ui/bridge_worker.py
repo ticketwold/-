@@ -28,6 +28,7 @@ class BridgeWorker(QObject):
     live_metrics = pyqtSignal(object)
     fx_updated = pyqtSignal(object)
     execution_update = pyqtSignal(object)
+    bc_stake_debug = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -161,6 +162,8 @@ class BridgeWorker(QObject):
         def on_debug(payload: dict[str, Any]) -> None:
             site = str(payload.get("site") or "").lower()
             block = str(payload.get("block") or "").upper()
+            if site == "bc" or block.startswith("BC STAKE"):
+                self.bc_stake_debug.emit(payload)
             if site not in {"x10", "bti"}:
                 return
             if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN"}:
@@ -178,12 +181,17 @@ class BridgeWorker(QObject):
                     f"X10DBG|{reason}|{found}|{payload.get('frame_url', '')}",
                 )
 
+        def on_stake_input_changed() -> None:
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(self._maybe_stake_sync(), self._loop)
+
         self._runtime = create_bridge_runtime(
             pairing_store=self._pairing_store,
             on_status_change=on_status,
             on_slip_update=on_slip,
             on_debug=on_debug,
         )
+        self._runtime.manager.on_stake_input_changed = on_stake_input_changed
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()
         self._bridge_started = True
@@ -248,6 +256,8 @@ class BridgeWorker(QObject):
         metrics.stake_sync_calculated_usdt = status.calculated_usdt
         metrics.stake_sync_actual_usdt = status.actual_usdt
         metrics.stake_sync_message = status.message
+        metrics.stake_sync_reason = status.reason
+        metrics.stake_sync_debug = status.debug or {}
         metrics.execution_phase = self._execution.state.phase.value
         metrics.execution_message = self._execution.state.message
         metrics.dispatch_gap_ms = self._execution.state.dispatch_gap_ms
@@ -381,6 +391,30 @@ class BridgeWorker(QObject):
             self._emit_watch_state()
         finally:
             self._dispatch_running = False
+
+    @pyqtSlot(float)
+    def test_bc_stake(self, amount_usdt: float = 1.0) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._test_bc_stake(amount_usdt), self._loop)
+
+    async def _test_bc_stake(self, amount_usdt: float) -> None:
+        if not self._runtime:
+            return
+        status = await self._execution.stake_sync.test_bc_stake(
+            server=self._runtime.server,
+            amount_usdt=amount_usdt,
+        )
+        self._emit_live_metrics()
+        payload = {
+            "block": "BC STAKE TEST",
+            "site": "bc",
+            "success": status.state.name == "OK",
+            "requested": status.calculated_usdt,
+            "actual": status.actual_usdt,
+            "reason": status.reason,
+            "debug": status.debug,
+        }
+        self.bc_stake_debug.emit(payload)
 
     @pyqtSlot(bool)
     def manual_bet(self, skip_target_check: bool = False) -> None:

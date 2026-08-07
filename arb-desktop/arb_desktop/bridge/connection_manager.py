@@ -26,6 +26,7 @@ class ConnectionManager:
     on_status_change: Callable[[BridgeStatus], None] | None = None
     on_slip_update: Callable[[str, BetSlipReadResult], None] | None = None
     on_debug: Callable[[dict[str, Any]], None] | None = None
+    on_stake_input_changed: Callable[[], None] | None = None
     bridge_connected: bool = False
     auth_state: BridgeConnectionState = BridgeConnectionState.WAITING
     paired_extension_id: str = ""
@@ -37,6 +38,7 @@ class ConnectionManager:
     bc_slip: BetSlipReadResult | None = None
     x10_slip: BetSlipReadResult | None = None
     last_x10_debug: dict[str, Any] | None = None
+    last_bc_stake_debug: dict[str, Any] | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def status(self) -> BridgeStatus:
@@ -114,10 +116,21 @@ class ConnectionManager:
         return read
 
     def apply_debug(self, payload: dict[str, Any]) -> None:
-        if str(payload.get("site") or "").lower() in {"x10", "bti"}:
+        site = str(payload.get("site") or "").lower()
+        block = str(payload.get("block") or "").upper()
+        if site in {"x10", "bti"}:
             self.last_x10_debug = payload
+        if site == "bc" or block.startswith("BC STAKE"):
+            self.last_bc_stake_debug = payload
         if self.on_debug:
             self.on_debug(payload)
+
+    def apply_stake_input_changed(self, _payload: dict[str, Any]) -> None:
+        if self.on_stake_input_changed:
+            self.on_stake_input_changed()
+
+    def get_bc_stake_debug(self) -> dict[str, Any] | None:
+        return self.last_bc_stake_debug
 
     def get_x10_debug(self) -> dict[str, Any] | None:
         return self.last_x10_debug

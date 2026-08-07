@@ -147,6 +147,17 @@ class BridgeWebSocketServer:
         if msg_type == "bridge_debug":
             self._manager.apply_debug(data)
             return
+        if msg_type == "stake_sync_result":
+            self._manager.apply_debug(
+                {
+                    **data,
+                    "block": "BC STAKE SYNC OK" if data.get("success") else "BC STAKE SYNC FAILED",
+                }
+            )
+            return
+        if msg_type == "stake_input_changed":
+            self._manager.apply_stake_input_changed(data)
+            return
         if msg_type == "command_result":
             self.command_bus.resolve(data)
             return

@@ -55,10 +55,12 @@ async def test_stake_sync_writes_bc_input() -> None:
 
     server = MagicMock()
     server.send_command = AsyncMock(
-        side_effect=[
-            MagicMock(ok=True, actual=metrics.bc_stake_usdt, reason=""),
-            MagicMock(ok=True, actual=metrics.bc_stake_usdt, reason=""),
-        ]
+        return_value=MagicMock(
+            ok=True,
+            actual=metrics.bc_stake_usdt,
+            reason="ok",
+            raw={"debug": {"requested": metrics.bc_stake_usdt, "actual": metrics.bc_stake_usdt}},
+        )
     )
     status = await svc.sync_bc_stake(server=server, metrics=metrics, settings=settings)
     assert status.state == StakeSyncState.OK
