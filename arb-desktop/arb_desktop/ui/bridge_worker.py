@@ -10,6 +10,7 @@ from arb_desktop.bridge.message_models import BridgeStatus
 from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
+from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
 
@@ -19,6 +20,8 @@ class BridgeWorker(QObject):
     slip_updated = pyqtSignal(str, object)
     x10_debug = pyqtSignal(object)
     watch_state = pyqtSignal(str, object, str)
+    live_metrics = pyqtSignal(object)
+    fx_updated = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -34,7 +37,14 @@ class BridgeWorker(QObject):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._watch_engine = WatchEngine()
         self._watching = False
+        self._user_confirmed = False
         self._poll_task: asyncio.Task | None = None
+        self._fx_task: asyncio.Task | None = None
+        self._fx = BithumbFxProvider(
+            refresh_interval=self._app_settings.fx_refresh_seconds,
+            max_stale_seconds=self._app_settings.fx_max_stale_seconds,
+        )
+        self._fx_snapshot: FxSnapshot | None = None
         self._bridge_started = False
 
     @property
@@ -60,6 +70,12 @@ class BridgeWorker(QObject):
     def update_settings(self, app_settings: AppSettings) -> None:
         self._app_settings = app_settings
         self._store.apply_to_runtime(app_settings)
+        self._fx._refresh_interval = app_settings.fx_refresh_seconds
+        self._fx._max_stale_seconds = app_settings.fx_max_stale_seconds
+        self._emit_live_metrics()
+
+    def set_user_confirmed(self, confirmed: bool) -> None:
+        self._user_confirmed = confirmed
 
     @pyqtSlot()
     def bootstrap(self) -> None:
@@ -114,6 +130,7 @@ class BridgeWorker(QObject):
                 )
                 self.x10_debug.emit(read.raw)
             self.slip_updated.emit(site, read)
+            self._emit_live_metrics()
             if self._watching:
                 asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
 
@@ -149,20 +166,48 @@ class BridgeWorker(QObject):
         self._watch_engine.set_idle()
         self._emit_watch_state()
         self._poll_task = asyncio.create_task(self._poll_loop())
+        self._fx_task = asyncio.create_task(self._fx_loop())
+
+    async def _fx_loop(self) -> None:
+        while True:
+            try:
+                snap = await self._fx.refresh()
+                self._fx_snapshot = snap
+                if snap.rate is not None:
+                    self._app_settings.usdt_rate = snap.rate
+                self.fx_updated.emit(snap)
+                self._emit_live_metrics()
+                if self._watching:
+                    await self._evaluate_watch()
+            except Exception:
+                pass
+            await asyncio.sleep(self._app_settings.fx_refresh_seconds)
 
     async def _poll_loop(self) -> None:
         while True:
             try:
                 if self._runtime:
                     await self._runtime.server.request_status()
+                    self._emit_live_metrics()
                     if self._watching:
                         await self._evaluate_watch()
             except Exception:
                 pass
             await asyncio.sleep(settings.scan_interval_ms / 1000)
 
+    def _emit_live_metrics(self) -> None:
+        if not self._runtime:
+            return
+        metrics = self._watch_engine.compute_live_metrics(
+            bc=self._runtime.manager.get_bc_read(),
+            bti=self._runtime.manager.get_bti_read(),
+            settings=self._app_settings,
+            fx=self._fx_snapshot,
+        )
+        self.live_metrics.emit(metrics)
+
     async def _evaluate_watch(self) -> None:
-        if not self._runtime or not self._scanner:
+        if not self._runtime:
             return
         bc = self._runtime.manager.get_bc_read()
         bti = self._runtime.manager.get_bti_read()
@@ -171,6 +216,8 @@ class BridgeWorker(QObject):
             bc=bc,
             bti=bti,
             settings=self._app_settings,
+            fx=self._fx_snapshot,
+            user_confirmed=self._user_confirmed,
         )
         self._emit_watch_state(metrics, err_key)
         if err_key == "below-target":
@@ -178,18 +225,18 @@ class BridgeWorker(QObject):
                 "ENGINE",
                 state.value,
                 "-",
-                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                f"{metrics.current_profit_rate:.2f}%",
                 metrics.message,
-                f"ENGINE|{state.value}|{metrics.min_guaranteed_profit_pct:.2f}|below-target",
+                f"ENGINE|{state.value}|{metrics.current_profit_rate:.2f}|below-target",
             )
         elif state == WatchState.READY:
             self.log_message.emit(
                 "ENGINE",
                 "READY",
                 "-",
-                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                f"{metrics.current_profit_rate:.2f}%",
                 "target reached",
-                f"ENGINE|READY|{metrics.min_guaranteed_profit_pct:.2f}|ready",
+                f"ENGINE|READY|{metrics.current_profit_rate:.2f}|ready",
             )
 
     def _emit_watch_state(self, metrics: WatchMetrics | None = None, err: str | None = None) -> None:
@@ -221,7 +268,7 @@ class BridgeWorker(QObject):
     @pyqtSlot()
     def start_watch(self) -> None:
         self._watching = True
-        self._watch_engine.start_watch()
+        self._watch_engine.start_watch(user_confirmed=self._user_confirmed)
         self._emit_watch_state()
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
@@ -237,5 +284,7 @@ class BridgeWorker(QObject):
         self._watching = False
         if self._poll_task:
             self._poll_task.cancel()
+        if self._fx_task:
+            self._fx_task.cancel()
         if self._loop and self._runtime:
             asyncio.run_coroutine_threadsafe(self._runtime.stop(), self._loop)

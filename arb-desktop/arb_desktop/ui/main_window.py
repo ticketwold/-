@@ -28,8 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from arb_desktop.bridge.instance_lock import ensure_single_instance
-from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus, BetSlipState
-from arb_desktop.betslip.matcher import calculate_arbitrage
+from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
 from arb_desktop.ui.log_window import LogWindow
@@ -91,6 +90,8 @@ class MainWindow(QMainWindow):
         self._worker.slip_updated.connect(self._on_slip_updated)
         self._worker.x10_debug.connect(self._on_x10_debug)
         self._worker.watch_state.connect(self._on_watch_state)
+        self._worker.live_metrics.connect(self._on_live_metrics)
+        self._worker.fx_updated.connect(self._on_fx_updated)
         self._worker.log_message.connect(self._on_worker_log)
 
         self._wire_buttons()
@@ -142,14 +143,23 @@ class MainWindow(QMainWindow):
         self.spin_bti_stake = QSpinBox()
         self.spin_bti_stake.setRange(1000, 50_000_000)
         self.spin_bti_stake.setSuffix(" KRW")
-        self.lbl_bc_stake = QLabel("— USDT")
-        self.spin_usdt = QDoubleSpinBox()
-        self.spin_usdt.setRange(100, 5000)
-        self.spin_usdt.setValue(self._settings.usdt_rate)
+        self.lbl_fx_rate = QLabel("—")
+        self.lbl_fx_rate.setFont(QFont("Consolas", 10))
+        self.lbl_fx_source = QLabel("출처: 빗썸 KRW-USDT")
+        self.lbl_fx_status = QLabel("상태: LOADING")
+        self.lbl_fx_updated = QLabel("마지막 갱신: —")
+        self.chk_fx_auto = QCheckBox("빗썸 자동 환율 사용")
+        self.chk_fx_auto.setChecked(True)
+        self.spin_fx_refresh = QDoubleSpinBox()
+        self.spin_fx_refresh.setRange(1, 60)
+        self.spin_fx_refresh.setSuffix(" s")
+        self.spin_fx_stale = QDoubleSpinBox()
+        self.spin_fx_stale.setRange(5, 120)
+        self.spin_fx_stale.setSuffix(" s")
         self.combo_round_krw = QComboBox()
         self.combo_round_krw.addItems(["100", "500", "1000", "10000"])
         self.combo_round_usdt = QComboBox()
-        self.combo_round_usdt.addItems(["0.01", "0.1", "1.0"])
+        self.combo_round_usdt.addItems(["0.1", "0.01", "1.0"])
         self.spin_stabilize = QDoubleSpinBox()
         self.spin_stabilize.setRange(0.5, 60)
         self.spin_stabilize.setSuffix(" s")
@@ -160,8 +170,13 @@ class MainWindow(QMainWindow):
         self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 직접 확인했습니다")
         form.addRow("목표 수익률", self.spin_target)
         form.addRow("텐텐벳 배팅금액", self.spin_bti_stake)
-        form.addRow("BC.Game 자동 계산 금액", self.lbl_bc_stake)
-        form.addRow("USDT/KRW 환율", self.spin_usdt)
+        form.addRow("USDT/KRW 환율", self.lbl_fx_rate)
+        form.addRow("", self.lbl_fx_source)
+        form.addRow("", self.lbl_fx_status)
+        form.addRow("", self.lbl_fx_updated)
+        form.addRow(self.chk_fx_auto)
+        form.addRow("환율 갱신 주기", self.spin_fx_refresh)
+        form.addRow("최대 허용 지연", self.spin_fx_stale)
         form.addRow("원화 반올림 단위", self.combo_round_krw)
         form.addRow("USDT 반올림 단위", self.combo_round_usdt)
         form.addRow("배당 안정화 시간", self.spin_stabilize)
@@ -176,11 +191,17 @@ class MainWindow(QMainWindow):
         labels = [
             ("텐텐벳 현재 배당", "lbl_bti_odds"),
             ("BC.Game 현재 배당", "lbl_bc_odds"),
+            ("BC 자동 계산 금액", "lbl_bc_stake"),
+            ("BC 원화 환산 금액", "lbl_bc_stake_krw"),
             ("총 배팅금", "lbl_total_stake"),
-            ("텐텐벳 예상수익", "lbl_bti_return"),
-            ("BC 예상수익", "lbl_bc_return"),
+            ("텐텐벳 적중 시 수익", "lbl_profit_x10"),
+            ("BC 적중 시 수익", "lbl_profit_bc"),
             ("최저 보장 수익", "lbl_min_profit"),
-            ("최저 보장 수익률", "lbl_min_profit_pct"),
+            ("텐텐벳 결과 수익률", "lbl_rate_x10"),
+            ("BC 결과 수익률", "lbl_rate_bc"),
+            ("현재 최저 보장 수익률", "lbl_current_rate"),
+            ("목표 수익률", "lbl_target_rate"),
+            ("목표까지", "lbl_target_delta"),
         ]
         for row, (title, attr) in enumerate(labels):
             grid.addWidget(QLabel(title), row, 0)
@@ -242,20 +263,23 @@ class MainWindow(QMainWindow):
         self.btn_save.clicked.connect(self._save_settings)
         self.btn_log.clicked.connect(self._open_log_window)
         self.btn_quit.clicked.connect(self.close)
-        self.spin_target.valueChanged.connect(self._update_preview_calc)
-        self.spin_bti_stake.valueChanged.connect(self._update_preview_calc)
-        self.spin_usdt.valueChanged.connect(self._update_preview_calc)
+        self.spin_target.valueChanged.connect(self._request_metrics_refresh)
+        self.spin_bti_stake.valueChanged.connect(self._request_metrics_refresh)
+        self.chk_confirm.toggled.connect(self._on_confirm_toggled)
 
     def _load_settings_to_ui(self) -> None:
         s = self._settings
         self.spin_target.setValue(s.target_profit_pct)
         self.spin_bti_stake.setValue(s.bti_stake_krw)
-        self.spin_usdt.setValue(s.usdt_rate)
+        self.chk_fx_auto.setChecked(s.fx_auto_enabled)
+        self.spin_fx_refresh.setValue(s.fx_refresh_seconds)
+        self.spin_fx_stale.setValue(s.fx_max_stale_seconds)
         self.spin_stabilize.setValue(s.stabilize_seconds)
         self.spin_stable_count.setValue(s.stable_count_required)
         self.chk_dry.setChecked(s.dry_run)
         self._set_combo_value(self.combo_round_krw, str(s.round_unit_krw))
         self._set_combo_value(self.combo_round_usdt, str(s.round_unit_usdt))
+        self._on_confirm_toggled(self.chk_confirm.isChecked())
 
     def _on_reset_connection(self) -> None:
         reply = QMessageBox.question(
@@ -276,7 +300,9 @@ class MainWindow(QMainWindow):
         s = self._settings
         s.target_profit_pct = self.spin_target.value()
         s.bti_stake_krw = self.spin_bti_stake.value()
-        s.usdt_rate = self.spin_usdt.value()
+        s.fx_auto_enabled = self.chk_fx_auto.isChecked()
+        s.fx_refresh_seconds = self.spin_fx_refresh.value()
+        s.fx_max_stale_seconds = self.spin_fx_stale.value()
         s.stabilize_seconds = self.spin_stabilize.value()
         s.stable_count_required = self.spin_stable_count.value()
         s.dry_run = self.chk_dry.isChecked()
@@ -329,7 +355,25 @@ class MainWindow(QMainWindow):
     def _on_slip_updated(self, site: str, read) -> None:
         if site == "bti" and getattr(read, "raw", None):
             self.x10_debug_panel.update_from_slip_raw(read.raw)
-        self._update_preview_calc(read_bc=(site == "bc"), read_bti=(site == "bti"), read=read)
+        self._request_metrics_refresh()
+
+    def _on_fx_updated(self, snap) -> None:
+        if snap.rate:
+            self.lbl_fx_rate.setText(f"{snap.rate:,.2f}원")
+        status = str(snap.status.value).replace("fx-", "").upper()
+        self.lbl_fx_status.setText(f"상태: {status}")
+        if snap.updated_at:
+            from datetime import datetime
+            self.lbl_fx_updated.setText(
+                f"마지막 갱신: {datetime.fromtimestamp(snap.updated_at).strftime('%H:%M:%S')}"
+            )
+
+    def _on_live_metrics(self, m: WatchMetrics) -> None:
+        self._apply_metrics(m)
+
+    def _on_confirm_toggled(self, checked: bool) -> None:
+        self._worker.set_user_confirmed(checked)
+        self._request_metrics_refresh()
 
     def _on_x10_debug(self, payload: dict) -> None:
         self.x10_debug_panel.update_from_payload(payload)
@@ -355,43 +399,42 @@ class MainWindow(QMainWindow):
     def _apply_metrics(self, m: WatchMetrics) -> None:
         self.lbl_bti_odds.setText(f"{m.bti_odds:.3f}" if m.bti_odds else "—")
         self.lbl_bc_odds.setText(f"{m.bc_odds:.3f}" if m.bc_odds else "—")
+        self.lbl_bc_stake.setText(f"{m.bc_stake_usdt:.1f} USDT" if m.bc_stake_usdt else "—")
+        self.lbl_bc_stake_krw.setText(f"{m.bc_stake_krw:,.0f} KRW" if m.bc_stake_krw else "—")
         self.lbl_total_stake.setText(f"{m.total_stake_krw:,.0f} KRW" if m.total_stake_krw else "—")
-        self.lbl_bti_return.setText(f"{m.bti_return_krw:,.0f} KRW" if m.bti_return_krw else "—")
-        self.lbl_bc_return.setText(f"{m.bc_return_krw:,.0f} KRW" if m.bc_return_krw else "—")
+        self.lbl_profit_x10.setText(f"{m.profit_x10_krw:,.0f} KRW" if m.total_stake_krw else "—")
+        self.lbl_profit_bc.setText(f"{m.profit_bc_krw:,.0f} KRW" if m.total_stake_krw else "—")
         self.lbl_min_profit.setText(f"{m.min_guaranteed_profit_krw:,.0f} KRW" if m.total_stake_krw else "—")
-        self.lbl_min_profit_pct.setText(f"{m.min_guaranteed_profit_pct:.2f} %" if m.total_stake_krw else "—")
-        if m.bc_stake_usdt:
-            self.lbl_bc_stake.setText(f"{m.bc_stake_usdt:.2f} USDT")
+        self.lbl_rate_x10.setText(f"{m.profit_rate_x10:.2f} %" if m.total_stake_krw else "—")
+        self.lbl_rate_bc.setText(f"{m.profit_rate_bc:.2f} %" if m.total_stake_krw else "—")
+        self.lbl_target_rate.setText(f"{m.target_profit_pct:.2f} %")
+        if m.total_stake_krw:
+            rate_text = f"{m.current_profit_rate:.2f} %"
+            if m.current_profit_rate < 0:
+                self.lbl_current_rate.setStyleSheet("color: #c0392b; font-weight: bold;")
+            elif m.current_profit_rate >= m.target_profit_pct:
+                self.lbl_current_rate.setStyleSheet("color: #27ae60; font-weight: bold;")
+            else:
+                self.lbl_current_rate.setStyleSheet("")
+            self.lbl_current_rate.setText(rate_text)
+            delta = m.target_delta_pct
+            sign = "+" if delta >= 0 else ""
+            self.lbl_target_delta.setText(f"{sign}{delta:.2f}%p")
+        else:
+            self.lbl_current_rate.setText("—")
+            self.lbl_target_delta.setText("—")
+            self.lbl_current_rate.setStyleSheet("")
 
-    def _update_preview_calc(self, read_bc: bool = False, read_bti: bool = False, read=None) -> None:
-        if not self._worker.bridge_connected:
-            return
-        bc = self._worker.get_bc_read()
-        bti = self._worker.get_bti_read()
-        if read_bc and read:
-            bc = read
-        if read_bti and read:
-            bti = read
-        if not bc.first or not bti.first:
-            return
-        arb = calculate_arbitrage(
-            bc.first,
-            bti.first,
-            bti_base_stake_krw=self.spin_bti_stake.value(),
-            usdt_rate=self.spin_usdt.value(),
-        )
-        if not arb:
-            return
-        self.lbl_bti_odds.setText(f"{arb.odds_b:.3f}" if arb.odds_b else "—")
-        self.lbl_bc_odds.setText(f"{arb.odds_a:.3f}" if arb.odds_a else "—")
-        if arb.stake_a is not None:
-            self.lbl_bc_stake.setText(f"{arb.stake_a:.2f} USDT")
+    def _request_metrics_refresh(self) -> None:
+        self._settings = self._collect_settings()
+        self._worker.update_settings(self._settings)
 
     def _start_watch(self) -> None:
         if not self.chk_confirm.isChecked():
             self.status.showMessage("반대 선택 확인 체크박스를 선택하세요")
             return
         self._settings = self._collect_settings()
+        self._worker.set_user_confirmed(True)
         self._worker.update_settings(self._settings)
         self._worker.start_watch()
         self.btn_watch_start.setEnabled(False)

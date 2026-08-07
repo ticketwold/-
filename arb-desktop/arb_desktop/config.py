@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # BetSlip-first mode (전체 경기 스캔 비활성화)
     betslip_first_mode: bool = True
+    odds_only_mode: bool = True
     betslip_network_tolerance: float = 0.06
     dry_run: bool = True
     live_execution_enabled: bool = False
