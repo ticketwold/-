@@ -81,7 +81,7 @@ jobs:
           if (-not (Test-Path "$root/chrome-bridge/manifest.json")) { throw "chrome-bridge missing" }
           Get-ChildItem $root | Select-Object Name, Length
 
-      - name: Smoke test (launch exe)
+      - name: Smoke test (5 minute survival + crash.log)
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File arb-desktop/scripts/smoke_test_windows.ps1
@@ -93,22 +93,6 @@ jobs:
           if (Test-Path $zip) { Remove-Item $zip }
           Compress-Archive -Path "arb-desktop/dist/ArbDesktop/*" -DestinationPath $zip
           Get-Item $zip | Format-List Name, Length
-
-      - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/arb-desktop-v') || github.event.inputs.upload_release == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = "arb-desktop-v${{ env.APP_VERSION }}"
-          $zip = "ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip"
-          if (-not (Test-Path $zip)) { throw "Missing release asset: $zip" }
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $zip --title "arb-desktop v${{ env.APP_VERSION }}" --notes "Windows portable ZIP"
-          } else {
-            gh release upload $tag $zip --clobber
-          }
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -130,8 +114,8 @@ jobs:
             ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip
             installer-out/ArbDesktop-Setup-v${{ env.APP_VERSION }}.exe
 
-      - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/arb-desktop-v') || github.event.inputs.upload_release == 'true'
+      - name: Upload to GitHub Release (draft, only if smoke test passed)
+        if: (startsWith(github.ref, 'refs/tags/arb-desktop-v') || github.event.inputs.upload_release == 'true') && github.event.inputs.upload_release != 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -142,9 +126,10 @@ jobs:
           foreach ($f in @($zip, $setup)) {
             if (-not (Test-Path $f)) { throw "Missing release asset: $f" }
           }
+          $notes = "CI Windows 5-minute survival: PASS. crash.log STARTUP validated. Promote from draft only after real-site verification."
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $zip $setup --draft --title "arb-desktop v${{ env.APP_VERSION }}" --notes "Windows portable ZIP + installer"
+            gh release create $tag $zip $setup --draft --title "arb-desktop v${{ env.APP_VERSION }}" --notes $notes
           } else {
             gh release upload $tag $zip $setup --clobber
           }
