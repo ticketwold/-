@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QDoubleSpinBox,
     QStatusBar,
@@ -45,12 +46,37 @@ def _chrome_bridge_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "chrome-bridge"
 
 
+class _VerticalScrollArea(QScrollArea):
+    """창 높이를 줄이면 세로 스크롤이 생기도록 고정."""
+
+    def __init__(self, content: QWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._content = content
+        self.setWidget(self._content)
+        self.setWidgetResizable(False)
+        self.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._sync_content_width()
+
+    def _sync_content_width(self) -> None:
+        width = max(self.viewport().width(), 680)
+        self._content.setFixedWidth(width)
+        self._content.adjustSize()
+        self._content.setMinimumHeight(self._content.sizeHint().height())
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_content_width()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("arb-desktop — 양방 배팅 데스크톱")
-        self.setMinimumSize(720, 420)
-        self.resize(900, 640)
+        self.setMinimumSize(680, 360)
+        self.resize(860, 560)
 
         self._store = SettingsStore()
         self._settings = self._store.load()
@@ -62,26 +88,31 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(6, 6, 6, 6)
         self.tabs = QTabWidget()
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self.tabs)
 
         dashboard = QWidget()
         dashboard_layout = QVBoxLayout(dashboard)
         dashboard_layout.setContentsMargins(4, 4, 4, 4)
+        dashboard_layout.setSpacing(8)
         dashboard_layout.addWidget(self._build_connection_group())
-        dashboard_layout.addWidget(self._build_settings_group())
-        dashboard_layout.addWidget(self._build_live_group())
-        dashboard_layout.addWidget(self._build_state_group())
-        dashboard_layout.addWidget(self._build_buttons_group())
-        dashboard_layout.addWidget(self._build_log_preview())
-        dashboard_layout.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setWidget(dashboard)
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(8)
+        mid_row.addWidget(self._build_settings_group(), 1)
+        mid_row.addWidget(self._build_live_group(), 1)
+        dashboard_layout.addLayout(mid_row)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(8)
+        bottom_row.addWidget(self._build_state_group(), 1)
+        bottom_row.addWidget(self._build_log_preview(), 1)
+        dashboard_layout.addLayout(bottom_row)
+        dashboard_layout.addWidget(self._build_buttons_group())
+
+        scroll = _VerticalScrollArea(dashboard)
         self.tabs.addTab(scroll, "메인")
 
         self.x10_debug_panel = X10DebugPanel()
