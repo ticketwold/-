@@ -6,7 +6,7 @@ on:
       version:
         description: Release tag suffix (e.g. 1.4.0)
         required: true
-        default: "1.4.0"
+        default: "1.5.0"
       upload_release:
         description: Upload assets to GitHub Release
         required: true
@@ -41,7 +41,7 @@ jobs:
           } elseif ($ref -match 'refs/tags/arb-desktop-v(.+)') {
             $v = $Matches[1]
           } else {
-            $v = "1.4.0"
+            $v = "1.5.0"
           }
           "APP_VERSION=$v" >> $env:GITHUB_ENV
           Write-Host "Building version $v"
@@ -93,6 +93,22 @@ jobs:
           if (Test-Path $zip) { Remove-Item $zip }
           Compress-Archive -Path "arb-desktop/dist/ArbDesktop/*" -DestinationPath $zip
           Get-Item $zip | Format-List Name, Length
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/arb-desktop-v') || github.event.inputs.upload_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "arb-desktop-v${{ env.APP_VERSION }}"
+          $zip = "ArbDesktop-v${{ env.APP_VERSION }}-Windows-x64.zip"
+          if (-not (Test-Path $zip)) { throw "Missing release asset: $zip" }
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $zip --title "arb-desktop v${{ env.APP_VERSION }}" --notes "Windows portable ZIP"
+          } else {
+            gh release upload $tag $zip --clobber
+          }
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress

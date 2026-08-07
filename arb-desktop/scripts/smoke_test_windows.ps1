@@ -16,6 +16,6 @@ if ($proc.HasExited) {
     throw "Smoke test failed: ArbDesktop.exe exited early with code $($proc.ExitCode)"
 }
 
-Write-Host "Smoke test OK — process still running (pid=$($proc.Id))"
+Write-Host "Smoke test OK - process still running (pid=$($proc.Id))"
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Write-Host "Smoke test completed"

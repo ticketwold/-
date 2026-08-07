@@ -4,6 +4,9 @@
 (function initFrameScanner(global) {
   const SUSPENDED_RE =
     /suspend|suspended|마감|closed|locked|unavailable|정지된|정지됨|베팅\s*마감|betting\s*(is\s*)?closed|일시\s*정지/i;
+  const CLOSED_RE =
+    /betting\s*closed|market\s*closed|배팅\s*닫|닫힘|locked|inactive|disabled|unavailable|odds\s*unavailable|정지됨|마감/i;
+  const PAUSED_RE = /일시\s*정지|paused/i;
   const EMPTY_RE =
     /슬립이\s*비어|슬립\s*비어|선택한\s*베팅\s*없|선택된\s*베팅\s*없|베팅을\s*선택|베팅\s*카트가?\s*비|카트가?\s*비어|empty\s*(bet\s*)?slip|no\s*selection|betslip\s*is\s*empty/i;
   const ODDS_RE = /(?<!\d)(?:1\.\d+|[2-9]\d*(?:\.\d+)?)(?!\d)/;
@@ -50,6 +53,36 @@
     '[class*="betslip_fe"]',
   ];
 
+  function isBetButtonDisabled(root) {
+    if (!root) return false;
+    let nodes = [];
+    try {
+      nodes = [...root.querySelectorAll("button, [role='button'], input[type='submit']")];
+    } catch (_err) {
+      return false;
+    }
+    for (const btn of nodes) {
+      if (!visible(btn)) continue;
+      const label = text(btn).toLowerCase();
+      if (!/(bet|place|베팅|배팅|제출|확인)/i.test(label)) continue;
+      if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return true;
+      try {
+        const st = getComputedStyle(btn);
+        if (st.pointerEvents === "none" || st.cursor === "not-allowed") return true;
+      } catch (_err) {}
+    }
+    return false;
+  }
+
+  function classifySlipStatus(blockText, odds, root) {
+    if (EMPTY_RE.test(blockText)) return "empty";
+    if (isBetButtonDisabled(root)) return "closed";
+    if (CLOSED_RE.test(blockText)) return "closed";
+    if (PAUSED_RE.test(blockText) || SUSPENDED_RE.test(blockText)) return "suspended";
+    if (odds == null) return "odds_missing";
+    return "active";
+  }
+
   function visible(el) {
     if (!el) return false;
     const r = el.getBoundingClientRect?.();
@@ -82,6 +115,56 @@
     if (!root) return "0";
     const t = (root.innerText || root.textContent || "").replace(/\s+/g, " ").trim();
     return `${t.length}:${t.slice(0, 64)}`;
+  }
+
+  function enrichItem(item, event) {
+    if (global.ArbBetTypeParser?.enrichSlipItem) {
+      return global.ArbBetTypeParser.enrichSlipItem(item, event);
+    }
+    return item;
+  }
+
+  function parseX10SlipText(rootText) {
+    const lines = String(rootText || "")
+      .split(/\n+/)
+      .map((l) => l.replace(/\s+/g, " ").trim())
+      .filter((l) => l.length > 1 && l.length < 120);
+    const skip = /^(베팅|bet|slip|카트|총|total|stake|금액|배당|odds|@|\d+\.\d+$)/i;
+    const useful = lines.filter((l) => !skip.test(l) && !/^\d{1,3}(,\d{3})*$/.test(l));
+    let event = "";
+    let market = "";
+    let selection = "";
+    const vs = useful.find((l) => /\bvs\.?\b/i.test(l));
+    if (vs) event = vs;
+    const totalMarketRe =
+      /토탈\s*골|토탈골|총\s*골|총\s*득점|합계\s*득점|총점|득점\s*합계|total\s*goals?|total\s*goal|goals?\s*total|total\s*points?|game\s*total|match\s*total|\btotals?\b|\bo\s*\/\s*u\b|over\s*\/\s*under|언더\s*\/\s*오버|오버\s*\/\s*언더/i;
+    const ou = useful.find(
+      (l) =>
+        /\b(over|under|오버|언더|이상|이하)\b/i.test(l) ||
+        /\b[ou]\s*[+-]?\d/i.test(l) ||
+        /\b[ou]\s*\(\s*\d/i.test(l),
+    );
+    const hc = useful.find((l) => /[+-]\d+(?:\.\d+)?/.test(l));
+    const win = useful.find((l) => /\b(승|win|winner|w[12])\b/i.test(l) && !/\b(over|under|오버|언더)\b/i.test(l));
+    if (ou) {
+      selection = ou;
+      market =
+        useful.find((l) => totalMarketRe.test(l) && l !== ou) ||
+        useful.find((l) => /\b(total|합계|득점|언더\/오버|over\/under)\b/i.test(l) && l !== ou) ||
+        "언더/오버";
+    } else if (hc) {
+      selection = hc;
+      market = useful.find((l) => /handicap|핸디|spread/i.test(l)) || "핸디캡";
+    } else if (win) {
+      selection = win;
+      market = useful.find((l) => /승패|moneyline|winner|세트|맵|set|map/i.test(l) && l !== win) || "승패";
+    } else if (useful.length >= 2) {
+      selection = useful[useful.length - 1];
+      market = useful[useful.length - 2];
+    } else if (useful.length === 1) {
+      selection = useful[0];
+    }
+    return { event, market, selection };
   }
 
   function scanSelectors(candidates) {
@@ -282,18 +365,22 @@
     const market = readDomField(selectionEl, ["marketName", "MarketName", "market"]);
     const selection = readDomField(selectionEl, ["outcomeName", "OutcomeName", "selection", "Selection"]);
     const stake = readBcStake(slip);
-    const suspended = SUSPENDED_RE.test(blockText);
-    const odds = suspended ? null : extractBcOdds(selectionEl, slip);
+    const odds = extractBcOdds(selectionEl, slip);
+    const status = classifySlipStatus(blockText, odds, slip);
 
-    const item = {
+    const item = enrichItem(
+      {
+        event,
+        market,
+        selection,
+        odds: status === "active" ? odds : null,
+        status,
+        stake,
+        container_selector: selectorHint(selectionEl),
+        dom_hash: domHash(slip),
+      },
       event,
-      market,
-      selection,
-      odds,
-      status: suspended ? "suspended" : odds ? "active" : "odds_missing",
-      stake,
-      container_selector: selectorHint(selectionEl),
-    };
+    );
 
     if (!event && !selection && !odds) {
       return {
@@ -475,11 +562,11 @@
 
     for (const root of roots) {
       const rootText = text(root);
-      const suspended = SUSPENDED_RE.test(rootText);
       const stake = readX10Stake(root);
       const { odds, candidates } = extractX10OddsFromRoot(root, stake);
+      const status = classifySlipStatus(rootText, odds, root);
 
-      if (suspended) {
+      if (status === "suspended" || status === "closed" || status === "odds_missing") {
         return {
           ok: true,
           empty: false,
@@ -489,7 +576,7 @@
               market: "",
               selection: "",
               odds: null,
-              status: "suspended",
+              status,
               stake,
               container_selector: selectorHint(root),
             },
@@ -506,20 +593,24 @@
       }
 
       if (odds != null) {
+        const parsed = parseX10SlipText(rootText);
+        const item = enrichItem(
+          {
+            event: parsed.event,
+            market: parsed.market,
+            selection: parsed.selection,
+            odds,
+            status,
+            stake,
+            container_selector: selectorHint(root),
+            dom_hash: domHash(root),
+          },
+          parsed.event,
+        );
         return {
           ok: true,
           empty: false,
-          items: [
-            {
-              event: "",
-              market: "",
-              selection: "",
-              odds,
-              status: "active",
-              stake,
-              container_selector: selectorHint(root),
-            },
-          ],
+          items: [item],
           source: "dom",
           frame_url: location.href,
           container_selector: selectorHint(root),

@@ -9,6 +9,7 @@ from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.bridge.app import create_bridge_runtime, print_bridge_startup_info
 from arb_desktop.bridge.message_models import BridgeStatus
 from arb_desktop.config import settings
+from arb_desktop.ui.settings_store import SettingsStore
 
 
 def _print_status(status: BridgeStatus) -> None:
@@ -128,7 +129,12 @@ async def run(*, once: bool = False, interval: float = 2.0) -> int:
             if not bc.empty:
                 _print_match(bc, read)
 
+    store = SettingsStore()
+    app_settings = store.load()
+    pairing_store = store.pairing_store_from_settings(app_settings)
+
     runtime = create_bridge_runtime(
+        pairing_store=pairing_store,
         on_status_change=on_status,
         on_slip_update=on_slip,
         on_debug=_print_debug,
@@ -156,7 +162,7 @@ async def run(*, once: bool = False, interval: float = 2.0) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Chrome Bridge BetSlip 연결 CLI v1.3.0")
+    parser = argparse.ArgumentParser(description="Chrome Bridge BetSlip 연결 CLI v1.5.0")
     parser.add_argument("--once", action="store_true", help="상태 1회 출력 후 종료")
     parser.add_argument("--interval", type=float, default=2.0, help="상태 폴링 간격(초)")
     args = parser.parse_args(argv)

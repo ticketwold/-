@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
@@ -25,6 +27,9 @@ class ConnectionManager:
     on_slip_update: Callable[[str, BetSlipReadResult], None] | None = None
     on_debug: Callable[[dict[str, Any]], None] | None = None
     bridge_connected: bool = False
+    auth_state: BridgeConnectionState = BridgeConnectionState.WAITING
+    paired_extension_id: str = ""
+    last_connected_at: float = 0.0
     bc_tab: str = "not_found"
     x10_tab: str = "not_found"
     bc_betslip: str = "empty"
@@ -35,23 +40,46 @@ class ConnectionManager:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def status(self) -> BridgeStatus:
+        bridge = self.auth_state
+        if self.bridge_connected:
+            bridge = BridgeConnectionState.CONNECTED
+        last_at = ""
+        if self.last_connected_at:
+            last_at = datetime.fromtimestamp(self.last_connected_at).strftime("%Y-%m-%d %H:%M:%S")
         return BridgeStatus(
-            bridge=BridgeConnectionState.CONNECTED if self.bridge_connected else BridgeConnectionState.DISCONNECTED,
+            bridge=bridge,
             bc_tab=tab_state_from_raw(self.bc_tab),
             x10_tab=tab_state_from_raw(self.x10_tab),
             bc_betslip=slip_state_from_raw(self.bc_betslip),
             x10_betslip=slip_state_from_raw(self.x10_betslip),
+            extension_id=self.paired_extension_id,
+            last_connected_at=last_at,
         )
 
     def _notify_status(self) -> None:
         if self.on_status_change:
             self.on_status_change(self.status())
 
-    def set_bridge_connected(self, connected: bool) -> None:
+    def set_bridge_connected(self, connected: bool, *, extension_id: str = "") -> None:
         self.bridge_connected = connected
-        if not connected:
+        if connected:
+            self.auth_state = BridgeConnectionState.CONNECTED
+            if extension_id:
+                self.paired_extension_id = extension_id
+            self.last_connected_at = time.time()
+        else:
+            self.auth_state = BridgeConnectionState.WAITING
             self.bc_betslip = "empty"
             self.x10_betslip = "empty"
+        self._notify_status()
+
+    def set_auth_failed(self, extension_id: str | None = None) -> None:
+        self.bridge_connected = False
+        self.auth_state = BridgeConnectionState.AUTH_FAILED
+        if extension_id:
+            self.paired_extension_id = extension_id
+        self.bc_betslip = "empty"
+        self.x10_betslip = "empty"
         self._notify_status()
 
     def apply_status_message(self, message: StatusMessage) -> None:
@@ -110,10 +138,15 @@ class ConnectionManager:
 
 
 def _slip_state_from_read(read: BetSlipReadResult) -> str:
-    if read.first and read.first.status == SlipStatus.SUSPENDED:
-        return "suspended"
-    if read.first and read.first.status == SlipStatus.ACTIVE:
+    from arb_desktop.ui.site_status import slip_status_from_read
+
+    status = slip_status_from_read(read)
+    if status.value == "ACTIVE":
         return "active"
+    if status.value in {"SUSPENDED", "CLOSED"}:
+        return "suspended"
+    if status.value == "ODDS_MISSING":
+        return "empty"
     return "empty"
 
 

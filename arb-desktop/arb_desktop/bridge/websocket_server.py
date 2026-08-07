@@ -4,22 +4,33 @@ import asyncio
 import json
 import logging
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 import websockets
 from websockets.server import WebSocketServer, WebSocketServerProtocol, serve
 
 from arb_desktop.bridge.connection_manager import ConnectionManager
 from arb_desktop.bridge.message_models import SlipUpdateMessage, StatusMessage
+from arb_desktop.bridge.pairing_store import PairingStore
 
 logger = logging.getLogger(__name__)
+
+HELLO_TIMEOUT_SEC = 10.0
+PROTOCOL_VERSION = 1
 
 
 class BridgeWebSocketServer:
     """127.0.0.1 전용 WebSocket 서버 — Chrome Bridge 확장프로그램 연결."""
 
-    def __init__(self, manager: ConnectionManager, *, host: str, port: int) -> None:
+    def __init__(
+        self,
+        manager: ConnectionManager,
+        pairing_store: PairingStore,
+        *,
+        host: str,
+        port: int,
+    ) -> None:
         self._manager = manager
+        self._pairing_store = pairing_store
         self._host = host
         self._port = port
         self._server: WebSocketServer | None = None
@@ -61,25 +72,57 @@ class BridgeWebSocketServer:
         )
 
     async def _handler(self, websocket: WebSocketServerProtocol) -> None:
-        token = _token_from_path(websocket.path)
-        if token != self._manager.token:
-            await websocket.send(json.dumps({"type": "auth_fail", "reason": "invalid-token"}))
-            await websocket.close(code=4401, reason="invalid token")
-            return
-
-        self._clients.add(websocket)
-        await websocket.send(json.dumps({"type": "auth_ok"}))
-        self._manager.set_bridge_connected(True)
-
+        authenticated = False
+        extension_id = ""
         try:
-            async for raw in websocket:
-                await self._handle_message(raw)
+            raw = await asyncio.wait_for(websocket.recv(), timeout=HELLO_TIMEOUT_SEC)
+            data = json.loads(raw)
+            if str(data.get("type") or "") != "hello":
+                await self._auth_fail(websocket, "expected-hello")
+                return
+
+            extension_id = str(data.get("extension_id") or "")
+            credential = str(data.get("credential") or "")
+            version = int(data.get("protocol_version") or 0)
+            if version != PROTOCOL_VERSION:
+                await self._auth_fail(websocket, "protocol-mismatch")
+                return
+
+            if not self._pairing_store.validate(extension_id, credential):
+                logger.warning(
+                    "auth failed extension_id=%s…%s",
+                    extension_id[:6],
+                    extension_id[-4:] if extension_id else "",
+                )
+                self._manager.set_auth_failed(extension_id or None)
+                await self._auth_fail(websocket, "invalid-credential")
+                return
+
+            self._clients.add(websocket)
+            authenticated = True
+            await websocket.send(json.dumps({"type": "hello_ack", "authenticated": True}))
+            self._manager.set_bridge_connected(True, extension_id=extension_id)
+
+            async for message_raw in websocket:
+                await self._handle_message(message_raw)
+        except asyncio.TimeoutError:
+            await self._auth_fail(websocket, "hello-timeout")
         except websockets.ConnectionClosed:
             pass
+        except json.JSONDecodeError:
+            await self._auth_fail(websocket, "invalid-json")
         finally:
-            self._clients.discard(websocket)
-            if not self._clients:
-                self._manager.set_bridge_connected(False)
+            if authenticated:
+                self._clients.discard(websocket)
+                if not self._clients:
+                    self._manager.set_bridge_connected(False)
+
+    async def _auth_fail(self, websocket: WebSocketServerProtocol, reason: str) -> None:
+        try:
+            await websocket.send(json.dumps({"type": "auth_fail", "reason": reason}))
+        except Exception:
+            pass
+        await websocket.close(code=4401, reason="authentication failed")
 
     async def _handle_message(self, raw: str | bytes) -> None:
         try:
@@ -101,9 +144,3 @@ class BridgeWebSocketServer:
             return
         if msg_type == "hello":
             await self.request_status()
-
-
-def _token_from_path(path: str) -> str:
-    parsed = urlparse(path or "/")
-    values = parse_qs(parsed.query).get("token", [])
-    return values[0] if values else ""

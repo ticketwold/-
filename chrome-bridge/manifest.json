@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "arb Chrome Bridge",
-  "version": "1.0.2",
-  "description": "BC.Game / x10x10s BetSlip bridge for arb-desktop",
+  "version": "1.2.0",
+  "description": "BC.Game / x10x10s BetSlip bridge for arb-desktop (auto-pairing)",
   "permissions": ["tabs", "storage"],
   "host_permissions": [
     "*://*.bc.game/*",
@@ -33,7 +33,7 @@
         "*://*.biahosted.com/*",
         "*://*.cocoesports.com/*"
       ],
-      "js": ["frame_scanner.js", "frame_agent.js", "content_bc.js"],
+      "js": ["bet_type_parser.js", "frame_scanner.js", "frame_agent.js", "content_bc.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
@@ -45,7 +45,7 @@
         "*://*.sportscenter.com/*",
         "*://*.bti.bet/*"
       ],
-      "js": ["frame_scanner.js", "frame_agent.js", "content_x10.js"],
+      "js": ["bet_type_parser.js", "frame_scanner.js", "frame_agent.js", "content_x10.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
@@ -53,6 +53,5 @@
   ],
   "action": {
     "default_title": "arb Chrome Bridge"
-  },
-  "options_page": "options.html"
+  }
 }

@@ -10,16 +10,22 @@ from arb_desktop.bridge.message_models import BridgeStatus
 from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
+from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
+from arb_desktop.config import settings as runtime_settings
+from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
+from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
+from arb_desktop.ui.odds_log_manager import OddsLogManager
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
 
 
 class BridgeWorker(QObject):
     bridge_status = pyqtSignal(object)
-    bridge_token = pyqtSignal(str)
     slip_updated = pyqtSignal(str, object)
     x10_debug = pyqtSignal(object)
     watch_state = pyqtSignal(str, object, str)
+    live_metrics = pyqtSignal(object)
+    fx_updated = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -29,13 +35,36 @@ class BridgeWorker(QObject):
         self._store = store
         self._app_settings = store.load()
         store.apply_to_runtime(self._app_settings)
+        self._pairing_store = store.pairing_store_from_settings(self._app_settings)
         self._runtime = None
         self._scanner: BetSlipScanner | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._watch_engine = WatchEngine()
         self._watching = False
+        self._user_confirmed = False
         self._poll_task: asyncio.Task | None = None
+        self._fx_task: asyncio.Task | None = None
+        self._fx = BithumbFxProvider(
+            refresh_interval=self._app_settings.fx_refresh_seconds,
+            max_stale_seconds=self._app_settings.fx_max_stale_seconds,
+        )
+        self._fx_snapshot: FxSnapshot | None = None
         self._bridge_started = False
+        self._orchestrator = ParallelBetOrchestrator()
+        self._dispatch_running = False
+        self._odds_log: OddsLogManager | None = None
+        self._last_engine_log_state: str = ""
+
+    def attach_odds_log(self, manager: OddsLogManager) -> None:
+        self._odds_log = manager
+
+    @property
+    def watch_enabled(self) -> bool:
+        return self._watching
+
+    @property
+    def watch_metrics(self) -> WatchMetrics:
+        return self._watch_engine.metrics
 
     @property
     def app_settings(self) -> AppSettings:
@@ -60,6 +89,12 @@ class BridgeWorker(QObject):
     def update_settings(self, app_settings: AppSettings) -> None:
         self._app_settings = app_settings
         self._store.apply_to_runtime(app_settings)
+        self._fx._refresh_interval = app_settings.fx_refresh_seconds
+        self._fx._max_stale_seconds = app_settings.fx_max_stale_seconds
+        self._emit_live_metrics()
+
+    def set_user_confirmed(self, confirmed: bool) -> None:
+        self._user_confirmed = confirmed
 
     @pyqtSlot()
     def bootstrap(self) -> None:
@@ -114,13 +149,14 @@ class BridgeWorker(QObject):
                 )
                 self.x10_debug.emit(read.raw)
             self.slip_updated.emit(site, read)
+            self._emit_live_metrics()
             if self._watching:
                 asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
 
         def on_debug(payload: dict[str, Any]) -> None:
             site = str(payload.get("site") or "").lower()
             block = str(payload.get("block") or "").upper()
-            if site != "x10" and site != "bti":
+            if site not in {"x10", "bti"}:
                 return
             if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN"}:
                 self.x10_debug.emit(payload)
@@ -138,7 +174,7 @@ class BridgeWorker(QObject):
                 )
 
         self._runtime = create_bridge_runtime(
-            token=self._app_settings.bridge_token,
+            pairing_store=self._pairing_store,
             on_status_change=on_status,
             on_slip_update=on_slip,
             on_debug=on_debug,
@@ -146,24 +182,78 @@ class BridgeWorker(QObject):
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()
         self._bridge_started = True
-        self.bridge_token.emit(self._runtime.manager.token)
         self._watch_engine.set_idle()
         self._emit_watch_state()
         self._poll_task = asyncio.create_task(self._poll_loop())
+        self._fx_task = asyncio.create_task(self._fx_loop())
+
+    async def _fx_loop(self) -> None:
+        while True:
+            try:
+                snap = await self._fx.refresh()
+                self._fx_snapshot = snap
+                if snap.rate is not None:
+                    self._app_settings.usdt_rate = snap.rate
+                self.fx_updated.emit(snap)
+                self._emit_live_metrics()
+                if self._watching:
+                    await self._evaluate_watch()
+            except Exception:
+                pass
+            await asyncio.sleep(self._app_settings.fx_refresh_seconds)
 
     async def _poll_loop(self) -> None:
         while True:
             try:
                 if self._runtime:
                     await self._runtime.server.request_status()
+                    self._emit_live_metrics()
                     if self._watching:
                         await self._evaluate_watch()
             except Exception:
                 pass
             await asyncio.sleep(settings.scan_interval_ms / 1000)
 
+    def _emit_live_metrics(self) -> None:
+        if not self._runtime:
+            return
+        metrics = self._watch_engine.compute_live_metrics(
+            bc=self._runtime.manager.get_bc_read(),
+            bti=self._runtime.manager.get_bti_read(),
+            settings=self._app_settings,
+            fx=self._fx_snapshot,
+        )
+        self._watch_engine.enrich_ui_context(
+            metrics,
+            settings=self._app_settings,
+            bridge_connected=self._runtime.manager.bridge_connected,
+            user_confirmed=self._user_confirmed,
+        )
+        self._log_odds_metrics(metrics)
+        self.live_metrics.emit(metrics)
+
+    def _log_odds_metrics(self, metrics: WatchMetrics) -> None:
+        if not self._odds_log:
+            return
+        profit = metrics.current_profit_rate if metrics.total_stake_krw else None
+        watch = self._watching
+        self._odds_log.observe_site(
+            site="X10",
+            odds=metrics.bti_odds,
+            status=metrics.x10_site_label,
+            watch_enabled=watch,
+            profit_rate=profit,
+        )
+        self._odds_log.observe_site(
+            site="BC",
+            odds=metrics.bc_odds,
+            status=metrics.bc_site_label,
+            watch_enabled=watch,
+            profit_rate=profit,
+        )
+
     async def _evaluate_watch(self) -> None:
-        if not self._runtime or not self._scanner:
+        if not self._runtime:
             return
         bc = self._runtime.manager.get_bc_read()
         bti = self._runtime.manager.get_bti_read()
@@ -172,6 +262,8 @@ class BridgeWorker(QObject):
             bc=bc,
             bti=bti,
             settings=self._app_settings,
+            fx=self._fx_snapshot,
+            user_confirmed=self._user_confirmed,
         )
         self._emit_watch_state(metrics, err_key)
         if err_key == "below-target":
@@ -179,24 +271,164 @@ class BridgeWorker(QObject):
                 "ENGINE",
                 state.value,
                 "-",
-                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                f"{metrics.current_profit_rate:.2f}%",
                 metrics.message,
-                f"ENGINE|{state.value}|{metrics.min_guaranteed_profit_pct:.2f}|below-target",
+                f"ENGINE|{state.value}|{metrics.current_profit_rate:.2f}|below-target",
             )
         elif state == WatchState.READY:
             self.log_message.emit(
                 "ENGINE",
                 "READY",
                 "-",
-                f"{metrics.min_guaranteed_profit_pct:.2f}%",
+                f"{metrics.current_profit_rate:.2f}%",
                 "target reached",
-                f"ENGINE|READY|{metrics.min_guaranteed_profit_pct:.2f}|ready",
+                f"ENGINE|READY|{metrics.current_profit_rate:.2f}|ready",
             )
+            if self._watch_engine.consume_ready_for_dispatch():
+                should_dispatch = (
+                    self._app_settings.parallel_dry_run_on_ready and self._app_settings.dry_run
+                ) or (
+                    self._app_settings.parallel_execution_enabled
+                    and runtime_settings.live_execution_enabled
+                )
+                if should_dispatch:
+                    asyncio.create_task(self._run_parallel_dispatch())
+
+    async def _run_parallel_dispatch(self) -> None:
+        if not self._runtime or self._dispatch_running:
+            return
+        self._dispatch_running = True
+        try:
+            bc = self._runtime.manager.get_bc_read()
+            bti = self._runtime.manager.get_bti_read()
+            usdt_rate = self._app_settings.usdt_rate
+            if self._fx_snapshot and self._fx_snapshot.rate:
+                usdt_rate = self._fx_snapshot.rate
+            if not bc.first or not bti.first:
+                return
+            calc = compute_odds_only_metrics(
+                bti_odds=float(bti.first.odds or 0),
+                bc_odds=float(bc.first.odds or 0),
+                bti_stake_krw=self._app_settings.bti_stake_krw,
+                usdt_rate=usdt_rate,
+                round_unit_krw=self._app_settings.round_unit_krw,
+                round_unit_usdt=self._app_settings.round_unit_usdt,
+                target_profit_pct=self._app_settings.target_profit_pct,
+            )
+            if not calc:
+                return
+            ctx = DispatchContext(
+                bc=bc,
+                bti=bti,
+                metrics=calc,
+                settings=self._app_settings,
+                usdt_rate=usdt_rate,
+            )
+            self._watch_engine.set_dispatch_state(WatchState.PREPARING, "동시 배팅 준비")
+            self._emit_watch_state()
+            await asyncio.sleep(self._app_settings.pre_dispatch_verify_ms / 1000)
+            abort = self._orchestrator.pre_dispatch_validate(ctx)
+            if abort:
+                self._watch_engine.set_dispatch_state(WatchState.AUTO_BET_WAIT, abort)
+                self._emit_watch_state()
+                return
+            self._watch_engine.set_dispatch_state(WatchState.DISPATCHING, "양쪽 병렬 배팅 실행 중")
+            self._emit_watch_state()
+            live = (
+                self._app_settings.parallel_execution_enabled
+                and runtime_settings.live_execution_enabled
+                and not self._app_settings.dry_run
+            )
+            result = await self._orchestrator.dispatch(ctx, dry_run=not live, live_enabled=live)
+            for line in result.log_lines:
+                self.log_message.emit("BET", result.outcome.value, "-", "-", line, f"BET|{line}")
+            self._watch_engine.set_dispatch_state(WatchState.VERIFYING_RESULT, "결과 확인")
+            self._emit_watch_state()
+            if result.partial:
+                self._watching = False
+                self._watch_engine.mark_dispatch_complete(partial=True)
+                self.log_message.emit(
+                    "ENGINE",
+                    "PARTIAL BET",
+                    "-",
+                    "-",
+                    "MANUAL ACTION REQUIRED",
+                    "ENGINE|PARTIAL|manual",
+                )
+            elif result.outcome.name.endswith("SUCCESS") or result.outcome.value == "DRY_RUN_MOCK":
+                self._watch_engine.mark_dispatch_complete(success=True)
+            else:
+                self._watch_engine.mark_dispatch_complete(success=False)
+            self._emit_watch_state()
+        finally:
+            self._dispatch_running = False
 
     def _emit_watch_state(self, metrics: WatchMetrics | None = None, err: str | None = None) -> None:
         m = metrics or self._watch_engine.metrics
+        if self._runtime:
+            self._watch_engine.enrich_ui_context(
+                m,
+                settings=self._app_settings,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                user_confirmed=self._user_confirmed,
+            )
         msg = m.message or err or ""
+        self._log_engine_state(self._watch_engine.state.value, m, err, msg)
         self.watch_state.emit(self._watch_engine.state.value, m, msg)
+
+    def _log_engine_state(
+        self,
+        state: str,
+        metrics: WatchMetrics,
+        err: str | None,
+        msg: str,
+    ) -> None:
+        if not self._odds_log:
+            return
+        profit = metrics.current_profit_rate if metrics.total_stake_krw else None
+        watch = self._watching
+        key = f"{state}|{err}|{msg}|{profit}"
+        if key == self._last_engine_log_state:
+            return
+
+        if state == "READY":
+            self._odds_log.log_engine(
+                status="READY",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=f"현재 수익률 {profit:.2f}%" if profit is not None else "READY",
+            )
+            self._last_engine_log_state = key
+        elif err == "below-target" or (state == "TARGET WAIT" and "below-target" in msg):
+            self._odds_log.log_engine(
+                status="TARGET WAIT",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=f"현재 수익률 {profit:.2f}%" if profit is not None else msg,
+            )
+            self._last_engine_log_state = key
+        elif state == "AUTO BET WAIT" and ("닫" in msg or "CLOSED" in msg.upper()):
+            site = "X10" if "텐텐" in msg or "x10" in msg.lower() else "BC" if "BC" in msg else "ENGINE"
+            self._odds_log.log_engine(
+                status="CLOSED",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=msg or "자동배팅 대기",
+            )
+            if site in {"X10", "BC"}:
+                self._odds_log.log_site_change(
+                    site=site,
+                    previous_odds=metrics.bti_odds if site == "X10" else metrics.bc_odds,
+                    current_odds=metrics.bti_odds if site == "X10" else metrics.bc_odds,
+                    previous_status="ACTIVE",
+                    current_status="CLOSED",
+                    watch_enabled=watch,
+                    profit_rate=profit,
+                    message="closed",
+                )
+            self._last_engine_log_state = key
+        elif state == "IDLE" and not watch:
+            self._last_engine_log_state = key
 
     @pyqtSlot()
     def reconnect(self) -> None:
@@ -204,9 +436,28 @@ class BridgeWorker(QObject):
             asyncio.run_coroutine_threadsafe(self._runtime.server.request_status(), self._loop)
 
     @pyqtSlot()
+    def repair_pairing(self) -> None:
+        if self._loop and self._runtime:
+            self._runtime.reset_pairing()
+            self._store.save(self._app_settings)
+            asyncio.run_coroutine_threadsafe(self._runtime.server.request_status(), self._loop)
+
+    @pyqtSlot()
+    def reset_connection(self) -> None:
+        self._watching = False
+        self._watch_engine.stop_watch()
+        self._emit_watch_state()
+        if self._loop and self._runtime:
+            self._runtime.reset_pairing()
+            self._store.save(self._app_settings)
+
+    @pyqtSlot()
     def start_watch(self) -> None:
         self._watching = True
-        self._watch_engine.start_watch()
+        self._last_engine_log_state = ""
+        self._watch_engine.start_watch(user_confirmed=self._user_confirmed)
+        if self._odds_log:
+            self._odds_log.log_watch(enabled=True)
         self._emit_watch_state()
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
@@ -215,6 +466,9 @@ class BridgeWorker(QObject):
     def stop_watch(self) -> None:
         self._watching = False
         self._watch_engine.stop_watch()
+        if self._odds_log:
+            self._odds_log.log_watch(enabled=False)
+        self._last_engine_log_state = ""
         self._emit_watch_state()
 
     @pyqtSlot()
@@ -222,5 +476,7 @@ class BridgeWorker(QObject):
         self._watching = False
         if self._poll_task:
             self._poll_task.cancel()
+        if self._fx_task:
+            self._fx_task.cancel()
         if self._loop and self._runtime:
             asyncio.run_coroutine_threadsafe(self._runtime.stop(), self._loop)
