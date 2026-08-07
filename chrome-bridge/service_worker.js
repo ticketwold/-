@@ -169,6 +169,34 @@ async function refreshTabsAndScan() {
   await requestSlipScan("x10", x10Tabs);
 }
 
+async function executeBridgeCommand(message) {
+  const site = message.site === "bc" ? "bc" : "x10";
+  const urls = site === "bc" ? BC_URLS : X10_URLS;
+  const tabs = await chrome.tabs.query({ url: urls });
+  if (!tabs.length) {
+    return { ok: false, error: `${site}-tab-not-found` };
+  }
+  let lastResult = { ok: false, error: "no-frame-response" };
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    try {
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: "bridge_command",
+        site,
+        command: message.command,
+        amount_usdt: message.amount_usdt,
+        amount_krw: message.amount_krw,
+        request_id: message.request_id,
+      });
+      if (result?.ok) return result;
+      lastResult = result || lastResult;
+    } catch (_err) {
+      // try next tab
+    }
+  }
+  return lastResult;
+}
+
 async function startBridge() {
   console.log("[BRIDGE] service worker started");
   try {
@@ -191,9 +219,20 @@ async function startBridge() {
         sendStatus();
       }
     },
-    onMessage: (message) => {
+    onMessage: async (message) => {
       if (message.type === "request_status") {
         refreshTabsAndScan();
+        return;
+      }
+      if (message.type === "bridge_command") {
+        const result = await executeBridgeCommand(message);
+        client?.send({
+          type: "command_result",
+          request_id: message.request_id,
+          command: message.command,
+          site: message.site,
+          ...result,
+        });
       }
     },
   });

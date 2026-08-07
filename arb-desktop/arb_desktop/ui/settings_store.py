@@ -37,6 +37,9 @@ class AppSettings:
     odds_change_tolerance: float = 0.0
     parallel_execution_enabled: bool = False
     parallel_dry_run_on_ready: bool = True
+    stake_sync_enabled: bool = True
+    live_execution_enabled: bool = False
+    manual_confirm_skip: bool = False
     ui_theme: str = "dark"
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 18765
@@ -131,3 +134,4 @@ class SettingsStore:
         runtime.min_profit_pct = settings.target_profit_pct
         runtime.default_usdt_rate = settings.usdt_rate
         runtime.dry_run = settings.dry_run
+        runtime.live_execution_enabled = settings.live_execution_enabled

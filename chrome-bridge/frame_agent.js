@@ -66,6 +66,28 @@
     });
   }
 
+  async function handleBridgeCommand(message) {
+    const actions = global.ArbStakeActions;
+    if (!actions) return { ok: false, error: "stake-actions-missing" };
+    const cmd = message.command;
+    if (cmd === "set_bc_stake") {
+      return actions.setBcStake(Number(message.amount_usdt));
+    }
+    if (cmd === "read_bc_stake") {
+      return actions.readBcStake();
+    }
+    if (cmd === "place_bc_bet") {
+      return actions.placeBcBet();
+    }
+    if (cmd === "set_x10_stake") {
+      return actions.setX10Stake(Number(message.amount_krw));
+    }
+    if (cmd === "place_x10_bet") {
+      return actions.placeX10Bet();
+    }
+    return { ok: false, error: "unknown-command" };
+  }
+
   function attachObservers(onChange) {
     const observers = [];
     let debounceTimer = null;
@@ -220,6 +242,12 @@
       if (message?.type === "scan_slip" && message.site === site) {
         scan(true);
         sendResponse({ ok: true, frame_url: location.href, frame_depth: frameDepth });
+        return true;
+      }
+      if (message?.type === "bridge_command" && message.site === site) {
+        handleBridgeCommand(message)
+          .then((result) => sendResponse(result))
+          .catch((err) => sendResponse({ ok: false, error: String(err) }));
         return true;
       }
       return false;

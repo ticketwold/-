@@ -90,6 +90,14 @@ class WatchMetrics:
     watch_started_at: str = ""
     bti_display_odds: float | None = None
     x10_status_reason: str = ""
+    stake_sync_enabled: bool = True
+    stake_sync_state: str = "IDLE"
+    stake_sync_calculated_usdt: float | None = None
+    stake_sync_actual_usdt: float | None = None
+    stake_sync_message: str = ""
+    execution_phase: str = "IDLE"
+    execution_message: str = ""
+    dispatch_gap_ms: float = 0.0
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:

@@ -12,6 +12,7 @@ from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
 from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
 from arb_desktop.config import settings as runtime_settings
+from arb_desktop.execution.execution_engine import ExecutionEngine
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
 from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
 from arb_desktop.ui.odds_log_manager import OddsLogManager
@@ -26,6 +27,7 @@ class BridgeWorker(QObject):
     watch_state = pyqtSignal(str, object, str)
     live_metrics = pyqtSignal(object)
     fx_updated = pyqtSignal(object)
+    execution_update = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -51,7 +53,9 @@ class BridgeWorker(QObject):
         self._fx_snapshot: FxSnapshot | None = None
         self._bridge_started = False
         self._orchestrator = ParallelBetOrchestrator()
+        self._execution = ExecutionEngine()
         self._dispatch_running = False
+        self._stake_sync_running = False
         self._odds_log: OddsLogManager | None = None
         self._last_engine_log_state: str = ""
 
@@ -150,6 +154,7 @@ class BridgeWorker(QObject):
                 self.x10_debug.emit(read.raw)
             self.slip_updated.emit(site, read)
             self._emit_live_metrics()
+            asyncio.run_coroutine_threadsafe(self._maybe_stake_sync(), self._loop)
             if self._watching:
                 asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
 
@@ -196,6 +201,7 @@ class BridgeWorker(QObject):
                     self._app_settings.usdt_rate = snap.rate
                 self.fx_updated.emit(snap)
                 self._emit_live_metrics()
+                asyncio.run_coroutine_threadsafe(self._maybe_stake_sync(), self._loop)
                 if self._watching:
                     await self._evaluate_watch()
             except Exception:
@@ -229,8 +235,40 @@ class BridgeWorker(QObject):
             bridge_connected=self._runtime.manager.bridge_connected,
             user_confirmed=self._user_confirmed,
         )
+        self._apply_stake_sync_metrics(metrics)
         self._log_odds_metrics(metrics)
         self.live_metrics.emit(metrics)
+
+    def _apply_stake_sync_metrics(self, metrics: WatchMetrics) -> None:
+        status = self._execution.stake_sync.last_status
+        if not status:
+            return
+        metrics.stake_sync_enabled = self._app_settings.stake_sync_enabled
+        metrics.stake_sync_state = status.state.value if hasattr(status.state, "value") else str(status.state)
+        metrics.stake_sync_calculated_usdt = status.calculated_usdt
+        metrics.stake_sync_actual_usdt = status.actual_usdt
+        metrics.stake_sync_message = status.message
+        metrics.execution_phase = self._execution.state.phase.value
+        metrics.execution_message = self._execution.state.message
+        metrics.dispatch_gap_ms = self._execution.state.dispatch_gap_ms
+
+    async def _maybe_stake_sync(self) -> None:
+        if not self._runtime or self._stake_sync_running or not self._app_settings.stake_sync_enabled:
+            return
+        self._stake_sync_running = True
+        try:
+            await self._execution.maybe_sync_stakes(
+                server=self._runtime.server,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                bc=self._runtime.manager.get_bc_read(),
+                bti=self._runtime.manager.get_bti_read(),
+                settings=self._app_settings,
+                fx=self._fx_snapshot,
+            )
+            self._emit_live_metrics()
+            self.execution_update.emit(self._execution.state)
+        finally:
+            self._stake_sync_running = False
 
     def _log_odds_metrics(self, metrics: WatchMetrics) -> None:
         if not self._odds_log:
@@ -294,60 +332,39 @@ class BridgeWorker(QObject):
                     and runtime_settings.live_execution_enabled
                 )
                 if should_dispatch:
-                    asyncio.create_task(self._run_parallel_dispatch())
+                    asyncio.create_task(self._run_parallel_dispatch(manual=False))
 
-    async def _run_parallel_dispatch(self) -> None:
+    async def _run_parallel_dispatch(self, *, manual: bool = False, skip_target_check: bool = False) -> None:
         if not self._runtime or self._dispatch_running:
             return
         self._dispatch_running = True
         try:
             bc = self._runtime.manager.get_bc_read()
             bti = self._runtime.manager.get_bti_read()
-            usdt_rate = self._app_settings.usdt_rate
-            if self._fx_snapshot and self._fx_snapshot.rate:
-                usdt_rate = self._fx_snapshot.rate
-            if not bc.first or not bti.first:
-                return
-            calc = compute_odds_only_metrics(
-                bti_odds=float(bti.first.odds or 0),
-                bc_odds=float(bc.first.odds or 0),
-                bti_stake_krw=self._app_settings.bti_stake_krw,
-                usdt_rate=usdt_rate,
-                round_unit_krw=self._app_settings.round_unit_krw,
-                round_unit_usdt=self._app_settings.round_unit_usdt,
-                target_profit_pct=self._app_settings.target_profit_pct,
-            )
-            if not calc:
-                return
-            ctx = DispatchContext(
-                bc=bc,
-                bti=bti,
-                metrics=calc,
-                settings=self._app_settings,
-                usdt_rate=usdt_rate,
-            )
-            self._watch_engine.set_dispatch_state(WatchState.PREPARING, "동시 배팅 준비")
+            if manual:
+                self._watch_engine.set_dispatch_state(WatchState.PREPARING, "수동 배팅 준비")
+            else:
+                self._watch_engine.set_dispatch_state(WatchState.PREPARING, "동시 배팅 준비")
             self._emit_watch_state()
             await asyncio.sleep(self._app_settings.pre_dispatch_verify_ms / 1000)
-            abort = self._orchestrator.pre_dispatch_validate(ctx)
-            if abort:
-                self._watch_engine.set_dispatch_state(WatchState.AUTO_BET_WAIT, abort)
-                self._emit_watch_state()
-                return
-            self._watch_engine.set_dispatch_state(WatchState.DISPATCHING, "양쪽 병렬 배팅 실행 중")
-            self._emit_watch_state()
-            live = (
-                self._app_settings.parallel_execution_enabled
-                and runtime_settings.live_execution_enabled
-                and not self._app_settings.dry_run
+            result = await self._execution.prepare_and_dispatch(
+                server=self._runtime.server,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                bc=bc,
+                bti=bti,
+                settings=self._app_settings,
+                fx=self._fx_snapshot,
+                manual=manual,
+                skip_target_check=skip_target_check,
             )
-            result = await self._orchestrator.dispatch(ctx, dry_run=not live, live_enabled=live)
             for line in result.log_lines:
                 self.log_message.emit("BET", result.outcome.value, "-", "-", line, f"BET|{line}")
             self._watch_engine.set_dispatch_state(WatchState.VERIFYING_RESULT, "결과 확인")
             self._emit_watch_state()
+            self.execution_update.emit(self._execution.state)
             if result.partial:
-                self._watching = False
+                if not manual:
+                    self._watching = False
                 self._watch_engine.mark_dispatch_complete(partial=True)
                 self.log_message.emit(
                     "ENGINE",
@@ -364,6 +381,14 @@ class BridgeWorker(QObject):
             self._emit_watch_state()
         finally:
             self._dispatch_running = False
+
+    @pyqtSlot(bool)
+    def manual_bet(self, skip_target_check: bool = False) -> None:
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self._run_parallel_dispatch(manual=True, skip_target_check=skip_target_check),
+                self._loop,
+            )
 
     def _emit_watch_state(self, metrics: WatchMetrics | None = None, err: str | None = None) -> None:
         m = metrics or self._watch_engine.metrics

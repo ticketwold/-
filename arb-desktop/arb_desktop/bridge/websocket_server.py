@@ -8,6 +8,7 @@ from typing import Any
 import websockets
 from websockets.server import WebSocketServer, WebSocketServerProtocol, serve
 
+from arb_desktop.bridge.command_bus import BridgeCommandBus
 from arb_desktop.bridge.connection_manager import ConnectionManager
 from arb_desktop.bridge.message_models import SlipUpdateMessage, StatusMessage
 from arb_desktop.bridge.pairing_store import PairingStore
@@ -35,6 +36,7 @@ class BridgeWebSocketServer:
         self._port = port
         self._server: WebSocketServer | None = None
         self._clients: set[WebSocketServerProtocol] = set()
+        self.command_bus = BridgeCommandBus()
 
     @property
     def port(self) -> int:
@@ -61,6 +63,9 @@ class BridgeWebSocketServer:
 
     async def request_status(self) -> None:
         await self._broadcast({"type": "request_status"})
+
+    async def send_command(self, site: str, command: str, **params: Any) -> Any:
+        return await self.command_bus.send(self._broadcast, site=site, command=command, **params)
 
     async def _broadcast(self, message: dict[str, Any]) -> None:
         if not self._clients:
@@ -141,6 +146,9 @@ class BridgeWebSocketServer:
             return
         if msg_type == "bridge_debug":
             self._manager.apply_debug(data)
+            return
+        if msg_type == "command_result":
+            self.command_bus.resolve(data)
             return
         if msg_type == "hello":
             await self.request_status()

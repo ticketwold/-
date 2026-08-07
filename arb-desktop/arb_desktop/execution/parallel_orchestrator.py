@@ -6,6 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
@@ -132,6 +133,8 @@ class ParallelBetOrchestrator:
         dry_run: bool,
         live_enabled: bool,
         mock_fail_site: str | None = None,
+        x10_click: Callable[[], Awaitable[Any]] | None = None,
+        bc_click: Callable[[], Awaitable[Any]] | None = None,
     ) -> DispatchResult:
         execution_id = str(uuid.uuid4())
         result = DispatchResult(execution_id=execution_id, outcome=BetOutcome.UNKNOWN)
@@ -169,7 +172,7 @@ class ParallelBetOrchestrator:
             timing.result = "prepared"
             return True
 
-        async def click_leg(site: str, timing: LegTiming) -> str:
+        async def click_leg(site: str, timing: LegTiming, click_fn: Callable[[], Awaitable[Any]] | None) -> str:
             await start_event.wait()
             timing.click_started_at = time.perf_counter()
             if dry_run or not live_enabled:
@@ -184,9 +187,27 @@ class ParallelBetOrchestrator:
                 timing.response_received_at = timing.click_completed_at
                 timing.result = "mock-success"
                 return "mock-success"
-            timing.error = "live-not-implemented"
-            timing.click_completed_at = time.perf_counter()
-            return "failed"
+            if not click_fn:
+                timing.error = "live-click-missing"
+                timing.click_completed_at = time.perf_counter()
+                return "failed"
+            try:
+                resp = await click_fn()
+                ok = getattr(resp, "ok", True) if resp is not None else True
+                timing.click_completed_at = time.perf_counter()
+                timing.response_received_at = timing.click_completed_at
+                if ok:
+                    timing.result = "live-success"
+                    return "live-success"
+                timing.error = getattr(resp, "reason", None) or getattr(resp, "error", None) or "live-click-failed"
+                timing.result = "live-failed"
+                return "failed"
+            except Exception as exc:
+                timing.error = str(exc)
+                timing.click_completed_at = time.perf_counter()
+                timing.response_received_at = timing.click_completed_at
+                timing.result = "live-failed"
+                return "failed"
 
         try:
             x10_ready, bc_ready = await asyncio.gather(
@@ -208,8 +229,8 @@ class ParallelBetOrchestrator:
                 result.abort_reason = result.x10.error or result.bc.error or "prepare-failed"
                 return result
 
-            x10_task = asyncio.create_task(click_leg("x10", result.x10))
-            bc_task = asyncio.create_task(click_leg("bc", result.bc))
+            x10_task = asyncio.create_task(click_leg("x10", result.x10, x10_click))
+            bc_task = asyncio.create_task(click_leg("bc", result.bc, bc_click))
             start_event.set()
             lines.append("[BET DISPATCH]")
             lines.append(f"dispatch_started_at={result.dispatch_started_at:.6f}")
@@ -217,8 +238,9 @@ class ParallelBetOrchestrator:
 
             x10_res, bc_res = await asyncio.gather(x10_task, bc_task, return_exceptions=True)
 
-            x10_ok = x10_res == "mock-success" if not isinstance(x10_res, Exception) else False
-            bc_ok = bc_res == "mock-success" if not isinstance(bc_res, Exception) else False
+            success_vals = {"mock-success", "live-success"}
+            x10_ok = x10_res in success_vals if not isinstance(x10_res, Exception) else False
+            bc_ok = bc_res in success_vals if not isinstance(bc_res, Exception) else False
 
             if isinstance(x10_res, Exception):
                 result.x10.error = str(x10_res)

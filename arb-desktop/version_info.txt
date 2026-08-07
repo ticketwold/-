@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 5, 4, 0),
-    prodvers=(1, 5, 4, 0),
+    filevers=(1, 6, 0, 0),
+    prodvers=(1, 6, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -10,7 +10,7 @@ VSVersionInfo(
     date=(0, 0),
   ),
   kids=[
-    StringFileInfo([StringTable("040904B0", [StringStruct("CompanyName", "arb-desktop"), StringStruct("FileDescription", "arb-desktop Chrome Bridge"), StringStruct("FileVersion", "1.5.4.0"), StringStruct("InternalName", "ArbDesktop"), StringStruct("OriginalFilename", "ArbDesktop.exe"), StringStruct("ProductName", "arb-desktop"), StringStruct("ProductVersion", "1.5.4.0")])]),
+    StringFileInfo([StringTable("040904B0", [StringStruct("CompanyName", "arb-desktop"), StringStruct("FileDescription", "arb-desktop Chrome Bridge"), StringStruct("FileVersion", "1.6.0.0"), StringStruct("InternalName", "ArbDesktop"), StringStruct("OriginalFilename", "ArbDesktop.exe"), StringStruct("ProductName", "arb-desktop"), StringStruct("ProductVersion", "1.6.0.0")])]),
     VarFileInfo([VarStruct("Translation", [1033, 1200])]),
   ],
 )

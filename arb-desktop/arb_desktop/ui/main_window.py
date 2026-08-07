@@ -6,12 +6,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QThread
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QThread, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -30,6 +28,7 @@ from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatu
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
 from arb_desktop.ui.log_window import LogWindow
+from arb_desktop.ui.manual_bet_dialog import ManualBetDialog
 from arb_desktop.ui.monitor_dashboard import MonitorDashboard
 from arb_desktop.ui.odds_log_manager import OddsLogEntry, OddsLogManager
 from arb_desktop.ui.odds_log_panel import OddsLogPanel
@@ -54,7 +53,7 @@ class _VerticalScrollArea(QScrollArea):
         self._sync_content_width()
 
     def _sync_content_width(self) -> None:
-        width = max(self.viewport().width(), 800)
+        width = max(self.viewport().width(), 1240)
         self._content.setFixedWidth(width)
         self._content.adjustSize()
         self._content.setMinimumHeight(self._content.sizeHint().height())
@@ -67,9 +66,9 @@ class _VerticalScrollArea(QScrollArea):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("arb-desktop — 실시간 양방 모니터")
-        self.setMinimumSize(800, 600)
-        self.resize(1040, 780)
+        self.setWindowTitle("ARB DESKTOP")
+        self.setMinimumSize(1280, 760)
+        self.resize(1320, 860)
 
         self._store = SettingsStore()
         self._settings = self._store.load()
@@ -78,27 +77,26 @@ class MainWindow(QMainWindow):
         self._log_window: LogWindow | None = None
         self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
         self._odds_log = OddsLogManager(self._store.logs_dir, on_entry=self._on_odds_log_entry)
-        self._log_collapsed = True
         self._current_state = "IDLE"
         self._watch_enabled_ui = False
         self._watch_started_at = ""
+        self._partial_locked = False
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(10, 10, 10, 10)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs)
 
-        dashboard = QWidget()
-        dash = QVBoxLayout(dashboard)
-        dash.setSpacing(10)
-        dash.addWidget(self._build_top_status())
+        dashboard_page = QWidget()
+        dash = QVBoxLayout(dashboard_page)
+        dash.setSpacing(12)
         self.monitor = MonitorDashboard()
         dash.addWidget(self.monitor)
         dash.addWidget(self._build_action_section())
 
-        scroll = _VerticalScrollArea(dashboard)
+        scroll = _VerticalScrollArea(dashboard_page)
         self.tabs.addTab(scroll, "메인")
         self.odds_log_panel = OddsLogPanel(self._odds_log, self._store.logs_dir)
         self.tabs.addTab(self.odds_log_panel, "배당 로그")
@@ -122,6 +120,7 @@ class MainWindow(QMainWindow):
         self._worker.watch_state.connect(self._on_watch_state)
         self._worker.live_metrics.connect(self._on_live_metrics)
         self._worker.fx_updated.connect(self._on_fx_updated)
+        self._worker.execution_update.connect(self._on_execution_update)
         self._worker.log_message.connect(self._on_worker_log)
 
         self._wire_buttons()
@@ -132,69 +131,53 @@ class MainWindow(QMainWindow):
         if not self._settings.setup_completed:
             self._run_setup_wizard()
 
-    def _build_top_status(self) -> QGroupBox:
-        box = QGroupBox("연결 상태")
-        row = QHBoxLayout(box)
-        small = QFont()
-        small.setPointSize(10)
-        self.lbl_bridge = QLabel("Bridge: WAITING")
-        self.lbl_bc_tab = QLabel("BC: —")
-        self.lbl_x10_tab = QLabel("x10: —")
-        self.lbl_fx_chip = QLabel("FX: —")
-        self.lbl_extension = QLabel("확장: —")
-        for lbl in (self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_fx_chip, self.lbl_extension):
-            lbl.setFont(small)
-            lbl.setProperty("class", "conn-chip")
-            row.addWidget(lbl)
-        row.addStretch()
-        self.btn_repair = QPushButton("페어링")
-        self.btn_reset_conn = QPushButton("초기화")
-        row.addWidget(self.btn_repair)
-        row.addWidget(self.btn_reset_conn)
-        return box
-
     def _build_action_section(self) -> QWidget:
-        box = QGroupBox("자동배팅 제어")
+        box = QWidget()
+        box.setProperty("class", "action-panel")
         layout = QVBoxLayout(box)
+        layout.setSpacing(10)
+
+        sync_row = QHBoxLayout()
+        self.lbl_stake_sync = QLabel("BC 금액 자동동기화 ● ON")
+        self.lbl_stake_sync.setProperty("class", "watch-on")
+        sync_row.addWidget(self.lbl_stake_sync)
+        sync_row.addStretch()
+        layout.addLayout(sync_row)
 
         self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 확인했습니다")
         layout.addWidget(self.chk_confirm)
 
         row = QHBoxLayout()
+        row.setSpacing(10)
         self.btn_watch_start = QPushButton("자동감시 시작")
         self.btn_watch_start.setProperty("class", "primary")
+        self.btn_watch_start.setMinimumHeight(48)
         self.btn_watch_stop = QPushButton("중지")
         self.btn_watch_stop.setEnabled(False)
-        self.btn_watch_stop.setProperty("class", "watch-stop-idle")
-        self.btn_dry_test = QPushButton("드라이런")
+        self.btn_watch_stop.setProperty("class", "danger-outline")
+        self.btn_watch_stop.setMinimumHeight(48)
+        self.btn_manual = QPushButton("⚡ 양쪽 수동배팅 실행")
+        self.btn_manual.setProperty("class", "manual-bet")
+        self.btn_manual.setMinimumHeight(50)
         self.btn_settings = QPushButton("설정")
+        self.btn_repair = QPushButton("페어링")
+        self.btn_reset_conn = QPushButton("초기화")
         self.btn_reconnect = QPushButton("연결 확인")
-        self.btn_log = QPushButton("로그 창")
-        self.btn_odds_log = QPushButton("배당 로그")
+        self.btn_log = QPushButton("로그")
         self.btn_quit = QPushButton("종료")
-        self.btn_quit.setProperty("class", "danger")
         for btn in (
             self.btn_watch_start,
             self.btn_watch_stop,
-            self.btn_dry_test,
+            self.btn_manual,
             self.btn_settings,
+            self.btn_repair,
+            self.btn_reset_conn,
             self.btn_reconnect,
             self.btn_log,
-            self.btn_odds_log,
             self.btn_quit,
         ):
             row.addWidget(btn)
         layout.addLayout(row)
-
-        log_row = QHBoxLayout()
-        self.btn_toggle_log = QPushButton("로그 펼치기")
-        self.lbl_last_log = QLabel("—")
-        self.lbl_last_log.setWordWrap(True)
-        self.lbl_last_log.setProperty("class", "muted")
-        self.lbl_last_log.setVisible(False)
-        log_row.addWidget(self.btn_toggle_log)
-        log_row.addWidget(self.lbl_last_log, 1)
-        layout.addLayout(log_row)
         return box
 
     def _wire_buttons(self) -> None:
@@ -203,28 +186,25 @@ class MainWindow(QMainWindow):
         self.btn_reset_conn.clicked.connect(self._on_reset_connection)
         self.btn_watch_start.clicked.connect(self._start_watch)
         self.btn_watch_stop.clicked.connect(self._stop_watch)
-        self.btn_dry_test.clicked.connect(self._dry_run_test)
+        self.btn_manual.clicked.connect(self._manual_bet)
         self.btn_settings.clicked.connect(self._open_settings)
         self.btn_log.clicked.connect(self._open_log_window)
-        self.btn_odds_log.clicked.connect(self._open_odds_log_tab)
-        self.btn_toggle_log.clicked.connect(self._toggle_log_preview)
         self.btn_quit.clicked.connect(self.close)
         self.chk_confirm.toggled.connect(self._on_confirm_toggled)
 
     def _apply_watch_ui(self) -> None:
         if self._watch_enabled_ui:
-            self.btn_watch_start.setText("자동감시 실행 중")
+            self.btn_watch_start.setText("● 자동감시 실행 중")
             self.btn_watch_start.setEnabled(False)
             self.btn_watch_start.setProperty("class", "watch-on")
             self.btn_watch_stop.setEnabled(True)
-            self.btn_watch_stop.setProperty("class", "watch-stop-active")
         else:
             self.btn_watch_start.setText("자동감시 시작")
-            self.btn_watch_start.setEnabled(True)
+            self.btn_watch_start.setEnabled(not self._partial_locked)
             self.btn_watch_start.setProperty("class", "primary")
             self.btn_watch_stop.setEnabled(False)
-            self.btn_watch_stop.setProperty("class", "watch-stop-idle")
-        for btn in (self.btn_watch_start, self.btn_watch_stop):
+        self.btn_manual.setEnabled(not self._partial_locked)
+        for btn in (self.btn_watch_start, self.btn_manual):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -232,10 +212,17 @@ class MainWindow(QMainWindow):
         m.watch_enabled = self._watch_enabled_ui
         if self._watch_enabled_ui and self._watch_started_at:
             m.watch_started_at = self._watch_started_at
+        m.stake_sync_enabled = self._settings.stake_sync_enabled
         return m
 
     def _refresh_settings_labels(self) -> None:
         s = self._settings
+        on = "ON" if s.stake_sync_enabled else "OFF"
+        css = "watch-on" if s.stake_sync_enabled else "watch-off"
+        self.lbl_stake_sync.setText(f"BC 금액 자동동기화 ● {on}")
+        self.lbl_stake_sync.setProperty("class", css)
+        self.lbl_stake_sync.style().unpolish(self.lbl_stake_sync)
+        self.lbl_stake_sync.style().polish(self.lbl_stake_sync)
         self.status.showMessage(
             f"목표 {s.target_profit_pct:.2f}% · 텐텐벳 {s.bti_stake_krw:,} KRW · "
             f"안정화 {s.stabilize_seconds:.1f}s × {s.stable_count_required}"
@@ -251,14 +238,6 @@ class MainWindow(QMainWindow):
             self._refresh_settings_labels()
             self.status.showMessage("설정 저장됨")
 
-    def _toggle_log_preview(self) -> None:
-        self._log_collapsed = not self._log_collapsed
-        self.lbl_last_log.setVisible(not self._log_collapsed)
-        self.btn_toggle_log.setText("로그 접기" if not self._log_collapsed else "로그 펼치기")
-
-    def _open_odds_log_tab(self) -> None:
-        self.tabs.setCurrentWidget(self.odds_log_panel)
-
     def _on_reset_connection(self) -> None:
         if QMessageBox.question(self, "연결 초기화", "credential을 재발급합니다.") == QMessageBox.StandardButton.Yes:
             self._worker.reset_connection()
@@ -272,18 +251,9 @@ class MainWindow(QMainWindow):
             self._store.save(self._settings)
 
     def _on_bridge_ready(self) -> None:
-        self.status.showMessage("Bridge 실행 중")
-        if not self._watch_enabled_ui:
-            self.btn_watch_start.setEnabled(True)
+        self.status.showMessage("Bridge 실행 중 — 시세 감시 준비됨")
 
     def _on_bridge_status(self, status: BridgeStatus) -> None:
-        bridge = "CONNECTED" if status.bridge == BridgeConnectionState.CONNECTED else status.bridge.value
-        self.lbl_bridge.setText(f"Bridge: {bridge}")
-        self.lbl_bc_tab.setText(f"BC: {status.bc_tab.value}")
-        self.lbl_x10_tab.setText(f"x10: {status.x10_tab.value}")
-        if status.extension_id:
-            short = status.extension_id[:8] + "…"
-            self.lbl_extension.setText(f"확장: {short}")
         if status.bridge == BridgeConnectionState.CONNECTED:
             self.status.showMessage("Chrome Bridge 연결됨")
 
@@ -293,8 +263,6 @@ class MainWindow(QMainWindow):
         self._request_metrics_refresh()
 
     def _on_fx_updated(self, snap) -> None:
-        if snap.rate:
-            self.lbl_fx_chip.setText(f"FX: {snap.rate:,.0f}")
         self._refresh_settings_labels()
 
     def _on_live_metrics(self, m: WatchMetrics) -> None:
@@ -304,9 +272,25 @@ class MainWindow(QMainWindow):
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
 
+    def _on_execution_update(self, state) -> None:
+        m = self._metrics_with_watch(self._worker.watch_metrics)
+        phase = getattr(state, "phase", None)
+        if phase and hasattr(phase, "value"):
+            m.execution_phase = phase.value
+            m.execution_message = getattr(state, "message", "")
+            m.dispatch_gap_ms = getattr(state, "dispatch_gap_ms", 0.0)
+        result = getattr(state, "last_result", None)
+        if result and getattr(result, "partial", False):
+            self._partial_locked = True
+            self._stop_watch()
+            self._apply_watch_ui()
+            self.monitor.update_all(m, state="PARTIAL BET", message="일부 배팅 성공 — 즉시 확인 필요")
+            self.status.showMessage("PARTIAL BET — 재실행 금지")
+            return
+        self.monitor.update_all(m, state=self._current_state, message=m.execution_message)
+
     def _on_confirm_toggled(self, checked: bool) -> None:
         self._worker.set_user_confirmed(checked)
-        self._request_metrics_refresh()
 
     def _on_x10_debug(self, payload: dict) -> None:
         self.x10_debug_panel.update_from_payload(payload)
@@ -328,8 +312,6 @@ class MainWindow(QMainWindow):
         self._log.log(site=site, status=status, odds=odds, profit=profit, message=message, dedup_key=dedup)
 
     def _on_log_entry(self, entry) -> None:
-        line = entry.format_line()
-        self.lbl_last_log.setText(line)
         if self._log_window:
             self._log_window.append(entry.timestamp, entry.site, entry.status, entry.odds, entry.profit, entry.message)
 
@@ -348,9 +330,8 @@ class MainWindow(QMainWindow):
         self._current_state = "TARGET WAIT"
         self._apply_watch_ui()
         self._worker.set_user_confirmed(True)
-        self._worker.update_settings(self._settings)
         self._worker.start_watch()
-        self.status.showMessage("자동감시 ON — 실시간 배당 감시 중")
+        self.status.showMessage("자동감시 ON — 실시간 조건 감시 중")
 
     def _stop_watch(self) -> None:
         self._watch_enabled_ui = False
@@ -360,13 +341,46 @@ class MainWindow(QMainWindow):
         self._worker.stop_watch()
         m = self._metrics_with_watch(self._worker.watch_metrics)
         self.monitor.update_all(m, state="IDLE", message="감시 중지됨")
-        self.status.showMessage("자동감시 OFF — 감시 중지됨")
+        self.status.showMessage("자동감시 OFF")
 
-    def _dry_run_test(self) -> None:
+    def _manual_bet(self) -> None:
+        if self._partial_locked:
+            self.status.showMessage("PARTIAL BET — 확인 후 앱을 재시작하세요")
+            return
+        if not self._worker.bridge_connected:
+            self.status.showMessage("Bridge 연결 필요")
+            return
         if not self.chk_confirm.isChecked():
             self.status.showMessage("반대 선택 확인이 필요합니다")
             return
-        self._start_watch()
+
+        m = self._metrics_with_watch(self._worker.watch_metrics)
+        live = self._settings.live_execution_enabled and self._settings.parallel_execution_enabled
+        below = m.total_stake_krw > 0 and m.current_profit_rate < m.target_profit_pct
+        skip_confirm = self._settings.manual_confirm_skip
+
+        if below:
+            dlg = ManualBetDialog(m, live=live, below_target=True, parent=self)
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            skip_target = dlg.proceed_anyway
+        elif live and not skip_confirm:
+            dlg = ManualBetDialog(m, live=True, below_target=False, parent=self)
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            skip_target = False
+        elif not live and not skip_confirm:
+            dlg = ManualBetDialog(m, live=False, below_target=False, parent=self)
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            skip_target = False
+        else:
+            skip_target = below
+
+        self.btn_manual.setEnabled(False)
+        self.status.showMessage("양쪽 병렬 배팅 준비 중…")
+        self._worker.manual_bet(skip_target_check=skip_target or below)
+        QTimer.singleShot(3000, lambda: self.btn_manual.setEnabled(not self._partial_locked))
 
     def _open_log_window(self) -> None:
         if not self._log_window:
