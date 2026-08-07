@@ -79,17 +79,17 @@ class OddsLogPanel(QWidget):
         site_u = site.upper()
         status_u = status.upper()
         if status_u in {"READY"} or "WATCH ON" in status_u:
-            item.setForeground(QColor("#3fb950"))
+            item.setForeground(QColor("#23C26B"))
         elif status_u in {"CLOSED", "ERROR", "FAILED", "PARTIAL BET"} or "닫" in status:
-            item.setForeground(QColor("#f85149"))
+            item.setForeground(QColor("#FF5C5C"))
         elif site_u in {"X10", "BTI"}:
-            item.setForeground(QColor("#58a6ff"))
+            item.setForeground(QColor("#4A90FF"))
         elif site_u == "BC":
-            item.setForeground(QColor("#f0883e"))
+            item.setForeground(QColor("#F5A623"))
         elif site_u == "ENGINE":
-            item.setForeground(QColor("#d29922"))
+            item.setForeground(QColor("#23C26B"))
         elif site_u == "APP":
-            item.setForeground(QColor("#8b949e"))
+            item.setForeground(QColor("#A8B0BE"))
 
     def _open_log(self) -> None:
         path = self._manager.open_today_csv()

@@ -1,393 +1,396 @@
-/* arb-desktop dark theme — trading monitor */
+/* arb-desktop — Modern Dark Desktop Theme */
+
+* {
+    font-family: "Segoe UI Variable", "Segoe UI", "Inter", "Malgun Gothic", sans-serif;
+}
 
 QMainWindow, QWidget {
-    background-color: #0d1117;
-    color: #e6edf3;
+    background-color: #1B1F27;
+    color: #FFFFFF;
     font-size: 13px;
-    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
 }
 
 QTabWidget::pane {
     border: none;
-    background: #0d1117;
+    background: #1B1F27;
+    top: -1px;
 }
 
 QTabBar::tab {
-    background: #161b22;
-    color: #8b949e;
-    padding: 10px 20px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+    background: transparent;
+    color: #A8B0BE;
+    padding: 10px 22px;
+    border: none;
+    border-bottom: 2px solid transparent;
     margin-right: 4px;
+    font-weight: 500;
 }
 
 QTabBar::tab:selected {
-    background: #21262d;
-    color: #58a6ff;
+    color: #FFFFFF;
+    border-bottom: 2px solid #4A90FF;
     font-weight: 600;
 }
 
-QGroupBox, .Card {
-    background-color: #161b22;
-    border: 1px solid #30363d;
+QTabBar::tab:hover {
+    color: #FFFFFF;
+    background: rgba(74, 144, 255, 0.08);
+    border-radius: 8px 8px 0 0;
+}
+
+/* ── Cards ── */
+.glass-card, QGroupBox {
+    background-color: #252A34;
+    border: 1px solid #323844;
     border-radius: 12px;
-    margin-top: 14px;
-    padding: 14px;
+}
+
+QGroupBox {
+    margin-top: 16px;
+    padding: 16px;
     font-weight: 600;
+    color: #A8B0BE;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 14px;
+    left: 16px;
     padding: 0 8px;
-    color: #8b949e;
+    color: #A8B0BE;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 #MonitorDashboard[glow="ready"] {
-    background-color: #0d1f12;
-    border: 2px solid #238636;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1a2e22, stop:1 #1B1F27);
+    border: 1px solid rgba(35, 194, 107, 0.35);
     border-radius: 14px;
 }
 
 #MonitorDashboard[glow="warn"] {
-    background-color: #1a1408;
-    border: 1px solid #9e6a03;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2a2418, stop:1 #1B1F27);
+    border: 1px solid rgba(245, 166, 35, 0.35);
     border-radius: 14px;
 }
 
 #MonitorDashboard[glow="alert"] {
-    background-color: #1f0d0d;
-    border: 1px solid #da3633;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #2a1818, stop:1 #1B1F27);
+    border: 1px solid rgba(255, 92, 92, 0.35);
     border-radius: 14px;
 }
 
+/* ── Typography ── */
+.card-subtitle {
+    color: #A8B0BE;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+
+.card-value {
+    color: #FFFFFF;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.site-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #A8B0BE;
+    letter-spacing: 0.5px;
+}
+
+SiteCard[accent="x10"] .site-title { color: #4A90FF; }
+SiteCard[accent="bc"] .site-title { color: #F5A623; }
+
+.selection-big {
+    font-size: 22px;
+    font-weight: 700;
+    color: #FFFFFF;
+    line-height: 1.3;
+}
+
+.profit-hero-label {
+    color: #A8B0BE;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 1px;
+}
+
+.profit-positive {
+    font-size: 40px;
+    font-weight: 800;
+    color: #23C26B;
+    letter-spacing: -1px;
+}
+
+.profit-negative {
+    font-size: 40px;
+    font-weight: 800;
+    color: #FF5C5C;
+    letter-spacing: -1px;
+}
+
+.target-hit {
+    font-size: 18px;
+    font-weight: 700;
+    color: #23C26B;
+}
+
+.target-miss {
+    font-size: 18px;
+    font-weight: 700;
+    color: #FF5C5C;
+}
+
+.odds-value {
+    font-size: 32px;
+    font-weight: 800;
+    color: #FFFFFF;
+    font-family: "Consolas", "Segoe UI", monospace;
+}
+
+.odds-value.odds-up { color: #23C26B; }
+.odds-value.odds-down { color: #FF5C5C; }
+.odds-value.flash-up { color: #7DFFB0; }
+.odds-value.flash-down { color: #FF9999; }
+.odds-value.flash-neutral { color: #FFFFFF; background: rgba(74,144,255,0.15); border-radius: 6px; }
+
+/* ── Badges ── */
+.badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    min-width: 48px;
+}
+
+.badge-success { background: rgba(35, 194, 107, 0.18); color: #23C26B; border: 1px solid rgba(35,194,107,0.35); }
+.badge-primary { background: rgba(74, 144, 255, 0.18); color: #4A90FF; border: 1px solid rgba(74,144,255,0.35); }
+.badge-warning { background: rgba(245, 166, 35, 0.18); color: #F5A623; border: 1px solid rgba(245,166,35,0.35); }
+.badge-danger  { background: rgba(255, 92, 92, 0.18); color: #FF5C5C; border: 1px solid rgba(255,92,92,0.35); }
+.badge-idle    { background: rgba(168, 176, 190, 0.12); color: #A8B0BE; border: 1px solid #323844; }
+
+/* ── Status Banner ── */
 #StatusBanner[banner="ready"] {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a4d2e, stop:1 #0d2818);
-    border: 2px solid #3fb950;
-    border-radius: 14px;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1a3d28, stop:0.5 #23C26B, stop:1 #1a3d28);
+    border: none;
+    border-radius: 12px;
+    padding: 4px;
 }
 
 #StatusBanner[banner="dispatching"] {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1c2d4a, stop:1 #0d1520);
-    border: 2px solid #58a6ff;
-    border-radius: 14px;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #1a2840, stop:0.5 #4A90FF, stop:1 #1a2840);
+    border-radius: 12px;
 }
 
 #StatusBanner[banner="partial"] {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a1c1c, stop:1 #2d0d0d);
-    border: 2px solid #f85149;
-    border-radius: 14px;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #3d1a1a, stop:0.5 #FF5C5C, stop:1 #3d1a1a);
+    border-radius: 12px;
 }
 
 #StatusBanner[banner="closed"] {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d2e0a, stop:1 #1f1805);
-    border: 2px solid #d29922;
-    border-radius: 14px;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #3d2e10, stop:0.5 #F5A623, stop:1 #3d2e10);
+    border-radius: 12px;
 }
 
-QLabel[class="banner-ready-title"] {
-    font-size: 42px;
+.banner-ready-title {
+    font-size: 36px;
     font-weight: 800;
-    color: #3fb950;
+    color: #FFFFFF;
+    letter-spacing: 4px;
 }
 
-QLabel[class="banner-dispatch-title"] {
-    font-size: 28px;
-    font-weight: 700;
-    color: #58a6ff;
-}
+.banner-dispatch-title { font-size: 24px; font-weight: 700; color: #FFFFFF; }
+.banner-partial-title  { font-size: 28px; font-weight: 800; color: #FFFFFF; }
+.banner-closed-title   { font-size: 22px; font-weight: 700; color: #FFFFFF; }
+.banner-text { color: rgba(255,255,255,0.9); font-size: 14px; }
 
-QLabel[class="banner-partial-title"] {
-    font-size: 32px;
-    font-weight: 800;
-    color: #f85149;
-}
+/* ── Checklist ── */
+.check-ok { color: #23C26B; font-size: 13px; font-weight: 500; }
+.check-pending { color: #6B7280; font-size: 13px; }
 
-QLabel[class="banner-closed-title"] {
-    font-size: 24px;
-    font-weight: 700;
-    color: #d29922;
-}
-
-QLabel[class="banner-text"] {
-    color: #e6edf3;
-    font-size: 14px;
-}
-
-QLabel[class="profit-hero"] {
-    font-size: 56px;
-    font-weight: 800;
-    color: #e6edf3;
-}
-
-QLabel[class="profit-positive"] {
-    color: #3fb950;
-}
-
-QLabel[class="profit-negative"] {
-    color: #f85149;
-}
-
-QLabel[class="target-delta"] {
-    font-size: 22px;
-    font-weight: 700;
-}
-
-QLabel[class="target-hit"] {
-    font-size: 22px;
-    font-weight: 700;
-    color: #3fb950;
-}
-
-QLabel[class="target-miss"] {
-    font-size: 22px;
-    font-weight: 700;
-    color: #f85149;
-}
-
-QLabel[class="odds-big"] {
-    font-size: 32px;
-    font-weight: 700;
-    color: #e6edf3;
-}
-
-QLabel[class="odds-up"] {
-    font-size: 28px;
-    font-weight: 800;
-    color: #3fb950;
-}
-
-QLabel[class="odds-down"] {
-    font-size: 28px;
-    font-weight: 800;
-    color: #f85149;
-}
-
-QLabel[class="odds-flat"] {
-    font-size: 20px;
-    color: #8b949e;
-}
-
-QLabel[class="selection-big"] {
-    font-size: 28px;
-    font-weight: 700;
-    color: #ffffff;
-    padding: 4px 0;
-}
-
-QLabel[class="site-label"] {
+.stake-chip {
+    background: #252A34;
+    border: 1px solid #323844;
+    border-radius: 8px;
+    padding: 8px 14px;
     font-size: 12px;
     font-weight: 600;
-    color: #8b949e;
-    text-transform: uppercase;
+    color: #A8B0BE;
 }
 
-QLabel[class="stake-chip"] {
-    background: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-weight: 600;
-}
-
-QLabel[class="conn-chip"] {
-    background: #21262d;
-    border-radius: 6px;
-    padding: 4px 8px;
-}
-
-QLabel[class="type-badge"] {
+/* ── Buttons ── */
+QPushButton, .btn {
+    background-color: #252A34;
+    color: #FFFFFF;
+    border: 1px solid #323844;
+    border-radius: 10px;
+    padding: 0 20px;
+    min-height: 44px;
     font-size: 13px;
-    font-weight: 700;
-    border-radius: 6px;
-    padding: 4px 10px;
-}
-
-QLabel[class="type-moneyline"] {
-    background: #1c3a5f;
-    color: #58a6ff;
-    border: 1px solid #388bfd;
-}
-
-QLabel[class="type-handicap"] {
-    background: #3d1f5c;
-    color: #d2a8ff;
-    border: 1px solid #a371f7;
-}
-
-QLabel[class="type-total"] {
-    background: #1a3d2e;
-    color: #3fb950;
-    border: 1px solid #238636;
-}
-
-QLabel[class="type-set"] {
-    background: #3d2a0a;
-    color: #d29922;
-    border: 1px solid #9e6a03;
-}
-
-QLabel[class="type-map"] {
-    background: #3d0a2a;
-    color: #ff7b72;
-    border: 1px solid #da3633;
-}
-
-QLabel[class="type-default"] {
-    background: #21262d;
-    color: #8b949e;
-    border: 1px solid #30363d;
-}
-
-QLabel[class="check-ok"] {
-    color: #3fb950;
     font-weight: 600;
 }
 
-QLabel[class="check-pending"] {
-    color: #8b949e;
+QPushButton:hover, .btn:hover {
+    background-color: #2E3440;
+    border-color: #4A5568;
 }
 
-QLabel[class="engine-state"] {
-    font-size: 20px;
-    font-weight: 700;
+QPushButton:pressed, .btn:pressed {
+    background-color: #1E2229;
 }
 
-QLabel[class="status-dispatch"] {
-    color: #58a6ff;
-    font-weight: 700;
+QPushButton:disabled, .btn:disabled {
+    background-color: #1E2229;
+    color: #4B5563;
+    border-color: #2A2F38;
 }
 
-QLabel[class="hero"] {
-    font-size: 24px;
-    font-weight: 700;
-    color: #ffffff;
+.btn-primary, QPushButton[class="primary"] {
+    background-color: #4A90FF;
+    border-color: #4A90FF;
+    color: #FFFFFF;
 }
+.btn-primary:hover, QPushButton[class="primary"]:hover { background-color: #5B9BFF; }
 
-QLabel[class="metric"] {
-    font-size: 20px;
-    font-weight: 600;
+.btn-success, QPushButton[class="watch-on"] {
+    background-color: #23C26B;
+    border-color: #23C26B;
+    color: #FFFFFF;
 }
+.btn-success:hover, QPushButton[class="watch-on"]:hover { background-color: #2DD47E; }
 
-QLabel[class="muted"] {
-    color: #8b949e;
-    font-size: 11px;
+.btn-danger, QPushButton[class="watch-stop-active"], QPushButton[class="danger"] {
+    background-color: #FF5C5C;
+    border-color: #FF5C5C;
+    color: #FFFFFF;
 }
-
-QLabel[class="status-ok"] { color: #3fb950; font-weight: 600; }
-QLabel[class="status-warn"] { color: #d29922; font-weight: 600; }
-QLabel[class="status-bad"] { color: #f85149; font-weight: 600; }
-QLabel[class="status-idle"] { color: #8b949e; }
-
-QProgressBar {
-    background: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    text-align: center;
-    color: #e6edf3;
-    height: 22px;
-}
-
-QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #3fb950);
-    border-radius: 5px;
-}
-
-QPushButton {
-    background-color: #21262d;
-    color: #e6edf3;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 10px 16px;
-    min-height: 32px;
-}
-
-QPushButton:hover { background-color: #30363d; }
-QPushButton:pressed { background-color: #484f58; }
-QPushButton:disabled { color: #484f58; background: #161b22; }
-
-QPushButton[class="primary"] {
-    background-color: #238636;
-    border-color: #2ea043;
-    color: #ffffff;
-    font-weight: 700;
-}
-
-QPushButton[class="primary"]:hover {
-    background-color: #2ea043;
-}
-
-QPushButton[class="danger"] {
-    background-color: #3d1214;
-    border-color: #da3633;
-    color: #ff7b72;
-}
-
-QPushButton[class="watch-on"] {
-    background-color: #1f6f3d;
-    border-color: #2ea043;
-    color: #ffffff;
-    font-weight: 700;
-}
-
-QPushButton[class="watch-stop-active"] {
-    background-color: #8b1e1e;
-    border-color: #f85149;
-    color: #ffffff;
-    font-weight: 700;
-}
+.btn-danger:hover, QPushButton[class="watch-stop-active"]:hover { background-color: #FF7070; }
 
 QPushButton[class="watch-stop-idle"] {
-    background-color: #21262d;
-    border-color: #30363d;
-    color: #484f58;
+    background-color: #252A34;
+    color: #4B5563;
+    border-color: #323844;
 }
 
-QLabel[class="watch-on"] {
-    font-size: 28px;
-    font-weight: 800;
-    color: #3fb950;
-}
-
-QLabel[class="watch-off"] {
-    font-size: 28px;
-    font-weight: 800;
-    color: #8b949e;
-}
-
-#WatchStatusPanel[glow="watch-on"] {
-    border: 1px solid #238636;
+/* ── Console / Log ── */
+.console-panel {
+    background: #1A1D24;
+    border: 1px solid #323844;
     border-radius: 12px;
-    background: #0f1f14;
+    padding: 12px;
 }
 
-#WatchStatusPanel[glow="watch-off"] {
-    border: 1px solid #30363d;
-    border-radius: 12px;
-    background: #161b22;
+QTextEdit.console, QTextEdit {
+    background: #14171D;
+    color: #E5E7EB;
+    border: 1px solid #252A34;
+    border-radius: 8px;
+    padding: 8px;
+    selection-background-color: #4A90FF;
 }
 
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: #e6edf3;
-}
-
-QScrollArea { background: transparent; border: none; }
-QStatusBar { background: #010409; color: #8b949e; border-top: 1px solid #21262d; }
-QCheckBox { spacing: 8px; color: #e6edf3; }
-
+/* ── Tables (odds log) ── */
 QTableWidget {
-    background: #161b22;
-    border: 1px solid #30363d;
-    gridline-color: #21262d;
+    background: #14171D;
+    border: 1px solid #323844;
+    border-radius: 10px;
+    gridline-color: #252A34;
+    color: #E5E7EB;
+    alternate-background-color: #1A1D24;
 }
 
 QHeaderView::section {
-    background: #21262d;
-    color: #8b949e;
+    background: #252A34;
+    color: #A8B0BE;
     border: none;
-    padding: 6px;
+    border-bottom: 1px solid #323844;
+    padding: 8px;
+    font-weight: 600;
+    font-size: 11px;
 }
+
+QTableWidget::item { padding: 4px 8px; }
+QTableWidget::item:selected { background: rgba(74, 144, 255, 0.25); }
+
+/* ── Progress ── */
+QProgressBar {
+    background: #1A1D24;
+    border: 1px solid #323844;
+    border-radius: 8px;
+    text-align: center;
+    color: #A8B0BE;
+    height: 24px;
+    font-size: 11px;
+}
+
+QProgressBar::chunk {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #4A90FF, stop:1 #23C26B);
+    border-radius: 7px;
+}
+
+/* ── Form controls ── */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #1A1D24;
+    border: 1px solid #323844;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #FFFFFF;
+    min-height: 20px;
+}
+
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border-color: #4A90FF;
+}
+
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView {
+    background: #252A34;
+    border: 1px solid #323844;
+    selection-background-color: #4A90FF;
+    color: #FFFFFF;
+}
+
+QCheckBox { spacing: 8px; color: #A8B0BE; }
+QCheckBox::indicator {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    border: 1px solid #323844;
+    background: #1A1D24;
+}
+QCheckBox::indicator:checked {
+    background: #4A90FF;
+    border-color: #4A90FF;
+}
+
+QScrollArea { background: transparent; border: none; }
+QScrollBar:vertical {
+    background: #1B1F27;
+    width: 8px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical {
+    background: #323844;
+    border-radius: 4px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background: #4B5563; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+QStatusBar {
+    background: #14171D;
+    color: #A8B0BE;
+    border-top: 1px solid #252A34;
+    font-size: 12px;
+}
+
+/* ── Legacy compat ── */
+QLabel[class="muted"], QLabel[class="card-subtitle"] { color: #A8B0BE; }
+QLabel[class="status-ok"] { color: #23C26B; }
+QLabel[class="status-warn"] { color: #F5A623; }
+QLabel[class="status-bad"] { color: #FF5C5C; }
+QLabel[class="status-idle"] { color: #6B7280; }
+QLabel[class="watch-on"] { font-size: 22px; font-weight: 800; color: #23C26B; }
+QLabel[class="watch-off"] { font-size: 22px; font-weight: 800; color: #6B7280; }
