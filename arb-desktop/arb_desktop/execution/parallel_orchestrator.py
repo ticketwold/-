@@ -97,7 +97,13 @@ class ParallelBetOrchestrator:
             ]
         )
 
-    def pre_dispatch_validate(self, ctx: DispatchContext) -> str | None:
+    def pre_dispatch_validate(
+        self,
+        ctx: DispatchContext,
+        *,
+        manual: bool = False,
+        skip_target_check: bool = False,
+    ) -> str | None:
         bc = ctx.bc.first
         bti = ctx.bti.first
         if not bc or not bti:
@@ -120,7 +126,10 @@ class ParallelBetOrchestrator:
             if bti.odds and abs(bti.odds - ctx.metrics.bti_odds) > tol:
                 return "odds-changed-before-dispatch"
         if ctx.metrics.current_profit_rate < ctx.settings.target_profit_pct:
-            return "target-lost-before-dispatch"
+            if not (manual and skip_target_check):
+                return "target-lost-before-dispatch"
+        if manual:
+            return None
         fp = self._fingerprint(ctx)
         if fp == self._last_dom_fingerprint and self._last_execution_id:
             return "duplicate-execution-blocked"
@@ -135,6 +144,8 @@ class ParallelBetOrchestrator:
         mock_fail_site: str | None = None,
         x10_click: Callable[[], Awaitable[Any]] | None = None,
         bc_click: Callable[[], Awaitable[Any]] | None = None,
+        manual: bool = False,
+        skip_target_check: bool = False,
     ) -> DispatchResult:
         execution_id = str(uuid.uuid4())
         result = DispatchResult(execution_id=execution_id, outcome=BetOutcome.UNKNOWN)
@@ -145,12 +156,12 @@ class ParallelBetOrchestrator:
             return result
 
         now = time.time()
-        if now - self._last_dispatch_at < self._min_redispatch_sec:
+        if not manual and now - self._last_dispatch_at < self._min_redispatch_sec:
             result.outcome = BetOutcome.CANCELLED
             result.abort_reason = "redispatch-cooldown"
             return result
 
-        abort = self.pre_dispatch_validate(ctx)
+        abort = self.pre_dispatch_validate(ctx, manual=manual, skip_target_check=skip_target_check)
         if abort:
             result.outcome = BetOutcome.CANCELLED
             result.abort_reason = abort

@@ -467,17 +467,64 @@
 
   function findBcBetButton() {
     const slip = findBcSlipRoot().root;
-    const root = slip || document.body;
+    if (!slip) return null;
     let nodes = [];
     try {
-      nodes = [...root.querySelectorAll("button, [role='button']")];
+      nodes = [...slip.querySelectorAll("button, [role='button'], a[role='button']")];
     } catch (_err) {
       return null;
     }
+    const patterns = [
+      /^베팅하기$/i,
+      /^bet$/i,
+      /place\s*bet/i,
+      /bet\s*now/i,
+      /^베팅$/i,
+      /submit\s*bet/i,
+    ];
+    let fallback = null;
     for (const btn of nodes) {
       if (!visible(btn)) continue;
-      const label = text(btn).toLowerCase();
-      if (/(^베팅하기$|place bet|bet now)/i.test(label)) return btn;
+      const label = text(btn);
+      if (!label) continue;
+      for (const re of patterns) {
+        if (re.test(label)) return btn;
+      }
+      if (/bet|베팅|place/i.test(label) && !fallback) fallback = btn;
+    }
+    return fallback;
+  }
+
+  function findX10BetButton() {
+    const roots = [];
+    const slipSelectors = [
+      '[class*="betslip" i]',
+      '[class*="bet-slip" i]',
+      '[class*="Betslip" i]',
+      '[class*="coupon" i]',
+    ];
+    for (const sel of slipSelectors) {
+      try {
+        for (const el of document.querySelectorAll(sel)) {
+          if (visible(el)) roots.push(el);
+        }
+      } catch (_err) {}
+    }
+    if (!roots.length && document.body) roots.push(document.body);
+
+    const patterns = [/배당\s*수락/i, /베팅하기/i, /place\s*bet/i, /bet\s*now/i, /^베팅$/i];
+    for (const root of roots) {
+      let nodes = [];
+      try {
+        nodes = [...root.querySelectorAll("button, [role='button']")];
+      } catch (_err) {
+        continue;
+      }
+      for (const btn of nodes) {
+        if (!visible(btn)) continue;
+        const label = text(btn);
+        if (patterns.some((re) => re.test(label))) return btn;
+      }
     }
     return null;
   }
@@ -503,24 +550,9 @@
     return null;
   }
 
-  function findX10BetButton() {
-    let nodes = [];
-    try {
-      nodes = [...document.querySelectorAll("button, [role='button']")];
-    } catch (_err) {
-      return null;
-    }
-    for (const btn of nodes) {
-      if (!visible(btn)) continue;
-      const label = text(btn);
-      if (/배당\s*수락|베팅하기|Place Bet|Bet Now/i.test(label)) return btn;
-    }
-    return null;
-  }
-
   function setX10Stake(amountKrw) {
     const input = findX10StakeInput();
-    if (!input) return { ok: false, reason: "x10-stake-input-missing" };
+    if (!input) return { ok: false, reason: "x10-stake-input-missing", deferred: true };
     const want = Math.max(1000, Math.round(amountKrw));
     setNativeValue(input, String(want));
     const got = parseStakeValue(input.value);
@@ -528,21 +560,33 @@
   }
 
   async function placeBcBet() {
-    const btn = findBcBetButton();
-    if (!btn || btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-      return { ok: false, reason: "bc-bet-button-disabled" };
+    const slip = findBcSlipRoot().root;
+    if (!slip) {
+      return { ok: false, reason: "betslip-not-in-frame", deferred: true, frame_url: location.href };
     }
+    const btn = findBcBetButton();
+    if (!btn) {
+      return { ok: false, reason: "bc-bet-button-not-found", deferred: true, frame_url: location.href };
+    }
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
+      return { ok: false, reason: "bc-bet-button-disabled", frame_url: location.href };
+    }
+    btn.focus?.();
     btn.click();
-    return { ok: true };
+    return { ok: true, reason: "ok", frame_url: location.href, button_text: text(btn) };
   }
 
   async function placeX10Bet() {
     const btn = findX10BetButton();
-    if (!btn || btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-      return { ok: false, reason: "x10-bet-button-disabled" };
+    if (!btn) {
+      return { ok: false, reason: "x10-bet-button-not-found", deferred: true, frame_url: location.href };
     }
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
+      return { ok: false, reason: "x10-bet-button-disabled", frame_url: location.href };
+    }
+    btn.focus?.();
     btn.click();
-    return { ok: true };
+    return { ok: true, reason: "ok", frame_url: location.href, button_text: text(btn) };
   }
 
   global.ArbStakeActions = {

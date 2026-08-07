@@ -86,7 +86,9 @@
     }
 
     if (cmd === "set_x10_stake") {
-      return actions.setX10Stake(Number(message.amount_krw));
+      const result = actions.setX10Stake(Number(message.amount_krw));
+      if (result?.deferred) return { ...result, frame_url: location.href };
+      return result;
     }
     if (cmd === "place_bc_bet") {
       return actions.placeBcBet();

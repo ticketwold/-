@@ -7,6 +7,7 @@ from enum import Enum
 from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics
 from arb_desktop.execution.parallel_orchestrator import (
+    BetOutcome,
     DispatchContext,
     DispatchResult,
     ParallelBetOrchestrator,
@@ -136,8 +137,6 @@ class ExecutionEngine:
         skip_target_check: bool = False,
     ) -> DispatchResult:
         if self.is_locked:
-            from arb_desktop.execution.parallel_orchestrator import BetOutcome, DispatchResult
-
             return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="locked")
 
         self._locked = True
@@ -145,27 +144,50 @@ class ExecutionEngine:
         self.state.message = "양쪽 병렬 배팅 준비 중"
 
         try:
+            if not bridge_connected:
+                return DispatchResult(
+                    execution_id="",
+                    outcome=BetOutcome.CANCELLED,
+                    abort_reason="bridge-disconnected",
+                )
+
             ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
             if not ctx:
-                from arb_desktop.execution.parallel_orchestrator import BetOutcome, DispatchResult
-
                 return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
 
             self.state.phase = ExecutionPhase.SYNC_STAKES
             await self._stake_sync.sync_bc_stake(server=server, metrics=ctx.metrics, settings=settings)
 
-            self.state.phase = ExecutionPhase.FINAL_RECHECK
-            abort = self._orchestrator.pre_dispatch_validate(ctx)
-            if abort and not (manual and skip_target_check and abort == "target-lost-before-dispatch"):
-                from arb_desktop.execution.parallel_orchestrator import BetOutcome, DispatchResult
+            # 최신 slip 기준으로 metrics 재계산
+            ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
+            if not ctx:
+                return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
 
-                return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=abort)
+            self.state.phase = ExecutionPhase.FINAL_RECHECK
+            abort = self._orchestrator.pre_dispatch_validate(
+                ctx,
+                manual=manual,
+                skip_target_check=skip_target_check,
+            )
+            skippable = {
+                "target-lost-before-dispatch",
+                "odds-changed-before-dispatch",
+            }
+            if abort and not (manual and skip_target_check and abort in skippable):
+                result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=abort)
+                self.state.last_result = result
+                self.state.message = _abort_message(abort)
+                self.state.phase = ExecutionPhase.FAILED
+                return result
 
             live = settings.live_execution_enabled and settings.parallel_execution_enabled
-            dry = settings.dry_run or not live
+            if manual and live:
+                dry = False
+            else:
+                dry = settings.dry_run or not live
 
             self.state.phase = ExecutionPhase.DISPATCH
-            self.state.message = "양쪽 배팅 전송 중..."
+            self.state.message = "양쪽 배팅 전송 중..." if not dry else "Dry Run — 양쪽 배팅 시뮬레이션..."
 
             x10_click_fn = None
             bc_click_fn = None
@@ -186,12 +208,19 @@ class ExecutionEngine:
                 live_enabled=live,
                 x10_click=x10_click_fn,
                 bc_click=bc_click_fn,
+                manual=manual,
+                skip_target_check=skip_target_check,
             )
 
             self.state.dispatch_gap_ms = result.dispatch_gap_ms
             self.state.last_result = result
             self.state.phase = self._phase_from_result(result)
-            self.state.message = result.outcome.value
+            if result.abort_reason:
+                self.state.message = _abort_message(result.abort_reason)
+            elif dry and result.outcome == BetOutcome.DRY_RUN_MOCK:
+                self.state.message = "Dry Run 완료 (실제 Bet 클릭 없음)"
+            else:
+                self.state.message = result.outcome.value
             return result
         finally:
             self._locked = False
@@ -205,3 +234,23 @@ class ExecutionEngine:
         if result.outcome.name == "CANCELLED":
             return ExecutionPhase.IDLE
         return ExecutionPhase.FAILED
+
+
+_ABORT_MESSAGES = {
+    "bridge-disconnected": "Bridge 연결 필요",
+    "calc-error": "수익률 계산 실패",
+    "slip-missing": "양쪽 BetSlip 필요",
+    "bc-closed-before-dispatch": "BC 배팅 닫힘",
+    "x10-closed-before-dispatch": "X10 배팅 닫힘",
+    "slip-count-not-one": "양쪽 카트는 각 1개여야 함",
+    "odds-changed-before-dispatch": "배당 변경됨 — 재시도",
+    "target-lost-before-dispatch": "목표 수익률 미달",
+    "duplicate-execution-blocked": "중복 실행 차단",
+    "redispatch-cooldown": "재실행 대기 중",
+    "execution-lock-active": "실행 잠금",
+    "locked": "실행 잠금",
+}
+
+
+def _abort_message(reason: str) -> str:
+    return _ABORT_MESSAGES.get(reason, reason.replace("-", " "))

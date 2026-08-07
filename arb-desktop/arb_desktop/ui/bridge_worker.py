@@ -11,7 +11,6 @@ from arb_desktop.betslip.models import BetSlipReadResult
 from arb_desktop.betslip.scanner import BetSlipScanner
 from arb_desktop.config import settings
 from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
-from arb_desktop.config import settings as runtime_settings
 from arb_desktop.execution.execution_engine import ExecutionEngine
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
 from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
@@ -335,12 +334,13 @@ class BridgeWorker(QObject):
                 f"ENGINE|READY|{metrics.current_profit_rate:.2f}|ready",
             )
             if self._watch_engine.consume_ready_for_dispatch():
+                live = (
+                    self._app_settings.live_execution_enabled
+                    and self._app_settings.parallel_execution_enabled
+                )
                 should_dispatch = (
                     self._app_settings.parallel_dry_run_on_ready and self._app_settings.dry_run
-                ) or (
-                    self._app_settings.parallel_execution_enabled
-                    and runtime_settings.live_execution_enabled
-                )
+                ) or (live and not self._app_settings.dry_run)
                 if should_dispatch:
                     asyncio.create_task(self._run_parallel_dispatch(manual=False))
 
@@ -349,6 +349,9 @@ class BridgeWorker(QObject):
             return
         self._dispatch_running = True
         try:
+            if self._runtime:
+                await self._runtime.server.request_status()
+                await asyncio.sleep(0.25)
             bc = self._runtime.manager.get_bc_read()
             bti = self._runtime.manager.get_bti_read()
             if manual:
@@ -357,6 +360,11 @@ class BridgeWorker(QObject):
                 self._watch_engine.set_dispatch_state(WatchState.PREPARING, "동시 배팅 준비")
             self._emit_watch_state()
             await asyncio.sleep(self._app_settings.pre_dispatch_verify_ms / 1000)
+            if self._runtime:
+                bc = self._runtime.manager.get_bc_read()
+                bti = self._runtime.manager.get_bti_read()
+            self._watch_engine.set_dispatch_state(WatchState.DISPATCHING, "양쪽 배팅 전송 중")
+            self._emit_watch_state()
             result = await self._execution.prepare_and_dispatch(
                 server=self._runtime.server,
                 bridge_connected=self._runtime.manager.bridge_connected,
@@ -369,9 +377,22 @@ class BridgeWorker(QObject):
             )
             for line in result.log_lines:
                 self.log_message.emit("BET", result.outcome.value, "-", "-", line, f"BET|{line}")
+            if result.abort_reason:
+                self.log_message.emit(
+                    "BET",
+                    "CANCELLED",
+                    "-",
+                    "-",
+                    result.abort_reason,
+                    f"BET|CANCELLED|{result.abort_reason}",
+                )
             self._watch_engine.set_dispatch_state(WatchState.VERIFYING_RESULT, "결과 확인")
             self._emit_watch_state()
             self.execution_update.emit(self._execution.state)
+            if result.outcome.name == "CANCELLED":
+                self._watch_engine.mark_dispatch_complete(success=False)
+                self._emit_watch_state()
+                return
             if result.partial:
                 if not manual:
                     self._watching = False

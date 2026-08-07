@@ -298,6 +298,7 @@ class MainWindow(QMainWindow):
             m.execution_message = getattr(state, "message", "")
             m.dispatch_gap_ms = getattr(state, "dispatch_gap_ms", 0.0)
         result = getattr(state, "last_result", None)
+        msg = m.execution_message or ""
         if result and getattr(result, "partial", False):
             self._partial_locked = True
             self._stop_watch()
@@ -305,7 +306,17 @@ class MainWindow(QMainWindow):
             self.monitor.update_all(m, state="PARTIAL BET", message="일부 배팅 성공 — 즉시 확인 필요")
             self.status.showMessage("PARTIAL BET — 재실행 금지")
             return
-        self.monitor.update_all(m, state=self._current_state, message=m.execution_message)
+        if result and getattr(result, "abort_reason", ""):
+            self.status.showMessage(f"배팅 취소: {msg}")
+        elif msg:
+            self.status.showMessage(msg)
+        if phase and hasattr(phase, "value") and phase.value in {"SUCCESS", "DISPATCH"}:
+            state_name = "SUCCESS" if phase.value == "SUCCESS" else self._current_state
+        elif result and getattr(result, "outcome", None) and str(getattr(result.outcome, "value", "")) == "DRY_RUN_MOCK":
+            state_name = "SUCCESS"
+        else:
+            state_name = self._current_state
+        self.monitor.update_all(m, state=state_name, message=msg)
 
     def _on_confirm_toggled(self, checked: bool) -> None:
         self._worker.set_user_confirmed(checked)
