@@ -64,6 +64,9 @@ class BridgeWebSocketServer:
     async def request_status(self) -> None:
         await self._broadcast({"type": "request_status"})
 
+    async def request_slip_scan(self, site: str) -> None:
+        await self._broadcast({"type": "request_slip_scan", "site": site})
+
     async def send_command(self, site: str, command: str, **params: Any) -> Any:
         return await self.command_bus.send(self._broadcast, site=site, command=command, **params)
 

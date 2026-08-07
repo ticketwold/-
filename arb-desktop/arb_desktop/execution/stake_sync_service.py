@@ -132,13 +132,14 @@ class StakeSyncService:
 
         target = float(metrics.bc_stake_usdt)
         get_exec_logger().log(
-            "CALCULATE",
+            "STAKE_SYNC",
+            step="CALCULATE",
             ok=True,
             x10_odds=metrics.bti_odds,
             bc_odds=metrics.bc_odds,
             bc_stake=target,
         )
-        get_exec_logger().log("BC_STAKE", calculated=target, send_command="PASS")
+        get_exec_logger().log("STAKE_SYNC", step="SEND", ok=True, requested=target)
         if self._last_target is not None and abs(self._last_target - target) < 0.05:
             if self.last_status.state == StakeSyncState.OK and self.last_status.actual_usdt is not None:
                 if abs(self.last_status.actual_usdt - target) <= 0.15:
@@ -158,15 +159,48 @@ class StakeSyncService:
             amount_usdt=target,
         )
         ack_ok = bool(write.ok and write.actual is not None)
-        get_exec_logger().log(
-            "BC_STAKE",
-            ack="PASS" if ack_ok else "FAIL",
-            requested=target,
-            actual=write.actual,
-            reason=write.reason or write.error or "",
-        )
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
         reason = normalize_reason(write.reason or write.error or "")
+        verify = debug.get("verify") if isinstance(debug, dict) else {}
+        checks = verify.get("checks") if isinstance(verify, dict) else {}
+        if not isinstance(checks, dict):
+            checks = {}
+        get_exec_logger().log(
+            "STAKE_SYNC",
+            step="CONTENT_RX",
+            ok=bool(write.raw),
+            requested=target,
+            actual=write.actual,
+        )
+        get_exec_logger().log(
+            "STAKE_SYNC",
+            step="LOCATOR",
+            ok=write.ok or bool(debug.get("selected_selector") if isinstance(debug, dict) else False),
+            reason=reason,
+        )
+        get_exec_logger().log(
+            "STAKE_SYNC",
+            step="WRITE",
+            ok=write.ok,
+            before=debug.get("before_value") if isinstance(debug, dict) else None,
+            after=write.actual,
+        )
+        get_exec_logger().log(
+            "STAKE_SYNC",
+            step="VERIFY",
+            ok=ack_ok,
+            ms50=checks.get("50ms"),
+            ms100=checks.get("100ms"),
+            ms250=checks.get("250ms"),
+        )
+        get_exec_logger().log(
+            "STAKE_SYNC",
+            step="ACK",
+            ok=ack_ok,
+            requested=target,
+            actual=write.actual,
+            success=ack_ok,
+        )
 
         if not write.ok:
             state = StakeSyncState.INPUT_NOT_FOUND if reason == "input-not-found" else StakeSyncState.FAILED

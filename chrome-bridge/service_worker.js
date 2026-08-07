@@ -25,6 +25,8 @@ const siteState = {
     last_odds: null,
     last_status: "empty",
     last_update_ts: 0,
+    last_revision: 0,
+    last_dom_hash: "",
     injected_frames: 0,
   },
   x10: {
@@ -35,6 +37,8 @@ const siteState = {
     last_odds: null,
     last_status: "empty",
     last_update_ts: 0,
+    last_revision: 0,
+    last_dom_hash: "",
     injected_frames: 0,
   },
 };
@@ -52,7 +56,7 @@ const injectedFramesBySite = {
 
 /** Last ACTIVE slip timestamp per site (ms). */
 const lastActiveTs = { bc: 0, x10: 0 };
-const ACTIVE_GUARD_MS = 3000;
+const ACTIVE_GUARD_MS = 0;
 
 /** @type {Record<number, { frameId: number, frame_url: string, selector: string, score: number }>} */
 const bcStakeLocatorByTab = {};
@@ -163,14 +167,14 @@ function pruneFrameCache() {
 
 function pickBestSiteResult(site) {
   pruneFrameCache();
-  const now = Date.now();
-  const recentActive = lastActiveTs[site] && now - lastActiveTs[site] < ACTIVE_GUARD_MS;
   let best = null;
   let bestPriority = -1;
   for (const [key, entry] of Object.entries(frameSlipCache)) {
     if (!key.startsWith(`${site}:`)) continue;
-    if (recentActive && entry.priority < 80) continue;
-    if (entry.priority > bestPriority) {
+    if (
+      entry.priority > bestPriority ||
+      (entry.priority === bestPriority && entry.ts > (best?.ts || 0))
+    ) {
       bestPriority = entry.priority;
       best = entry;
     }
@@ -197,6 +201,9 @@ function slipPayloadKey(result) {
   if (!result) return "";
   const item = result.items?.[0] || {};
   return [
+    String(result.revision ?? ""),
+    result.dom_hash || item.dom_hash || "",
+    result.root_id || "",
     result.reason || "",
     result.frame_url || "",
     result.empty ? "1" : "0",
@@ -207,6 +214,7 @@ function slipPayloadKey(result) {
     item.status || "",
     item.status_reason || "",
     String(item.previous_odds ?? ""),
+    String(result.timestamp ?? ""),
   ].join("|");
 }
 
@@ -253,17 +261,40 @@ function maybeForwardSlip(site, result, meta) {
   const bestEntry = updateSiteStateFromBest(site);
   if (!bestEntry) return;
 
-  const now = Date.now();
-  if (lastActiveTs[site] && now - lastActiveTs[site] < ACTIVE_GUARD_MS && bestEntry.priority < 80) {
-    console.log("[FORWARD SKIP]", { site, reason: "active-guard", priority: bestEntry.priority });
-    return;
-  }
-
   const best = bestEntry.result;
   const bestMeta = bestEntry.meta;
   const payloadKey = slipPayloadKey(best);
-  if (payloadKey === lastSentSlipKey[site]) return;
+  const newRevision = Number(best.revision || 0);
+  const prevRevision = Number(siteState[site].last_revision || 0);
+  const newHash = best.dom_hash || best.items?.[0]?.dom_hash || "";
+  const prevHash = siteState[site].last_dom_hash || "";
+  const hashChanged = newHash && prevHash && newHash !== prevHash;
+  const revisionAdvanced = newRevision > prevRevision;
+  const invalidatesActive =
+    best.empty && ["active", "ACTIVE"].includes(String(siteState[site].last_status || ""));
+
+  if (
+    !revisionAdvanced &&
+    !hashChanged &&
+    !invalidatesActive &&
+    payloadKey === lastSentSlipKey[site]
+  ) {
+    return;
+  }
+
+  if (hashChanged || revisionAdvanced) {
+    for (const [cacheKey, entry] of Object.entries(frameSlipCache)) {
+      if (!cacheKey.startsWith(`${site}:`)) continue;
+      const entryHash = entry.result?.dom_hash || entry.result?.items?.[0]?.dom_hash || "";
+      if (entryHash && entryHash !== newHash && entry.ts < bestEntry.ts) {
+        delete frameSlipCache[cacheKey];
+      }
+    }
+  }
+
   lastSentSlipKey[site] = payloadKey;
+  siteState[site].last_revision = newRevision;
+  siteState[site].last_dom_hash = newHash;
 
   bestSlip[site] = best;
   updateSlipStatus(site, best);
@@ -274,6 +305,10 @@ function maybeForwardSlip(site, result, meta) {
     frame_id: bestMeta.frame_id,
     frame_url: bestMeta.frame_url || best?.frame_url || "",
     frame_depth: bestMeta.frame_depth,
+    revision: newRevision || null,
+    dom_hash: newHash || null,
+    root_id: best.root_id || null,
+    timestamp: best.timestamp || Date.now(),
     result: best,
     site_state: {
       injected_frames: siteState[site].injected_frames,
@@ -654,6 +689,12 @@ async function startBridge() {
     onMessage: async (message) => {
       if (message.type === "request_status") {
         refreshTabsAndScan();
+        return;
+      }
+      if (message.type === "request_slip_scan") {
+        const site = message.site === "bc" ? "bc" : "x10";
+        const { bcTabs, x10Tabs } = await queryTabs();
+        await requestSlipScan(site, site === "bc" ? bcTabs : x10Tabs);
         return;
       }
       if (message.type === "bridge_command") {

@@ -105,6 +105,8 @@ class WatchMetrics:
     dispatch_block_reason: str = ""
     live_execution_on: bool = False
     dry_run_on: bool = True
+    x10_slip_revision: int = 0
+    x10_slip_updated_at: str = ""
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:
@@ -387,7 +389,12 @@ class WatchEngine:
             user_confirmed=user_confirmed,
         )
 
-        odds_key = f"{bc_item.odds:.4f}|{bti_item.odds:.4f}|{usdt_rate:.2f}|{calc.bc_stake_usdt:.2f}"
+        bc_hash = bc_item.dom_hash if bc_item else ""
+        x10_hash = bti_item.dom_hash if bti_item else ""
+        odds_key = (
+            f"{bc_item.odds:.4f}|{bti_item.odds:.4f}|{usdt_rate:.2f}|"
+            f"{calc.bc_stake_usdt:.2f}|{bc_hash}|{x10_hash}"
+        )
         if odds_key != self._last_odds_key:
             self._last_odds_key = odds_key
             self._reset_stabilize()

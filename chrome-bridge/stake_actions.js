@@ -479,11 +479,15 @@
         lastResult.debug = scan.report;
       }
       const best = scan.best;
-      if (!best?.input) {
-        lastResult.reason = scan.slip.root ? "stake-input-not-found" : "frame-not-found";
+      if (!best?.input || !best.input.isConnected) {
+        lastResult.reason = !best?.input
+          ? scan.slip.root
+            ? "stake-input-not-found"
+            : "frame-not-found"
+          : "stale-input-reference";
         emitBcStakeStep("LOCATE_BC_STAKE_INPUT", {
           input_locator: "FAIL",
-          selector: scan.slip.selector || "",
+          selector: scan.slip.selector || best?.selector || "",
           before: "",
           reason: lastResult.reason,
         });

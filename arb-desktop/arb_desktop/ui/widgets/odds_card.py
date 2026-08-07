@@ -96,4 +96,4 @@ class SiteOddsCard(CardFrame):
         self.lbl_status.setProperty("class", status_css)
         self.lbl_status.style().unpolish(self.lbl_status)
         self.lbl_status.style().polish(self.lbl_status)
-        self.lbl_changed.setText(f"마지막 변경 {changed_at}" if changed_at else "")
+        self.lbl_changed.setText(changed_at.replace("\n", " · ") if changed_at else "")

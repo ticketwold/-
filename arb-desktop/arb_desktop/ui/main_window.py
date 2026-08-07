@@ -137,6 +137,11 @@ class MainWindow(QMainWindow):
         self._worker.bc_stake_debug.connect(self._on_bc_stake_debug)
         self._worker.bc_slip_debug.connect(self._on_bc_slip_debug)
         self._worker.pipeline_overlay_updated.connect(self._on_pipeline_overlay)
+        self.pipeline_overlay.rescan_x10_requested.connect(self._on_rescan_x10)
+        self.pipeline_overlay.rescan_bc_requested.connect(self._on_rescan_bc)
+        self.pipeline_overlay.bc_stake_test_requested.connect(lambda: self._worker.test_bc_stake(1.0))
+        self.pipeline_overlay.x10_bet_button_requested.connect(self._worker.scan_x10_bet_button)
+        self.pipeline_overlay.bc_bet_button_requested.connect(self._worker.scan_bc_bet_button)
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
         self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
@@ -298,6 +303,14 @@ class MainWindow(QMainWindow):
         self.pipeline_overlay.update_payload(payload)
         self.monitor.update_pipeline_overlay(payload)
 
+    def _on_rescan_x10(self) -> None:
+        self.pipeline_overlay.set_action_result("X10 재스캔 요청…")
+        self._worker.force_rescan_x10()
+
+    def _on_rescan_bc(self) -> None:
+        self.pipeline_overlay.set_action_result("BC 재스캔 요청…")
+        self._worker.force_rescan_bc()
+
     def _on_bc_slip_debug(self, payload: dict) -> None:
         self.bc_slip_debug_panel.update_from_payload(payload)
         if payload.get("site_state"):
@@ -305,11 +318,36 @@ class MainWindow(QMainWindow):
 
     def _on_bc_stake_debug(self, payload: dict) -> None:
         self.bc_stake_debug_panel.update_from_payload(payload)
+        block = str(payload.get("block") or "")
+        if block in {"BET BUTTON SCAN", "BET BUTTON FOUND", "BET BUTTON FAILED", "BC BET BUTTON", "X10 BET BUTTON"}:
+            x10_ok = bool(payload.get("x10_found") or (payload.get("site") == "x10" and payload.get("ok")))
+            bc_ok = bool(payload.get("bc_found") or (payload.get("site") == "bc" and payload.get("ok")))
+            if payload.get("site") == "x10":
+                self.pipeline_overlay.set_action_result(
+                    f"X10 BET BUTTON = {'PASS' if payload.get('ok') else 'FAIL'}\n{payload.get('reason', '')}",
+                    ok=bool(payload.get("ok")),
+                )
+            elif payload.get("site") == "bc" and "BET BUTTON" in block:
+                self.pipeline_overlay.set_action_result(
+                    f"BC BET BUTTON = {'PASS' if payload.get('ok') else 'FAIL'}\n{payload.get('reason', '')}",
+                    ok=bool(payload.get("ok")),
+                )
+            elif block == "BET BUTTON SCAN":
+                self.pipeline_overlay.set_action_result(
+                    f"X10 BET BUTTON = {'PASS' if x10_ok else 'FAIL'}\n"
+                    f"BC BET BUTTON = {'PASS' if bc_ok else 'FAIL'}",
+                    ok=x10_ok and bc_ok,
+                )
         if payload.get("block") == "BC STAKE TEST":
             self.bc_stake_debug_panel.set_test_result(
                 ok=bool(payload.get("success")),
                 actual=payload.get("actual"),
                 reason=str(payload.get("reason") or ""),
+            )
+            self.pipeline_overlay.set_action_result(
+                f"BC STAKE TEST = {'PASS' if payload.get('success') else 'FAIL'}\n"
+                f"actual={payload.get('actual')} reason={payload.get('reason', '')}",
+                ok=bool(payload.get("success")),
             )
 
     def _on_execution_update(self, state) -> None:

@@ -33,13 +33,15 @@
   }
 
   function resultKey(result) {
-    const hash = global.ArbFrameScanner?.domHash?.(document) || String(bodyTextLength());
+    const hash = result?.dom_hash || global.ArbFrameScanner?.domHash?.(document) || String(bodyTextLength());
     const item = result?.items?.[0] || {};
     const status = item.status || result?.parsed_status || result?.reason || "";
     const reason = item.status_reason || result?.status_reason || "";
     const odds = String(item.odds ?? result?.extracted_odds ?? "");
     const prev = String(item.previous_odds ?? "");
-    return `${status}|${reason}|${odds}|${prev}|${location.href}|${hash}`;
+    const rev = String(result?.revision ?? "");
+    const rootId = result?.root_id || "";
+    return `${rev}|${status}|${reason}|${odds}|${prev}|${location.href}|${hash}|${rootId}`;
   }
 
   function sendDebug(block, payload) {
@@ -62,6 +64,10 @@
       frame_url: location.href,
       frame_depth: meta.frame_depth,
       frame_id: meta.frame_id,
+      revision: result?.revision ?? null,
+      dom_hash: result?.dom_hash ?? null,
+      root_id: result?.root_id ?? null,
+      timestamp: result?.timestamp ?? Date.now(),
       result,
     });
   }
@@ -140,13 +146,16 @@
     return { ok: false, error: "unknown-command", frame_url: location.href };
   }
 
-  function attachObservers(onChange) {
+    function attachObservers(onChange) {
     const observers = [];
     let debounceTimer = null;
 
     function schedule() {
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => onChange(false), 30);
+      debounceTimer = setTimeout(() => {
+        bumpRevision("mutation");
+        onChange(false);
+      }, 30);
     }
 
     function addObserver(target) {
@@ -179,9 +188,39 @@
 
     let lastKey = "";
     let lastDebugKey = "";
+    let lastSentRevision = -1;
+    let slipRevision = 0;
+    let lastSlipRoot = null;
     let disconnectObservers = null;
     const startedAt = Date.now();
     const frameDepth = getFrameDepth();
+
+    function bumpRevision(_tag) {
+      slipRevision += 1;
+      return slipRevision;
+    }
+
+    function emitInvalidated(reason) {
+      const rev = bumpRevision(reason || "invalidated");
+      const payload = {
+        ok: false,
+        empty: true,
+        items: [],
+        reason: reason || "slip-invalidated",
+        invalidated: true,
+        revision: rev,
+        dom_hash: "",
+        root_id: "",
+        timestamp: Date.now(),
+        frame_url: location.href,
+        slip_root_found: "NO",
+        parsed_status: "EMPTY",
+      };
+      sendDebug("SLIP INVALIDATED", { ...meta(), reason, revision: rev });
+      sendSlipUpdate(site, payload, meta());
+      lastKey = resultKey(payload);
+      lastSentRevision = rev;
+    }
 
     const meta = () => ({
       site,
@@ -272,20 +311,61 @@
       }
     }
 
+    function trackSlipRoot(result) {
+      const selector = result?.container_selector || "";
+      let root = null;
+      if (selector) {
+        try {
+          root = document.querySelector(selector);
+        } catch (_err) {
+          root = null;
+        }
+      }
+      if (lastSlipRoot && !lastSlipRoot.isConnected) {
+        lastSlipRoot = null;
+        emitInvalidated("root-removed");
+        return false;
+      }
+      if (root && lastSlipRoot && root !== lastSlipRoot) {
+        bumpRevision("root-replaced");
+        sendDebug("SCANNING NEW SLIP", { ...meta(), revision: slipRevision });
+      }
+      if (root) lastSlipRoot = root;
+      else if (result?.empty || result?.reason === "no-slip-root") lastSlipRoot = null;
+      return true;
+    }
+
     function scan(force) {
+      if (lastSlipRoot && !lastSlipRoot.isConnected) {
+        emitInvalidated("root-removed");
+      }
+
       const result = site === "bc" ? scanner.readBcSlip() : scanner.readX10Slip();
       result.frame_url = location.href;
       result.frame_depth = frameDepth;
+      if (!result.revision) {
+        result.revision = slipRevision;
+      } else {
+        result.revision = Math.max(Number(result.revision || 0), slipRevision);
+      }
+      if (!result.timestamp) {
+        result.timestamp = Date.now();
+      }
+      if (!trackSlipRoot(result)) {
+        return;
+      }
 
       const key = resultKey(result);
       const debugKey = `${key}|${bodyTextLength()}`;
-      if (!force && key === lastKey) {
+      const revisionChanged = Number(result.revision || 0) !== lastSentRevision;
+      if (!force && key === lastKey && !revisionChanged) {
         if (site === "x10") {
           runDiagnostics(result);
         }
         return;
       }
       lastKey = key;
+      lastSentRevision = Number(result.revision || 0);
 
       if (force || debugKey !== lastDebugKey) {
         lastDebugKey = debugKey;

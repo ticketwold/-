@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QFrame, QGridLayout, QGroupBox, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class _SitePipelinePanel(QGroupBox):
@@ -118,6 +118,12 @@ class _SitePipelinePanel(QGroupBox):
 class PipelineDebugOverlay(QFrame):
     """카트 인식 경로 실시간 Debug Overlay — BC / X10."""
 
+    rescan_x10_requested = pyqtSignal()
+    rescan_bc_requested = pyqtSignal()
+    bc_stake_test_requested = pyqtSignal()
+    x10_bet_button_requested = pyqtSignal()
+    bc_bet_button_requested = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setProperty("class", "Card")
@@ -125,6 +131,34 @@ class PipelineDebugOverlay(QFrame):
         title = QLabel("Pipeline Debug Overlay")
         title.setProperty("class", "section-title")
         root.addWidget(title)
+
+        btn_row = QHBoxLayout()
+        self.btn_rescan_x10 = QPushButton("X10 카트 재스캔")
+        self.btn_rescan_bc = QPushButton("BC 카트 재스캔")
+        self.btn_bc_stake = QPushButton("BC 1.0 USDT 테스트")
+        self.btn_x10_bet = QPushButton("X10 Bet 버튼")
+        self.btn_bc_bet = QPushButton("BC Bet 버튼")
+        self.lbl_action_result = QLabel("—")
+        self.lbl_action_result.setWordWrap(True)
+        mono = QFont("Consolas", 9)
+        self.lbl_action_result.setFont(mono)
+        for btn in (
+            self.btn_rescan_x10,
+            self.btn_rescan_bc,
+            self.btn_bc_stake,
+            self.btn_x10_bet,
+            self.btn_bc_bet,
+        ):
+            btn.setProperty("class", "primary")
+            btn_row.addWidget(btn)
+        self.btn_rescan_x10.clicked.connect(self.rescan_x10_requested.emit)
+        self.btn_rescan_bc.clicked.connect(self.rescan_bc_requested.emit)
+        self.btn_bc_stake.clicked.connect(self.bc_stake_test_requested.emit)
+        self.btn_x10_bet.clicked.connect(self.x10_bet_button_requested.emit)
+        self.btn_bc_bet.clicked.connect(self.bc_bet_button_requested.emit)
+        root.addLayout(btn_row)
+        root.addWidget(self.lbl_action_result)
+
         row = QGridLayout()
         self.panel_bc = _SitePipelinePanel("BC")
         self.panel_x10 = _SitePipelinePanel("X10")
@@ -139,3 +173,14 @@ class PipelineDebugOverlay(QFrame):
             self.panel_bc.update_site(payload["bc"])
         if "x10" in payload:
             self.panel_x10.update_site(payload["x10"])
+
+    def set_action_result(self, text: str, *, ok: bool | None = None) -> None:
+        self.lbl_action_result.setText(text)
+        if ok is True:
+            self.lbl_action_result.setProperty("class", "status-ok")
+        elif ok is False:
+            self.lbl_action_result.setProperty("class", "status-bad")
+        else:
+            self.lbl_action_result.setProperty("class", "mono")
+        self.lbl_action_result.style().unpolish(self.lbl_action_result)
+        self.lbl_action_result.style().polish(self.lbl_action_result)

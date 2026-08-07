@@ -132,13 +132,20 @@ def test_slip_update_prefers_non_empty() -> None:
     assert filled is not None
     assert manager.bc_slip and manager.bc_slip.first
     assert manager.bc_slip.first.event == "A vs B"
-    ignored = manager.apply_slip_update(
+    cleared = manager.apply_slip_update(
         SlipUpdateMessage(
             site="bc",
-            result={"ok": False, "empty": True, "items": [], "reason": "no-slip-root"},
+            result={
+                "ok": False,
+                "empty": True,
+                "revision": 2,
+                "items": [],
+                "reason": "no-slip-root",
+            },
         )
     )
-    assert ignored is None
+    assert cleared is not None
+    assert manager.bc_slip.empty
 
 
 def test_status_format_block() -> None:

@@ -333,7 +333,7 @@ class MonitorDashboard(QWidget):
             display_odds=m.bti_display_odds,
             status_label=m.x10_site_label,
             direction=m.bti_odds_dir,
-            changed_at=m.bti_odds_changed_at,
+            changed_at=self._x10_changed_label(m),
             stake_text=f"{m.bti_stake_krw:,.0f} KRW" if m.bti_stake_krw else "",
             status=m.x10_site_label,
         )
@@ -414,6 +414,17 @@ class MonitorDashboard(QWidget):
 
     def update_pipeline_overlay(self, payload: dict | None) -> None:
         self.header.update_pipeline_failures(payload)
+
+    @staticmethod
+    def _x10_changed_label(m: WatchMetrics) -> str:
+        parts = []
+        if m.x10_slip_updated_at:
+            parts.append(f"업데이트: {m.x10_slip_updated_at}")
+        if m.x10_slip_revision:
+            parts.append(f"revision: {m.x10_slip_revision}")
+        if parts:
+            return "\n".join(parts)
+        return m.bti_odds_changed_at
 
     def _update_glow(self, m: WatchMetrics, state: str) -> None:
         if state == "READY" and m.watch_enabled:

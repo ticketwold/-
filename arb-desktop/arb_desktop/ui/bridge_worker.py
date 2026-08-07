@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from datetime import datetime
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
@@ -171,6 +170,23 @@ class BridgeWorker(QObject):
                 hit_summary = ", ".join(
                     f"{h.get('selector')}={h.get('match_count', 0)}" for h in hits[:6]
                 )
+                try:
+                    rev = int(read.raw.get("revision") or 0)
+                except (TypeError, ValueError):
+                    rev = 0
+                self._watch_engine.metrics.x10_slip_revision = rev
+                ts_raw = read.raw.get("timestamp")
+                if ts_raw:
+                    try:
+                        ts_val = float(ts_raw)
+                        if ts_val > 1e12:
+                            ts_val /= 1000.0
+                        stamp = datetime.fromtimestamp(ts_val)
+                    except (TypeError, ValueError, OSError):
+                        stamp = datetime.now()
+                else:
+                    stamp = datetime.now()
+                self._watch_engine.metrics.x10_slip_updated_at = stamp.strftime("%H:%M:%S.%f")[:-3]
                 self.log_message.emit(
                     "X10DBG",
                     reason or status,
@@ -480,6 +496,10 @@ class BridgeWorker(QObject):
                 fx=self._fx_snapshot,
                 manual=manual,
                 skip_target_check=skip_target_check,
+                get_reads=lambda: (
+                    self._runtime.manager.get_bc_read(),
+                    self._runtime.manager.get_bti_read(),
+                ),
             )
             if manual:
                 get_exec_logger().log(
@@ -665,6 +685,29 @@ class BridgeWorker(QObject):
 
     def _emit_pipeline_trace(self, site_key: str) -> None:
         self._emit_pipeline_overlay(site_key)
+
+    @pyqtSlot()
+    def force_rescan_x10(self) -> None:
+        if self._loop and self._runtime:
+            asyncio.run_coroutine_threadsafe(self._force_rescan("x10"), self._loop)
+
+    @pyqtSlot()
+    def force_rescan_bc(self) -> None:
+        if self._loop and self._runtime:
+            asyncio.run_coroutine_threadsafe(self._force_rescan("bc"), self._loop)
+
+    async def _force_rescan(self, site: str) -> None:
+        if not self._runtime:
+            return
+        await self._runtime.server.request_slip_scan(site)
+        self.log_message.emit(
+            "TRACE",
+            site.upper(),
+            "SCAN",
+            "-",
+            f"force rescan {site}",
+            f"TRACE|{site}|force-rescan",
+        )
 
     @pyqtSlot()
     def scan_x10_bet_button(self) -> None:

@@ -18,7 +18,7 @@ from arb_desktop.bridge.message_models import (
 )
 
 
-ACTIVE_GUARD_SEC = 3.0
+ACTIVE_GUARD_SEC = 0.0
 
 
 @dataclass
@@ -44,6 +44,8 @@ class ConnectionManager:
     last_x10_debug: dict[str, Any] | None = None
     last_bc_stake_debug: dict[str, Any] | None = None
     _last_active_at: dict[str, float] = field(default_factory=lambda: {"bc": 0.0, "x10": 0.0})
+    _last_revision: dict[str, int] = field(default_factory=lambda: {"bc": 0, "x10": 0})
+    _last_dom_hash: dict[str, str] = field(default_factory=lambda: {"bc": "", "x10": ""})
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def status(self) -> BridgeStatus:
@@ -117,8 +119,23 @@ class ConnectionManager:
             self._last_active_at[site_key] = time.time()
 
         current = self.bc_slip if site_key == "bc" else self.x10_slip
+        cur_rev = self._last_revision.get(site_key, 0)
+        new_rev = _slip_revision(read)
+        new_hash = _slip_dom_hash(read)
+        cur_hash = self._last_dom_hash.get(site_key, "")
+
+        if new_rev and cur_rev and new_rev < cur_rev:
+            log.info("[PYTHON SKIP] stale-revision site=%s cur=%s new=%s", site_key, cur_rev, new_rev)
+            return None
+
         last_active = self._last_active_at.get(site_key, 0.0)
-        if last_active and time.time() - last_active < ACTIVE_GUARD_SEC and prio < 80:
+        if (
+            ACTIVE_GUARD_SEC > 0
+            and last_active
+            and time.time() - last_active < ACTIVE_GUARD_SEC
+            and prio < 80
+            and not (new_rev > cur_rev or (new_hash and new_hash != cur_hash) or _invalidates_active(current, read))
+        ):
             log.info("[PYTHON SKIP] active-guard site=%s prio=%s", site_key, prio)
             return None
         if not _should_replace_slip(current, read):
@@ -152,6 +169,11 @@ class ConnectionManager:
             self.x10_slip = read
             self.x10_tab = "found"
             self.x10_betslip = _slip_state_from_read(read)
+
+        if new_rev:
+            self._last_revision[site_key] = new_rev
+        if new_hash:
+            self._last_dom_hash[site_key] = new_hash
 
         self._notify_status()
         if self.on_slip_update:
@@ -246,7 +268,51 @@ def _slip_score(read: BetSlipReadResult | None) -> int:
     return 3
 
 
+def _slip_revision(read: BetSlipReadResult | None) -> int:
+    if not read:
+        return 0
+    raw = read.raw or {}
+    try:
+        return int(raw.get("revision") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _slip_dom_hash(read: BetSlipReadResult | None) -> str:
+    if not read:
+        return ""
+    if read.first and read.first.dom_hash:
+        return str(read.first.dom_hash)
+    return str((read.raw or {}).get("dom_hash") or "")
+
+
+def _invalidates_active(current: BetSlipReadResult | None, new: BetSlipReadResult) -> bool:
+    if not current or current.empty:
+        return False
+    if not current.first or current.first.status != SlipStatus.ACTIVE:
+        return False
+    if new.empty:
+        return True
+    if new.first and new.first.status in {SlipStatus.CLOSED, SlipStatus.SUSPENDED, SlipStatus.EMPTY}:
+        return True
+    return False
+
+
 def _should_replace_slip(current: BetSlipReadResult | None, new: BetSlipReadResult) -> bool:
+    cur_rev = _slip_revision(current)
+    new_rev = _slip_revision(new)
+    if new_rev and new_rev > cur_rev:
+        return True
+    if new_rev and cur_rev and new_rev < cur_rev:
+        return False
+    cur_hash = _slip_dom_hash(current)
+    new_hash = _slip_dom_hash(new)
+    if cur_hash and new_hash and cur_hash != new_hash:
+        return True
+    if _invalidates_active(current, new):
+        return True
+    if current and current.first and new.first and current.first.odds != new.first.odds:
+        return True
     return _slip_score(new) >= _slip_score(current)
 
 
@@ -270,5 +336,5 @@ def _result_to_read(site: str, result: dict[str, Any], *, frame_url: str = "") -
         source=str(result.get("source") or "bridge"),
         container_selector=str(result.get("container_selector") or ""),
         reason=str(result.get("reason") or ""),
-        raw=result,
+        raw={**result, "revision": result.get("revision"), "dom_hash": result.get("dom_hash"), "root_id": result.get("root_id")},
     )
