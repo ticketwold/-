@@ -39,12 +39,14 @@ def create_bridge_runtime(
     pairing_store: PairingStore,
     on_status_change=None,
     on_slip_update=None,
+    on_slip_rx=None,
     on_debug=None,
 ) -> BridgeRuntime:
     manager = ConnectionManager(
         token=pairing_store.credential,
         on_status_change=on_status_change,
         on_slip_update=on_slip_update,
+        on_slip_rx=on_slip_rx,
         on_debug=on_debug,
     )
     server = BridgeWebSocketServer(

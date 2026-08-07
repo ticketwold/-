@@ -28,6 +28,7 @@ class ConnectionManager:
     token: str
     on_status_change: Callable[[BridgeStatus], None] | None = None
     on_slip_update: Callable[[str, BetSlipReadResult], None] | None = None
+    on_slip_rx: Callable[[str, BetSlipReadResult], None] | None = None
     on_debug: Callable[[dict[str, Any]], None] | None = None
     on_stake_input_changed: Callable[[], None] | None = None
     bridge_connected: bool = False
@@ -107,6 +108,9 @@ class ConnectionManager:
             read.raw = {**read.raw, "site_state": message.site_state}
         if message.tab_id is not None:
             read.raw = {**read.raw, "tab_id": message.tab_id, "frame_id": message.frame_id}
+
+        if self.on_slip_rx:
+            self.on_slip_rx(site, read)
 
         prio = _slip_priority(read)
         if prio >= 100:

@@ -45,6 +45,42 @@ class TradingHeader(QFrame):
         row.addStretch()
         row.addWidget(self.lbl_clock)
 
+        fail_row = QHBoxLayout()
+        fail_row.setSpacing(12)
+        self.lbl_x10_fail = QLabel("")
+        self.lbl_bc_fail = QLabel("")
+        for lbl in (self.lbl_x10_fail, self.lbl_bc_fail):
+            lbl.setProperty("class", "mono")
+            lbl.setWordWrap(True)
+            lbl.hide()
+            fail_row.addWidget(lbl, 1)
+        self._fail_layout = fail_row
+
+    def fail_layout(self) -> QHBoxLayout:
+        return self._fail_layout
+
+    def update_pipeline_failures(self, payload: dict | None) -> None:
+        self._set_fail_label(self.lbl_x10_fail, "X10", payload.get("x10") if payload else None)
+        self._set_fail_label(self.lbl_bc_fail, "BC", payload.get("bc") if payload else None)
+
+    def _set_fail_label(self, lbl: QLabel, site: str, data: dict | None) -> None:
+        if not data:
+            lbl.hide()
+            return
+        fail = data.get("first_failure") or ""
+        if fail:
+            lbl.setText(f"FAIL {site}\n{fail}")
+            lbl.setProperty("class", "status-bad")
+            lbl.show()
+        elif data.get("all_pass") == "yes":
+            lbl.setText(f"PASS {site}")
+            lbl.setProperty("class", "status-ok")
+            lbl.show()
+        else:
+            lbl.hide()
+        lbl.style().unpolish(lbl)
+        lbl.style().polish(lbl)
+
     def _tick(self) -> None:
         self.lbl_clock.setText(datetime.now().strftime("%H:%M:%S"))
 
@@ -234,6 +270,7 @@ class MonitorDashboard(QWidget):
 
         self.header = TradingHeader()
         root.addWidget(self.header)
+        root.addLayout(self.header.fail_layout())
 
         self.status_banner = StatusBanner()
         root.addWidget(self.status_banner)
@@ -374,6 +411,9 @@ class MonitorDashboard(QWidget):
             self.status_banner.show_partial(message)
         else:
             self.status_banner.hide_banner()
+
+    def update_pipeline_overlay(self, payload: dict | None) -> None:
+        self.header.update_pipeline_failures(payload)
 
     def _update_glow(self, m: WatchMetrics, state: str) -> None:
         if state == "READY" and m.watch_enabled:

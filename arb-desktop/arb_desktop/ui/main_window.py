@@ -34,6 +34,7 @@ from arb_desktop.ui.manual_bet_dialog import ManualBetDialog
 from arb_desktop.ui.monitor_dashboard import MonitorDashboard
 from arb_desktop.ui.odds_log_manager import OddsLogEntry, OddsLogManager
 from arb_desktop.ui.odds_log_panel import OddsLogPanel
+from arb_desktop.ui.pipeline_debug_overlay import PipelineDebugOverlay
 from arb_desktop.ui.settings_dialog import SettingsDialog
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.setup_wizard import SetupWizard
@@ -102,11 +103,13 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(scroll, "메인")
         self.odds_log_panel = OddsLogPanel(self._odds_log, self._store.logs_dir)
         self.tabs.addTab(self.odds_log_panel, "배당 로그")
+        self.pipeline_overlay = PipelineDebugOverlay()
         self.x10_debug_panel = X10DebugPanel()
         self.bc_slip_debug_panel = BcSlipDebugPanel()
         self.bc_stake_debug_panel = BcStakeDebugPanel()
         debug_page = QWidget()
         debug_layout = QVBoxLayout(debug_page)
+        debug_layout.addWidget(self.pipeline_overlay)
         debug_layout.addWidget(self.bc_slip_debug_panel)
         debug_layout.addWidget(self.bc_stake_debug_panel)
         debug_layout.addWidget(self.x10_debug_panel, 1)
@@ -133,6 +136,7 @@ class MainWindow(QMainWindow):
         self._worker.execution_update.connect(self._on_execution_update)
         self._worker.bc_stake_debug.connect(self._on_bc_stake_debug)
         self._worker.bc_slip_debug.connect(self._on_bc_slip_debug)
+        self._worker.pipeline_overlay_updated.connect(self._on_pipeline_overlay)
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
         self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
@@ -289,6 +293,10 @@ class MainWindow(QMainWindow):
         self.monitor.update_all(m, state=state)
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
+
+    def _on_pipeline_overlay(self, payload: dict) -> None:
+        self.pipeline_overlay.update_payload(payload)
+        self.monitor.update_pipeline_overlay(payload)
 
     def _on_bc_slip_debug(self, payload: dict) -> None:
         self.bc_slip_debug_panel.update_from_payload(payload)

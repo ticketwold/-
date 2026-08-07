@@ -18,6 +18,7 @@ from arb_desktop.execution.stake_sync_service import StakeSyncState
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
 from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
 from arb_desktop.ui.odds_log_manager import OddsLogManager
+from arb_desktop.ui.pipeline_overlay_state import PipelineOverlayState
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
 
@@ -32,6 +33,7 @@ class BridgeWorker(QObject):
     execution_update = pyqtSignal(object)
     bc_stake_debug = pyqtSignal(object)
     bc_slip_debug = pyqtSignal(object)
+    pipeline_overlay_updated = pyqtSignal(object)
     log_message = pyqtSignal(str, str, str, str, str, str)
     ready = pyqtSignal()
     error = pyqtSignal(str)
@@ -63,26 +65,7 @@ class BridgeWorker(QObject):
         self._odds_log: OddsLogManager | None = None
         self._last_engine_log_state: str = ""
         self._bet_button_cache: dict[str, str] = {"x10": "?", "bc": "?"}
-        self._pipeline_trace: dict[str, dict[str, str]] = {
-            "bc": {
-                "content_loaded": "no",
-                "injected_frames": "0",
-                "betslipSelection_count": "0",
-                "body_has_bet_keywords": "no",
-                "service_worker_received": "no",
-                "python_received": "no",
-                "gui_applied": "no",
-            },
-            "x10": {
-                "content_loaded": "no",
-                "injected_frames": "0",
-                "betslip_selector_count": "0",
-                "body_has_bet_keywords": "no",
-                "service_worker_received": "no",
-                "python_received": "no",
-                "gui_applied": "no",
-            },
-        }
+        self._pipeline_overlay = PipelineOverlayState()
         get_exec_logger().set_log_dir(store.logs_dir)
         get_exec_logger().add_listener(self._on_exec_log)
 
@@ -153,11 +136,22 @@ class BridgeWorker(QObject):
         def on_status(status: BridgeStatus) -> None:
             self.bridge_status.emit(status)
 
+        def on_slip_rx(site: str, read: BetSlipReadResult) -> None:
+            site_key = "bc" if site == "bc" else "x10"
+            self._apply_slip_pipeline(site_key, read, gui_applied=False)
+            overlay = self._pipeline_overlay.site(site_key)
+            overlay.python_received = "yes"
+            overlay.service_worker_received = "yes"
+            self._emit_pipeline_overlay(site_key)
+
         def on_slip(site: str, read: BetSlipReadResult) -> None:
             site_key = "bc" if site == "bc" else "x10"
-            self._pipeline_trace[site_key]["python_received"] = "yes"
-            self._pipeline_trace[site_key]["gui_applied"] = "yes"
-            self._emit_pipeline_trace(site_key)
+            self._apply_slip_pipeline(site_key, read, gui_applied=True)
+            overlay = self._pipeline_overlay.site(site_key)
+            overlay.python_received = "yes"
+            overlay.gui_applied = "yes"
+            overlay.service_worker_received = "yes"
+            self._emit_pipeline_overlay(site_key)
             label = "BC" if site == "bc" else "X10"
             odds = f"{read.first.odds:.2f}" if read.first and read.first.odds else "-"
             status = read.first.status.value if read.first else "EMPTY"
@@ -197,30 +191,8 @@ class BridgeWorker(QObject):
             block = str(payload.get("block") or "").upper()
             site_key = "bc" if site == "bc" else "x10" if site in {"x10", "bti"} else ""
             if site_key:
-                if block == "CONTENT SCRIPT LOADED" or payload.get("type") == "content_loaded":
-                    self._pipeline_trace[site_key]["content_loaded"] = "yes"
-                    self._pipeline_trace[site_key]["service_worker_received"] = "yes"
-                    injected = payload.get("injected_frames")
-                    if injected is not None:
-                        self._pipeline_trace[site_key]["injected_frames"] = str(injected)
-                    urls = payload.get("injected_frame_urls") or []
-                    if urls:
-                        self._pipeline_trace[site_key]["injected_frame_urls"] = urls
-                if block == "FRAME SCAN":
-                    self._pipeline_trace[site_key]["service_worker_received"] = "yes"
-                    if payload.get("betslipSelection_count") is not None and site_key == "bc":
-                        self._pipeline_trace[site_key]["betslipSelection_count"] = str(
-                            payload.get("betslipSelection_count")
-                        )
-                    if payload.get("total_selector_matches") is not None and site_key == "x10":
-                        self._pipeline_trace[site_key]["betslip_selector_count"] = str(
-                            payload.get("total_selector_matches")
-                        )
-                    if payload.get("body_has_bet_keywords") is not None:
-                        self._pipeline_trace[site_key]["body_has_bet_keywords"] = (
-                            "yes" if payload.get("body_has_bet_keywords") else "no"
-                        )
-                self._emit_pipeline_trace(site_key)
+                self._apply_debug_pipeline(site_key, payload)
+                self._emit_pipeline_overlay(site_key)
             if site == "bc":
                 if block.startswith("BC STAKE") or block == "BC INPUT SCAN" or payload.get("step"):
                     self.bc_stake_debug.emit(payload)
@@ -265,6 +237,7 @@ class BridgeWorker(QObject):
             pairing_store=self._pairing_store,
             on_status_change=on_status,
             on_slip_update=on_slip,
+            on_slip_rx=on_slip_rx,
             on_debug=on_debug,
         )
         self._runtime.manager.on_stake_input_changed = on_stake_input_changed
@@ -552,20 +525,146 @@ class BridgeWorker(QObject):
         finally:
             self._dispatch_running = False
 
-    def _emit_pipeline_trace(self, site_key: str) -> None:
-        trace = self._pipeline_trace.get(site_key, {})
-        payload = {
+    def _apply_debug_pipeline(self, site_key: str, payload: dict[str, Any]) -> None:
+        site = self._pipeline_overlay.site(site_key)
+        block = str(payload.get("block") or "").upper()
+        site.service_worker_received = "yes"
+
+        if block == "CONTENT SCRIPT LOADED" or payload.get("type") == "content_loaded":
+            site.content_loaded = "yes"
+            injected = payload.get("injected_frames")
+            if injected is not None:
+                site.frame_count = str(injected)
+            urls = payload.get("injected_frame_urls") or []
+            if urls:
+                site.frame_url = str(urls[0]) if len(urls) == 1 else f"{urls[0]} (+{len(urls) - 1})"
+
+        frame_url = payload.get("frame_url") or payload.get("document_location")
+        if frame_url:
+            site.frame_url = str(frame_url)
+
+        if block == "FRAME SCAN":
+            total = payload.get("total_selector_matches")
+            if total is not None:
+                site.scanner_match_count = str(total)
+                if int(total) > 0:
+                    site.scanner_root_found = "yes"
+            if payload.get("betslipSelection_count") is not None:
+                count = int(payload.get("betslipSelection_count") or 0)
+                site.scanner_match_count = str(count)
+                if count > 0:
+                    site.scanner_root_found = "yes"
+                    site.scanner_selector = '[data-editor-id="betslipSelection"]'
+            scans = payload.get("selector_scans") or payload.get("selector_hits") or []
+            if scans:
+                best = max(scans, key=lambda row: int(row.get("match_count") or 0))
+                best_count = int(best.get("match_count") or 0)
+                if best_count > 0:
+                    site.scanner_root_found = "yes"
+                    site.scanner_selector = str(best.get("selector") or site.scanner_selector)
+                    site.scanner_match_count = str(best_count)
+
+        if block in {"SLIP ROOT FOUND", "BC DEBUG", "X10 DEBUG", "BC FRAME"}:
+            found = payload.get("slip_root_found") or payload.get("found")
+            if str(found).upper() == "YES":
+                site.scanner_root_found = "yes"
+            selector = payload.get("selector") or payload.get("container_selector")
+            if selector:
+                site.scanner_selector = str(selector)
+            match_count = payload.get("match_count")
+            if match_count is not None:
+                site.scanner_match_count = str(match_count)
+                if int(match_count) > 0:
+                    site.scanner_root_found = "yes"
+
+        if block in {"BC DEBUG", "X10 DEBUG", "SLIP ITEM"} or payload.get("slip_count") is not None:
+            if payload.get("slip_count") is not None:
+                site.parser_slip_count = str(payload.get("slip_count"))
+            odds = payload.get("extracted_odds")
+            if odds is None:
+                odds = payload.get("odds")
+            if odds is not None and odds != "":
+                site.parser_odds = str(odds)
+            status = (
+                payload.get("parsed_status")
+                or payload.get("status")
+                or payload.get("status_reason")
+                or payload.get("reason")
+            )
+            if status:
+                site.parser_status = str(status)
+
+        if block == "PIPELINE TRACE":
+            trace = payload.get("trace") or {}
+            if trace.get("content_loaded") == "yes":
+                site.content_loaded = "yes"
+            if trace.get("service_worker_received") == "yes":
+                site.service_worker_received = "yes"
+            if trace.get("python_received") == "yes":
+                site.python_received = "yes"
+            if trace.get("gui_applied") == "yes":
+                site.gui_applied = "yes"
+
+    def _apply_slip_pipeline(self, site_key: str, read: BetSlipReadResult, *, gui_applied: bool) -> None:
+        site = self._pipeline_overlay.site(site_key)
+        site.service_worker_received = "yes"
+        site.python_received = "yes"
+        site.gui_applied = "yes" if gui_applied else "no"
+
+        raw = read.raw or {}
+        if read.frame_url:
+            site.frame_url = read.frame_url
+        slip_count = raw.get("slip_count")
+        if slip_count is None:
+            slip_count = len(read.items or [])
+        site.parser_slip_count = str(slip_count)
+        if read.first and read.first.odds is not None:
+            site.parser_odds = f"{read.first.odds:.2f}"
+        elif raw.get("extracted_odds") is not None:
+            site.parser_odds = str(raw.get("extracted_odds"))
+        if read.first:
+            site.parser_status = read.first.status.value
+        elif raw.get("parsed_status") or raw.get("reason"):
+            site.parser_status = str(raw.get("parsed_status") or raw.get("reason"))
+
+        found = raw.get("slip_root_found")
+        if str(found).upper() == "YES" or slip_count or (read.items and len(read.items) > 0):
+            site.scanner_root_found = "yes"
+        selector = read.container_selector or raw.get("container_selector")
+        if selector:
+            site.scanner_selector = str(selector)
+
+    def _emit_pipeline_overlay(self, site_key: str) -> None:
+        payload = self._pipeline_overlay.to_payload()
+        site_data = payload.get(site_key, {})
+        emit_payload = {
             "block": "PIPELINE TRACE",
             "site": site_key,
-            "trace": trace,
-            "injected_frame_urls": trace.get("injected_frame_urls", []),
+            "trace": site_data,
+            **site_data,
         }
         if site_key == "bc":
-            self.bc_slip_debug.emit(payload)
+            self.bc_slip_debug.emit(emit_payload)
         else:
-            self.x10_debug.emit(payload)
-        line = " ".join(f"{k}={v}" for k, v in trace.items())
-        self.log_message.emit("TRACE", site_key.upper(), "-", "-", line, f"TRACE|{site_key}|{line}")
+            self.x10_debug.emit(emit_payload)
+        self.pipeline_overlay_updated.emit(payload)
+        fail = site_data.get("first_failure") or ""
+        status = "PASS" if site_data.get("all_pass") == "yes" else ("FAIL" if fail else "WAIT")
+        self.log_message.emit(
+            "TRACE",
+            site_key.upper(),
+            status,
+            fail or "-",
+            self._pipeline_overlay_line(site_key),
+            f"TRACE|{site_key}|{status}|{fail}",
+        )
+
+    def _pipeline_overlay_line(self, site_key: str) -> str:
+        site = self._pipeline_overlay.site(site_key).to_dict()
+        return " ".join(f"{k}={v}" for k, v in site.items() if k not in {"site", "first_failure", "all_pass"})
+
+    def _emit_pipeline_trace(self, site_key: str) -> None:
+        self._emit_pipeline_overlay(site_key)
 
     @pyqtSlot()
     def scan_x10_bet_button(self) -> None:
