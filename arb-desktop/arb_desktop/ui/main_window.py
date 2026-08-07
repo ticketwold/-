@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Bridge 시작 중…")
 
         self._thread = QThread()
-        self._worker = BridgeWorker(self._store)
+        self._worker = BridgeWorker(self._store, app_settings=self._settings)
         self._worker.attach_odds_log(self._odds_log)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.bootstrap)
@@ -162,10 +162,24 @@ class MainWindow(QMainWindow):
         self._wire_buttons()
         self._apply_watch_ui()
         self._refresh_settings_labels()
-        self._thread.start()
+        self._background_started = False
 
+    def start_background_services(self) -> None:
+        """Start Bridge/FX/Scanner after the window is visible (never from __init__)."""
+        if self._background_started:
+            return
+        self._background_started = True
+        from arb_desktop.startup_crash import log_thread, startup_log
+
+        log_thread("MAIN")
+        startup_log("[STARTUP 6] start Bridge thread")
+        if not self._thread.isRunning():
+            self._thread.start()
+
+    def schedule_post_show_tasks(self) -> None:
+        """First-run wizard after GUI is interactive."""
         if not self._settings.setup_completed:
-            self._run_setup_wizard()
+            QTimer.singleShot(0, self._run_setup_wizard)
 
     def _build_action_section(self) -> QWidget:
         box = QWidget()
@@ -538,7 +552,13 @@ def run_app(
         win = MainWindow(store=store, settings=settings)
 
         startup_log("[STARTUP 8] show window")
+        from arb_desktop.startup_crash import log_thread
+
+        log_thread("MAIN")
         win.show()
+        app.processEvents()
+        QTimer.singleShot(0, win.start_background_services)
+        QTimer.singleShot(0, win.schedule_post_show_tasks)
         return app.exec()
     except Exception as exc:
         import sys as _sys

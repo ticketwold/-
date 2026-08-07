@@ -37,12 +37,11 @@ class BridgeWorker(QObject):
     ready = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, store: SettingsStore) -> None:
+    def __init__(self, store: SettingsStore, *, app_settings: AppSettings | None = None) -> None:
         super().__init__()
         self._store = store
-        self._app_settings = store.load()
-        store.apply_to_runtime(self._app_settings)
-        self._pairing_store = store.pairing_store_from_settings(self._app_settings)
+        self._app_settings = app_settings
+        self._pairing_store = None
         self._runtime = None
         self._scanner: BetSlipScanner | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -52,8 +51,8 @@ class BridgeWorker(QObject):
         self._poll_task: asyncio.Task | None = None
         self._fx_task: asyncio.Task | None = None
         self._fx = BithumbFxProvider(
-            refresh_interval=self._app_settings.fx_refresh_seconds,
-            max_stale_seconds=self._app_settings.fx_max_stale_seconds,
+            refresh_interval=2.0,
+            max_stale_seconds=30.0,
         )
         self._fx_snapshot: FxSnapshot | None = None
         self._bridge_started = False
@@ -114,14 +113,24 @@ class BridgeWorker(QObject):
 
     @pyqtSlot()
     def bootstrap(self) -> None:
-        from arb_desktop.startup_crash import startup_log
+        from arb_desktop.startup_crash import is_gui_thread, log_thread, startup_log
 
+        if is_gui_thread():
+            startup_log("[WARNING] Bridge bootstrap invoked on MAIN (GUI) thread")
+        log_thread("BRIDGE")
         startup_log("[STARTUP 6] start Bridge")
+        if self._app_settings is None:
+            self._app_settings = self._store.load()
+        self._store.apply_to_runtime(self._app_settings)
+        self._pairing_store = self._store.pairing_store_from_settings(self._app_settings)
+        self._fx._refresh_interval = self._app_settings.fx_refresh_seconds
+        self._fx._max_stale_seconds = self._app_settings.fx_max_stale_seconds
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._start_bridge())
             startup_log("[STARTUP 7] start FX worker")
+            log_thread("FX")
             self.ready.emit()
         except Exception as exc:
             startup_log(f"[STARTUP 6] Bridge failed: {type(exc).__name__}: {exc}")
@@ -131,6 +140,7 @@ class BridgeWorker(QObject):
             if not self._fx_task:
                 try:
                     startup_log("[STARTUP 7] start FX worker (degraded)")
+                    log_thread("FX")
                     self._fx_task = asyncio.create_task(self._fx_loop())
                 except Exception as fx_exc:
                     startup_log(f"[STARTUP 7] FX failed: {type(fx_exc).__name__}: {fx_exc}")
@@ -277,6 +287,10 @@ class BridgeWorker(QObject):
             on_debug=on_debug,
         )
         self._runtime.manager.on_stake_input_changed = on_stake_input_changed
+        from arb_desktop.startup_crash import log_thread, startup_log
+
+        startup_log("[STARTUP 9] start Scanner")
+        log_thread("SCANNER")
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()
         self._bridge_started = True
