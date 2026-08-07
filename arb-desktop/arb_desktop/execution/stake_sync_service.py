@@ -126,16 +126,30 @@ class StakeSyncService:
         metrics: OddsOnlyMetrics,
         settings: AppSettings,
     ) -> StakeSyncStatus:
+        elog = get_exec_logger()
+        elog.begin_stake_sync()
+
         if not settings.stake_sync_enabled:
+            elog.stake_step("CALCULATE", ok=False, reason="stake_sync_disabled")
             self.last_status = StakeSyncStatus(state=StakeSyncState.IDLE, message="OFF")
             return self.last_status
 
         target = float(metrics.bc_stake_usdt)
-        get_exec_logger().log("BC STAKE", step="CALCULATE", requested=target, x10_odds=metrics.bti_odds, bc_odds=metrics.bc_odds)
-        get_exec_logger().log("BC STAKE", step="SEND_STAKE", requested=target)
+        elog.stake_step(
+            "CALCULATE",
+            ok=True,
+            reason="ok",
+            requested=f"{target:.4f}",
+            x10_odds=metrics.bti_odds,
+            bc_odds=metrics.bc_odds,
+        )
+
         if self._last_target is not None and abs(self._last_target - target) < 0.05:
             if self.last_status.state == StakeSyncState.OK and self.last_status.actual_usdt is not None:
                 if abs(self.last_status.actual_usdt - target) <= 0.15:
+                    for step in ("SEND", "CONTENT_RX", "INPUT_FOUND", "WRITE", "VERIFY"):
+                        elog.stake_step(step, ok=True, reason="skipped unchanged")
+                    elog.stake_step("ACK", ok=True, reason="skipped unchanged")
                     return self.last_status
 
         self._last_target = target
@@ -144,53 +158,46 @@ class StakeSyncService:
             calculated_usdt=target,
             message="동기화 중...",
         )
-        get_exec_logger().log("SYNC_BC_STAKE", requested=target)
 
-        write: CommandResult = await server.send_command(
-            "bc",
-            "set_bc_stake",
-            amount_usdt=target,
-        )
-        ack_ok = bool(write.ok and write.actual is not None)
+        try:
+            write: CommandResult = await server.send_command(
+                "bc",
+                "set_bc_stake",
+                amount_usdt=target,
+            )
+            elog.stake_step("SEND", ok=True, reason="set_bc_stake sent", requested=f"{target:.4f}")
+        except Exception as exc:
+            elog.stake_step("SEND", ok=False, reason=str(exc))
+            self.last_status = StakeSyncStatus(
+                state=StakeSyncState.FAILED,
+                calculated_usdt=target,
+                reason="command-timeout",
+                message=str(exc),
+            )
+            return self.last_status
+
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
         reason = normalize_reason(write.reason or write.error or "")
         verify = debug.get("verify") if isinstance(debug, dict) else {}
         checks = verify.get("checks") if isinstance(verify, dict) else {}
         if not isinstance(checks, dict):
             checks = {}
-        get_exec_logger().log(
-            "BC STAKE",
-            step="CONTENT_SCRIPT_RX",
-            requested=target,
-            actual=write.actual,
-        )
-        input_found = bool(debug.get("selected_selector") if isinstance(debug, dict) else False) or write.ok
-        get_exec_logger().log(
-            "BC STAKE",
-            input_found=input_found,
-            before=debug.get("before_value") if isinstance(debug, dict) else None,
-        )
-        get_exec_logger().log(
-            "BC STAKE",
-            step="WRITE",
-            after=write.actual,
-        )
-        get_exec_logger().log(
-            "BC STAKE",
-            step="VERIFY",
-            verify=write.actual,
-            ms50=checks.get("50ms"),
-            ms100=checks.get("100ms"),
-            ms250=checks.get("250ms"),
-        )
-        get_exec_logger().log(
-            "BC STAKE",
-            success=ack_ok,
-            requested=target,
+
+        elog.stake_step(
+            "CONTENT_RX",
+            ok=True,
+            reason=write.reason or write.error or "ok",
             actual=write.actual,
         )
 
-        if not write.ok:
+        input_found = bool(debug.get("selected_selector") if isinstance(debug, dict) else False) or write.ok
+        if not input_found:
+            elog.stake_step(
+                "INPUT_FOUND",
+                ok=False,
+                reason=reason or "stake-input-not-found",
+                before=debug.get("before_value") if isinstance(debug, dict) else None,
+            )
             state = StakeSyncState.INPUT_NOT_FOUND if reason == "input-not-found" else StakeSyncState.FAILED
             self.last_status = StakeSyncStatus(
                 state=state,
@@ -200,11 +207,32 @@ class StakeSyncService:
                 message=_reason_message(reason),
                 debug=debug if isinstance(debug, dict) else {},
             )
-            get_exec_logger().log("VERIFY_BC_STAKE", actual=write.actual, ok=False, reason=reason)
+            return self.last_status
+
+        elog.stake_step(
+            "INPUT_FOUND",
+            ok=True,
+            reason="ok",
+            selector=debug.get("selected_selector") if isinstance(debug, dict) else None,
+            before=debug.get("before_value") if isinstance(debug, dict) else None,
+        )
+
+        if not write.ok:
+            elog.stake_step("WRITE", ok=False, reason=reason or "write failed", after=write.actual)
+            state = StakeSyncState.INPUT_NOT_FOUND if reason == "input-not-found" else StakeSyncState.FAILED
+            self.last_status = StakeSyncStatus(
+                state=state,
+                calculated_usdt=target,
+                actual_usdt=write.actual,
+                reason=reason,
+                message=_reason_message(reason),
+                debug=debug if isinstance(debug, dict) else {},
+            )
             return self.last_status
 
         actual = write.actual
         if actual is None:
+            elog.stake_step("WRITE", ok=False, reason="no actual value returned")
             self.last_status = StakeSyncStatus(
                 state=StakeSyncState.INPUT_NOT_FOUND,
                 calculated_usdt=target,
@@ -213,26 +241,66 @@ class StakeSyncService:
                 message="input-not-found",
                 debug=debug if isinstance(debug, dict) else {},
             )
-            get_exec_logger().log("VERIFY_BC_STAKE", actual=None, ok=False, reason="input-not-found")
             return self.last_status
 
+        elog.stake_step("WRITE", ok=True, reason="ok", after=f"{actual:.4f}")
+
         ok = abs(actual - target) <= 0.15
+        elog.stake_step(
+            "VERIFY",
+            ok=ok,
+            reason=reason or ("ok" if ok else "value-not-applied"),
+            verify=f"{actual:.4f}",
+            requested=f"{target:.4f}",
+            ms50=checks.get("50ms"),
+            ms100=checks.get("100ms"),
+            ms250=checks.get("250ms"),
+        )
+        if not ok:
+            self.last_status = StakeSyncStatus(
+                state=StakeSyncState.FAILED,
+                calculated_usdt=target,
+                actual_usdt=actual,
+                reason=reason or "value-not-applied",
+                message=_reason_message(reason or "value-not-applied"),
+                debug=debug if isinstance(debug, dict) else {},
+            )
+            return self.last_status
+
+        elog.stake_step("ACK", ok=True, reason="stake sync complete", actual=f"{actual:.4f}")
         self.last_status = StakeSyncStatus(
-            state=StakeSyncState.OK if ok else StakeSyncState.FAILED,
+            state=StakeSyncState.OK,
             calculated_usdt=target,
             actual_usdt=actual,
-            reason=reason or ("ok" if ok else "value-not-applied"),
-            message="동기화 완료" if ok else _reason_message(reason or "value-not-applied"),
+            reason=reason or "ok",
+            message="동기화 완료",
             debug=debug if isinstance(debug, dict) else {},
         )
-        get_exec_logger().log("VERIFY_BC_STAKE", actual=actual, ok=ok, reason=self.last_status.reason)
         return self.last_status
 
     async def scan_bc_stake(self, *, server) -> StakeSyncStatus:
-        scan: CommandResult = await server.send_command("bc", "scan_bc_stake")
+        elog = get_exec_logger()
+        elog.begin_stake_sync()
+        elog.stake_step("CALCULATE", ok=True, reason="scan mode")
+
+        try:
+            scan: CommandResult = await server.send_command("bc", "scan_bc_stake")
+            elog.stake_step("SEND", ok=True, reason="scan_bc_stake sent")
+        except Exception as exc:
+            elog.stake_step("SEND", ok=False, reason=str(exc))
+            self.last_status = StakeSyncStatus(state=StakeSyncState.FAILED, reason=str(exc))
+            return self.last_status
+
         debug = scan.raw.get("debug") if isinstance(scan.raw.get("debug"), dict) else scan.raw
         found = bool(scan.raw.get("found")) or bool(scan.ok and scan.raw.get("selector"))
         reason = scan.reason or scan.error or ("ok" if found else "stake-input-not-found")
+
+        elog.stake_step("CONTENT_RX", ok=True, reason=reason)
+        elog.stake_step("INPUT_FOUND", ok=found, reason=reason if not found else "ok")
+        elog.stake_step("WRITE", ok=True, reason="skipped scan")
+        elog.stake_step("VERIFY", ok=True, reason="skipped scan")
+        elog.stake_step("ACK", ok=found, reason=reason if not found else "scan complete")
+
         self.last_status = StakeSyncStatus(
             state=StakeSyncState.OK if found else StakeSyncState.INPUT_NOT_FOUND,
             actual_usdt=scan.actual,
@@ -251,16 +319,35 @@ class StakeSyncService:
         return self.last_status
 
     async def test_bc_stake(self, *, server, amount_usdt: float) -> StakeSyncStatus:
+        elog = get_exec_logger()
+        elog.begin_stake_sync()
         target = max(0.1, round(float(amount_usdt), 1))
-        write: CommandResult = await server.send_command(
-            "bc",
-            "set_bc_stake",
-            amount_usdt=target,
-            test=True,
-        )
+        elog.stake_step("CALCULATE", ok=True, reason="test mode", requested=f"{target:.4f}")
+
+        try:
+            write: CommandResult = await server.send_command(
+                "bc",
+                "set_bc_stake",
+                amount_usdt=target,
+                test=True,
+            )
+            elog.stake_step("SEND", ok=True, reason="test set_bc_stake sent")
+        except Exception as exc:
+            elog.stake_step("SEND", ok=False, reason=str(exc))
+            self.last_status = StakeSyncStatus(state=StakeSyncState.FAILED, reason=str(exc))
+            return self.last_status
+
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
         reason = write.reason or write.error or "stake-input-not-found"
         ok = bool(write.ok and write.actual is not None)
+
+        elog.stake_step("CONTENT_RX", ok=True, reason=reason)
+        input_found = bool(debug.get("selected_selector") if isinstance(debug, dict) else False) or write.ok
+        elog.stake_step("INPUT_FOUND", ok=input_found, reason=reason if not input_found else "ok")
+        elog.stake_step("WRITE", ok=ok, reason=reason if not ok else "ok", after=write.actual)
+        elog.stake_step("VERIFY", ok=ok, reason=reason if not ok else "ok", actual=write.actual)
+        elog.stake_step("ACK", ok=ok, reason=reason if not ok else "test complete")
+
         self.last_status = StakeSyncStatus(
             state=StakeSyncState.OK if ok else StakeSyncState.INPUT_NOT_FOUND if "not-found" in reason else StakeSyncState.FAILED,
             calculated_usdt=target,
