@@ -184,6 +184,15 @@ class X10DebugPanel(QWidget):
         injected = payload.get("injected_frames")
         if injected is not None:
             self.lbl_injected.setText(str(injected))
+        trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else None
+        if trace:
+            lines = [f"{k}={v}" for k, v in trace.items() if k != "injected_frame_urls"]
+            self.txt_slip_inner.setPlainText("\n".join(lines))
+        urls = payload.get("injected_frame_urls") or (trace or {}).get("injected_frame_urls") or []
+        if urls:
+            url_text = "\n".join(str(u) for u in urls)
+            prev = self.txt_slip_inner.toPlainText()
+            self.txt_slip_inner.setPlainText((prev + "\n\n[frame urls]\n" + url_text).strip())
         self.lbl_document_location.setText(str(payload.get("document_location") or payload.get("frame_url") or "—"))
         self.lbl_frame_depth.setText(str(payload.get("frame_depth", "—")))
         self.lbl_document_ready.setText(str(payload.get("document_ready") or "—"))
