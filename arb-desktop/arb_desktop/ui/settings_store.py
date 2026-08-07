@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import secrets
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from arb_desktop.bridge.pairing_store import PairingStore
+
+logger = logging.getLogger(__name__)
+
+# AppSettings field -> runtime Settings (config.py) field
+RUNTIME_SETTINGS_MAP: dict[str, str] = {
+    "bridge_host": "bridge_host",
+    "bridge_port": "bridge_port",
+    "bridge_pair_port": "bridge_pair_port",
+    "bridge_credential": "bridge_token",
+    "bti_stake_krw": "default_bti_stake_krw",
+    "target_profit_pct": "min_profit_pct",
+    "usdt_rate": "default_usdt_rate",
+    "dry_run": "dry_run",
+    "live_execution_enabled": "live_execution_enabled",
+    "parallel_execution_enabled": "parallel_execution_enabled",
+}
 
 
 def _default_data_dir() -> Path:
@@ -69,9 +86,37 @@ class SettingsStore:
             settings.ensure_credential()
             self.save(settings)
             return settings
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("settings.json unreadable (%s) — using defaults", exc)
+            settings = AppSettings()
+            settings.ensure_credential()
+            return settings
+        if not isinstance(raw, dict):
+            logger.warning("settings.json is not an object — using defaults")
+            settings = AppSettings()
+            settings.ensure_credential()
+            return settings
         migrated = self._migrate(raw)
-        settings = AppSettings(**{k: v for k, v in migrated.items() if k in AppSettings.__dataclass_fields__})
+        known = AppSettings.__dataclass_fields__
+        filtered: dict = {}
+        for key, value in migrated.items():
+            if key in known:
+                filtered[key] = value
+            else:
+                logger.warning("Ignoring unknown settings key: %s", key)
+        try:
+            settings = AppSettings(**filtered)
+        except TypeError as exc:
+            logger.warning("settings.json partial apply failed (%s) — using defaults + valid keys", exc)
+            settings = AppSettings()
+            for key, value in filtered.items():
+                if key in known:
+                    try:
+                        setattr(settings, key, value)
+                    except (TypeError, ValueError):
+                        logger.warning("Skipping invalid settings value for %s", key)
         settings.ensure_credential()
         if migrated != raw:
             self.save(settings)
@@ -86,6 +131,10 @@ class SettingsStore:
             data.pop("token_file", None)
         if data.get("round_unit_usdt") == 0.01:
             data["round_unit_usdt"] = 0.1
+        # Execution defaults for older settings.json without these keys
+        data.setdefault("parallel_execution_enabled", False)
+        data.setdefault("live_execution_enabled", False)
+        data.setdefault("stake_sync_enabled", True)
         return data
 
     def save(self, settings: AppSettings) -> None:
@@ -124,15 +173,22 @@ class SettingsStore:
         return store
 
     def apply_to_runtime(self, settings: AppSettings) -> None:
-        from arb_desktop.config import settings as runtime
+        from arb_desktop.config import Settings, settings as runtime
 
-        runtime.bridge_host = settings.bridge_host
-        runtime.bridge_port = settings.bridge_port
-        runtime.bridge_pair_port = settings.bridge_pair_port
-        runtime.bridge_token = settings.bridge_credential
-        runtime.default_bti_stake_krw = settings.bti_stake_krw
-        runtime.min_profit_pct = settings.target_profit_pct
-        runtime.default_usdt_rate = settings.usdt_rate
-        runtime.dry_run = settings.dry_run
-        runtime.live_execution_enabled = settings.live_execution_enabled
-        runtime.parallel_execution_enabled = settings.parallel_execution_enabled or settings.live_execution_enabled
+        allowed = set(Settings.model_fields.keys())
+        updates: dict[str, object] = {}
+        for app_key, runtime_key in RUNTIME_SETTINGS_MAP.items():
+            if runtime_key not in allowed:
+                logger.warning("Runtime Settings missing field %s — skip", runtime_key)
+                continue
+            updates[runtime_key] = getattr(settings, app_key)
+        # Keep parallel flag in sync when only live_execution is set in older configs
+        if settings.live_execution_enabled and not settings.parallel_execution_enabled:
+            updates["parallel_execution_enabled"] = True
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            try:
+                object.__setattr__(runtime, key, value)
+            except (ValueError, TypeError) as exc:
+                logger.warning("Failed to apply runtime setting %s: %s", key, exc)
