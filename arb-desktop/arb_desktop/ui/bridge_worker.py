@@ -209,6 +209,12 @@ class BridgeWorker(QObject):
             settings=self._app_settings,
             fx=self._fx_snapshot,
         )
+        self._watch_engine.enrich_ui_context(
+            metrics,
+            settings=self._app_settings,
+            bridge_connected=self._runtime.manager.bridge_connected,
+            user_confirmed=self._user_confirmed,
+        )
         self.live_metrics.emit(metrics)
 
     async def _evaluate_watch(self) -> None:
@@ -324,6 +330,13 @@ class BridgeWorker(QObject):
 
     def _emit_watch_state(self, metrics: WatchMetrics | None = None, err: str | None = None) -> None:
         m = metrics or self._watch_engine.metrics
+        if self._runtime:
+            self._watch_engine.enrich_ui_context(
+                m,
+                settings=self._app_settings,
+                bridge_connected=self._runtime.manager.bridge_connected,
+                user_confirmed=self._user_confirmed,
+            )
         msg = m.message or err or ""
         self.watch_state.emit(self._watch_engine.state.value, m, msg)
 

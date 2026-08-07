@@ -10,7 +10,6 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -27,32 +26,16 @@ from PyQt6.QtWidgets import (
 
 from arb_desktop.bridge.instance_lock import ensure_single_instance
 from arb_desktop.bridge.message_models import BridgeConnectionState, BridgeStatus
-from arb_desktop.ui.betting_info_card import BettingInfoPanel
 from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
 from arb_desktop.ui.log_window import LogWindow
+from arb_desktop.ui.monitor_dashboard import MonitorDashboard
 from arb_desktop.ui.settings_dialog import SettingsDialog
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.setup_wizard import SetupWizard
 from arb_desktop.ui.theme_manager import apply_theme
 from arb_desktop.ui.watch_engine import WatchMetrics
 from arb_desktop.ui.x10_debug_panel import X10DebugPanel
-
-
-STATE_DISPLAY: dict[str, str] = {
-    "IDLE": "IDLE",
-    "TARGET WAIT": "목표 수익률 대기",
-    "STABILIZING": "배당 안정화 중",
-    "READY": "자동배팅 준비 완료",
-    "AUTO BET WAIT": "자동배팅 대기",
-    "BET TYPE MISMATCH": "배팅 타입 불일치",
-    "PREPARING": "동시 배팅 준비",
-    "DISPATCHING": "양쪽 배팅 동시 전송 중",
-    "VERIFYING RESULT": "결과 확인",
-    "SUCCESS": "SUCCESS",
-    "PARTIAL BET": "일부 배팅 성공 — 수동 확인 필요",
-    "FAILED": "FAILED",
-}
 
 
 def _chrome_bridge_dir() -> Path:
@@ -74,7 +57,7 @@ class _VerticalScrollArea(QScrollArea):
         self._sync_content_width()
 
     def _sync_content_width(self) -> None:
-        width = max(self.viewport().width(), 720)
+        width = max(self.viewport().width(), 800)
         self._content.setFixedWidth(width)
         self._content.adjustSize()
         self._content.setMinimumHeight(self._content.sizeHint().height())
@@ -87,9 +70,9 @@ class _VerticalScrollArea(QScrollArea):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("arb-desktop — 양방 배팅")
-        self.setMinimumSize(720, 480)
-        self.resize(960, 640)
+        self.setWindowTitle("arb-desktop — 실시간 양방 모니터")
+        self.setMinimumSize(800, 600)
+        self.resize(1040, 780)
 
         self._store = SettingsStore()
         self._settings = self._store.load()
@@ -98,6 +81,7 @@ class MainWindow(QMainWindow):
         self._log_window: LogWindow | None = None
         self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
         self._log_collapsed = True
+        self._current_state = "IDLE"
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -110,13 +94,12 @@ class MainWindow(QMainWindow):
         dash = QVBoxLayout(dashboard)
         dash.setSpacing(10)
         dash.addWidget(self._build_top_status())
-        dash.addWidget(self._build_betting_panel())
-        dash.addWidget(self._build_profit_panel())
-        dash.addWidget(self._build_engine_panel())
-        dash.addWidget(self._build_action_bar())
+        self.monitor = MonitorDashboard()
+        dash.addWidget(self.monitor)
+        dash.addWidget(self._build_action_section())
 
         scroll = _VerticalScrollArea(dashboard)
-        self.tabs.addTab(scroll, "메인")
+        self.tabs.addTab(scroll, "모니터")
         self.x10_debug_panel = X10DebugPanel()
         self.tabs.addTab(self.x10_debug_panel, "Debug")
 
@@ -146,7 +129,7 @@ class MainWindow(QMainWindow):
             self._run_setup_wizard()
 
     def _build_top_status(self) -> QGroupBox:
-        box = QGroupBox("연결")
+        box = QGroupBox("연결 상태")
         row = QHBoxLayout(box)
         small = QFont()
         small.setPointSize(10)
@@ -157,6 +140,7 @@ class MainWindow(QMainWindow):
         self.lbl_extension = QLabel("확장: —")
         for lbl in (self.lbl_bridge, self.lbl_bc_tab, self.lbl_x10_tab, self.lbl_fx_chip, self.lbl_extension):
             lbl.setFont(small)
+            lbl.setProperty("class", "conn-chip")
             row.addWidget(lbl)
         row.addStretch()
         self.btn_repair = QPushButton("페어링")
@@ -165,80 +149,14 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_reset_conn)
         return box
 
-    def _build_betting_panel(self) -> BettingInfoPanel:
-        self.betting_panel = BettingInfoPanel()
-        return self.betting_panel
-
-    def _build_profit_panel(self) -> QGroupBox:
-        box = QGroupBox("수익 / 배당")
-        grid = QGridLayout(box)
-        hero = QFont()
-        hero.setPointSize(22)
-        hero.setWeight(QFont.Weight.Bold)
-        muted = QFont()
-        muted.setPointSize(10)
-
-        self.lbl_current_rate = QLabel("—")
-        self.lbl_current_rate.setFont(hero)
-        self.lbl_current_rate.setProperty("class", "hero")
-        self.lbl_bti_odds = QLabel("—")
-        self.lbl_bc_odds = QLabel("—")
-        self.lbl_bc_stake = QLabel("—")
-        self.lbl_total_stake = QLabel("—")
-        self.lbl_min_profit = QLabel("—")
-        self.lbl_target_delta = QLabel("—")
-        for lbl in (self.lbl_bti_odds, self.lbl_bc_odds, self.lbl_bc_stake):
-            lbl.setProperty("class", "metric")
-
-        grid.addWidget(QLabel("현재 수익률"), 0, 0)
-        grid.addWidget(self.lbl_current_rate, 0, 1)
-        grid.addWidget(QLabel("텐텐벳 배당"), 1, 0)
-        grid.addWidget(self.lbl_bti_odds, 1, 1)
-        grid.addWidget(QLabel("BC 배당"), 1, 2)
-        grid.addWidget(self.lbl_bc_odds, 1, 3)
-        grid.addWidget(QLabel("BC 금액"), 2, 0)
-        grid.addWidget(self.lbl_bc_stake, 2, 1)
-        grid.addWidget(QLabel("총 배팅금"), 2, 2)
-        grid.addWidget(self.lbl_total_stake, 2, 3)
-        grid.addWidget(QLabel("최저 보장 수익"), 3, 0)
-        grid.addWidget(self.lbl_min_profit, 3, 1)
-        grid.addWidget(QLabel("목표까지"), 3, 2)
-        grid.addWidget(self.lbl_target_delta, 3, 3)
-        self.lbl_fx_detail = QLabel("")
-        self.lbl_fx_detail.setFont(muted)
-        self.lbl_fx_detail.setProperty("class", "muted")
-        grid.addWidget(self.lbl_fx_detail, 4, 0, 1, 4)
-        return box
-
-    def _build_engine_panel(self) -> QGroupBox:
-        box = QGroupBox("자동배팅 상태")
+    def _build_action_section(self) -> QWidget:
+        box = QGroupBox("자동배팅 제어")
         layout = QVBoxLayout(box)
-        self.lbl_engine_state = QLabel("IDLE")
-        f = QFont()
-        f.setPointSize(18)
-        f.setWeight(QFont.Weight.Bold)
-        self.lbl_engine_state.setFont(f)
-        self.lbl_engine_msg = QLabel("")
-        self.lbl_dispatch_note = QLabel("")
-        self.lbl_dispatch_note.setWordWrap(True)
-        self.lbl_dispatch_note.setProperty("class", "muted")
-        self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 확인했습니다")
-        self.lbl_last_log = QLabel("—")
-        self.lbl_last_log.setWordWrap(True)
-        self.lbl_last_log.setProperty("class", "muted")
-        self.btn_toggle_log = QPushButton("로그 펼치기")
-        layout.addWidget(self.lbl_engine_state)
-        layout.addWidget(self.lbl_engine_msg)
-        layout.addWidget(self.lbl_dispatch_note)
-        layout.addWidget(self.chk_confirm)
-        layout.addWidget(self.btn_toggle_log)
-        layout.addWidget(self.lbl_last_log)
-        self.lbl_last_log.setVisible(False)
-        return box
 
-    def _build_action_bar(self) -> QWidget:
-        w = QWidget()
-        row = QHBoxLayout(w)
+        self.chk_confirm = QCheckBox("양쪽 카트가 서로 반대 선택임을 확인했습니다")
+        layout.addWidget(self.chk_confirm)
+
+        row = QHBoxLayout()
         self.btn_watch_start = QPushButton("자동감시 시작")
         self.btn_watch_start.setProperty("class", "primary")
         self.btn_watch_stop = QPushButton("중지")
@@ -259,7 +177,18 @@ class MainWindow(QMainWindow):
             self.btn_quit,
         ):
             row.addWidget(btn)
-        return w
+        layout.addLayout(row)
+
+        log_row = QHBoxLayout()
+        self.btn_toggle_log = QPushButton("로그 펼치기")
+        self.lbl_last_log = QLabel("—")
+        self.lbl_last_log.setWordWrap(True)
+        self.lbl_last_log.setProperty("class", "muted")
+        self.lbl_last_log.setVisible(False)
+        log_row.addWidget(self.btn_toggle_log)
+        log_row.addWidget(self.lbl_last_log, 1)
+        layout.addLayout(log_row)
+        return box
 
     def _wire_buttons(self) -> None:
         self.btn_reconnect.clicked.connect(self._worker.reconnect)
@@ -276,7 +205,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_settings_labels(self) -> None:
         s = self._settings
-        self.lbl_fx_detail.setText(
+        self.status.showMessage(
             f"목표 {s.target_profit_pct:.2f}% · 텐텐벳 {s.bti_stake_krw:,} KRW · "
             f"안정화 {s.stabilize_seconds:.1f}s × {s.stable_count_required}"
         )
@@ -333,8 +262,7 @@ class MainWindow(QMainWindow):
         self._refresh_settings_labels()
 
     def _on_live_metrics(self, m: WatchMetrics) -> None:
-        self.betting_panel.update_metrics(m)
-        self._apply_metrics(m)
+        self.monitor.update_all(m, state=self._current_state)
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
 
@@ -346,21 +274,10 @@ class MainWindow(QMainWindow):
         self.x10_debug_panel.update_from_payload(payload)
 
     def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
-        self.lbl_engine_state.setText(STATE_DISPLAY.get(state, state))
-        self.lbl_engine_msg.setText(message)
-        self.lbl_dispatch_note.setText(metrics.dispatch_note)
-        self.betting_panel.update_metrics(metrics)
-        self._apply_metrics(metrics)
-        css = ""
-        if state in ("PARTIAL BET", "FAILED", "BET TYPE MISMATCH"):
-            css = "status-bad"
-        elif state == "READY":
-            css = "status-ok"
-        elif state in ("AUTO BET WAIT", "STABILIZING", "TARGET WAIT"):
-            css = "status-warn"
-        self.lbl_engine_state.setProperty("class", css)
-        self.lbl_engine_state.style().unpolish(self.lbl_engine_state)
-        self.lbl_engine_state.style().polish(self.lbl_engine_state)
+        self._current_state = state
+        self.monitor.update_all(metrics, state=state, message=message)
+        if metrics.x10_parse_debug:
+            self.x10_debug_panel.update_parse_debug(metrics.x10_parse_debug)
 
     def _on_worker_log(self, site: str, status: str, odds: str, profit: str, message: str, dedup: str) -> None:
         self._log.log(site=site, status=status, odds=odds, profit=profit, message=message, dedup_key=dedup)
@@ -373,23 +290,6 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, msg: str) -> None:
         self.status.showMessage(f"오류: {msg}")
-
-    def _apply_metrics(self, m: WatchMetrics) -> None:
-        self.lbl_bti_odds.setText(f"{m.bti_odds:.3f}" if m.bti_odds else "—")
-        self.lbl_bc_odds.setText(f"{m.bc_odds:.3f}" if m.bc_odds else "—")
-        self.lbl_bc_stake.setText(f"{m.bc_stake_usdt:.1f} USDT" if m.bc_stake_usdt else "—")
-        self.lbl_total_stake.setText(f"{m.total_stake_krw:,.0f} KRW" if m.total_stake_krw else "—")
-        self.lbl_min_profit.setText(f"{m.min_guaranteed_profit_krw:,.0f} KRW" if m.total_stake_krw else "—")
-        if m.total_stake_krw:
-            self.lbl_current_rate.setText(f"{m.current_profit_rate:.2f} %")
-            delta = m.target_delta_pct
-            sign = "+" if delta >= 0 else ""
-            self.lbl_target_delta.setText(f"{sign}{delta:.2f}%p")
-        else:
-            self.lbl_current_rate.setText("—")
-            self.lbl_target_delta.setText("—")
-        if m.fx_rate:
-            self.lbl_fx_chip.setText(f"FX: {m.fx_rate:,.0f}")
 
     def _request_metrics_refresh(self) -> None:
         self._worker.update_settings(self._settings)

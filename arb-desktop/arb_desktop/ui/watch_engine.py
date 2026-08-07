@@ -76,6 +76,17 @@ class WatchMetrics:
     bc_raw_market: str = "—"
     x10_parse_debug: dict[str, str] = field(default_factory=dict)
     message: str = ""
+    engine_state: str = "IDLE"
+    bti_odds_dir: int = 0
+    bc_odds_dir: int = 0
+    bti_odds_changed_at: str = ""
+    bc_odds_changed_at: str = ""
+    stable_count: int = 0
+    stable_count_required: int = 0
+    stabilize_elapsed: float = 0.0
+    stabilize_seconds: float = 0.0
+    bridge_connected: bool = False
+    user_confirmed: bool = False
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:
@@ -116,6 +127,8 @@ class WatchEngine:
     _stable_since: float | None = None
     _stable_count: int = 0
     _last_odds_key: str = ""
+    _prev_bti_odds: float | None = None
+    _prev_bc_odds: float | None = None
     _watching: bool = False
     _user_confirmed: bool = False
     _site_debounce: SiteStatusDebouncer = field(default_factory=SiteStatusDebouncer)
@@ -227,9 +240,33 @@ class WatchEngine:
             merged.line_label = self.metrics.line_label
             merged.verify_label = self.metrics.verify_label
             merged.bet_mismatch_kind = self.metrics.bet_mismatch_kind
+            merged.x10_raw_market = self.metrics.x10_raw_market
+            merged.bc_raw_market = self.metrics.bc_raw_market
+            merged.x10_parse_debug = self.metrics.x10_parse_debug
+            _track_odds_change(merged, self, bti_item.odds, bc_item.odds)
             self.metrics = merged
             self.metrics.message = ""
         return self.metrics
+
+    def enrich_ui_context(
+        self,
+        metrics: WatchMetrics,
+        *,
+        settings: AppSettings,
+        bridge_connected: bool,
+        user_confirmed: bool,
+    ) -> WatchMetrics:
+        metrics.engine_state = self.state.value
+        metrics.bridge_connected = bridge_connected
+        metrics.user_confirmed = user_confirmed
+        metrics.stable_count = self._stable_count
+        metrics.stable_count_required = settings.stable_count_required
+        metrics.stabilize_seconds = settings.stabilize_seconds
+        if self._stable_since is not None:
+            metrics.stabilize_elapsed = time.monotonic() - self._stable_since
+        else:
+            metrics.stabilize_elapsed = 0.0
+        return metrics
 
     def tick(
         self,
@@ -317,6 +354,13 @@ class WatchEngine:
         self.metrics.bc_site_label = site_label(bc_status)
         self.metrics.x10_site_label = site_label(x10_status)
         _populate_bet_metrics(self.metrics, bc, bti)
+        _track_odds_change(self.metrics, self, bti_item.odds, bc_item.odds)
+        self.enrich_ui_context(
+            self.metrics,
+            settings=settings,
+            bridge_connected=bridge_connected,
+            user_confirmed=user_confirmed,
+        )
 
         odds_key = f"{bc_item.odds:.4f}|{bti_item.odds:.4f}|{usdt_rate:.2f}|{calc.bc_stake_usdt:.2f}"
         if odds_key != self._last_odds_key:
@@ -426,6 +470,31 @@ def _validate_active_slips(bc: BetSlipReadResult, bti: BetSlipReadResult) -> str
     if not odds_in_range(bti.first.odds):
         return "텐텐벳 배당 없음"
     return None
+
+
+def _track_odds_change(
+    metrics: WatchMetrics,
+    engine: WatchEngine,
+    bti_odds: float | None,
+    bc_odds: float | None,
+) -> None:
+    now = _format_ts(time.time())
+    if bti_odds is not None:
+        if engine._prev_bti_odds is not None and abs(bti_odds - engine._prev_bti_odds) > 0.0001:
+            metrics.bti_odds_dir = 1 if bti_odds > engine._prev_bti_odds else -1
+            metrics.bti_odds_changed_at = now
+        else:
+            metrics.bti_odds_dir = getattr(engine.metrics, "bti_odds_dir", 0)
+            metrics.bti_odds_changed_at = getattr(engine.metrics, "bti_odds_changed_at", "")
+        engine._prev_bti_odds = bti_odds
+    if bc_odds is not None:
+        if engine._prev_bc_odds is not None and abs(bc_odds - engine._prev_bc_odds) > 0.0001:
+            metrics.bc_odds_dir = 1 if bc_odds > engine._prev_bc_odds else -1
+            metrics.bc_odds_changed_at = now
+        else:
+            metrics.bc_odds_dir = getattr(engine.metrics, "bc_odds_dir", 0)
+            metrics.bc_odds_changed_at = getattr(engine.metrics, "bc_odds_changed_at", "")
+        engine._prev_bc_odds = bc_odds
 
 
 def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: BetSlipReadResult) -> None:
