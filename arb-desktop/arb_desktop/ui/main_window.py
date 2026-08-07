@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QDoubleSpinBox,
     QStatusBar,
@@ -48,7 +49,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("arb-desktop — 양방 배팅 데스크톱")
-        self.resize(900, 680)
+        self.setMinimumSize(720, 420)
+        self.resize(900, 640)
 
         self._store = SettingsStore()
         self._settings = self._store.load()
@@ -65,13 +67,22 @@ class MainWindow(QMainWindow):
 
         dashboard = QWidget()
         dashboard_layout = QVBoxLayout(dashboard)
+        dashboard_layout.setContentsMargins(4, 4, 4, 4)
         dashboard_layout.addWidget(self._build_connection_group())
         dashboard_layout.addWidget(self._build_settings_group())
         dashboard_layout.addWidget(self._build_live_group())
         dashboard_layout.addWidget(self._build_state_group())
         dashboard_layout.addWidget(self._build_buttons_group())
         dashboard_layout.addWidget(self._build_log_preview())
-        self.tabs.addTab(dashboard, "메인")
+        dashboard_layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(dashboard)
+        self.tabs.addTab(scroll, "메인")
 
         self.x10_debug_panel = X10DebugPanel()
         self.tabs.addTab(self.x10_debug_panel, "Debug (x10)")
