@@ -6,6 +6,7 @@ import platform
 import secrets
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from arb_desktop.bridge.pairing_store import PairingStore
 
@@ -72,6 +73,34 @@ class AppSettings:
             self.bridge_credential = secrets.token_urlsafe(32)
 
 
+def _coerce_setting_value(key: str, value: Any) -> Any:
+    """Best-effort type coercion so legacy/invalid settings.json never crashes startup."""
+    if value is None:
+        return value
+    known = AppSettings.__dataclass_fields__
+    if key not in known:
+        return value
+    default = known[key].default
+    try:
+        if isinstance(default, bool):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(value)
+        if isinstance(default, int) and not isinstance(default, bool):
+            return int(value)
+        if isinstance(default, float):
+            return float(value)
+        if isinstance(default, str):
+            return str(value)
+        if isinstance(default, list):
+            return value if isinstance(value, list) else []
+    except (TypeError, ValueError):
+        return default
+    return value
+
+
 class SettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self.data_dir = _default_data_dir()
@@ -103,7 +132,7 @@ class SettingsStore:
         filtered: dict = {}
         for key, value in migrated.items():
             if key in known:
-                filtered[key] = value
+                filtered[key] = _coerce_setting_value(key, value)
             else:
                 logger.warning("Ignoring unknown settings key: %s", key)
         try:
@@ -135,6 +164,14 @@ class SettingsStore:
         data.setdefault("parallel_execution_enabled", False)
         data.setdefault("live_execution_enabled", False)
         data.setdefault("stake_sync_enabled", True)
+        # Legacy aliases from older builds / hand-edited JSON
+        if "watch_enabled" in data and "auto_resume_on_recovery" not in data:
+            pass
+        if data.get("manual_execution_confirmation") is not None and "manual_confirm_skip" not in data:
+            data["manual_confirm_skip"] = not bool(data.get("manual_execution_confirmation"))
+        data.pop("manual_execution_confirmation", None)
+        data.pop("watch_enabled", None)
+        data.pop("auto_resume_enabled", None)
         return data
 
     def save(self, settings: AppSettings) -> None:

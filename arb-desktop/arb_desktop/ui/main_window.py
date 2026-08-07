@@ -67,15 +67,26 @@ class _VerticalScrollArea(QScrollArea):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        store: SettingsStore | None = None,
+        settings: AppSettings | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("ARB DESKTOP")
         self.setMinimumSize(1280, 760)
         self.resize(1320, 860)
 
-        self._store = SettingsStore()
-        self._settings = self._store.load()
-        self._store.apply_to_runtime(self._settings)
+        self._store = store or SettingsStore()
+        self._settings = settings or self._store.load()
+        try:
+            self._store.apply_to_runtime(self._settings)
+        except Exception as exc:
+            from arb_desktop.startup_crash import startup_log
+
+            startup_log(f"[STARTUP 5] apply_to_runtime failed: {exc}")
+            raise
 
         self._log_window: LogWindow | None = None
         self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
@@ -405,7 +416,10 @@ class MainWindow(QMainWindow):
             self._log_window.append(entry.timestamp, entry.site, entry.status, entry.odds, entry.profit, entry.message)
 
     def _on_error(self, msg: str) -> None:
-        self.status.showMessage(f"오류: {msg}")
+        if msg.startswith("Bridge ERROR") or msg.startswith("FX ERROR"):
+            self.status.showMessage(msg)
+        else:
+            self.status.showMessage(f"오류: {msg}")
 
     def _request_metrics_refresh(self) -> None:
         self._worker.update_settings(self._settings)
@@ -493,22 +507,42 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def run_app() -> int:
-    lock = ensure_single_instance()
-    if not lock.ok:
+def run_app(
+    *,
+    preloaded_store: SettingsStore | None = None,
+    preloaded_settings: AppSettings | None = None,
+) -> int:
+    from arb_desktop.startup_crash import record_crash, show_crash_dialog, startup_log
+
+    try:
+        lock = ensure_single_instance()
+        if not lock.ok:
+            startup_log("[STARTUP 4] create QApplication (single-instance block)")
+            app = QApplication(sys.argv)
+            QMessageBox.warning(None, "arb-desktop", lock.message)
+            return 1
+
+        startup_log("[STARTUP 4] create QApplication")
+        QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
         app = QApplication(sys.argv)
-        QMessageBox.warning(None, "arb-desktop", lock.message)
+        app.setApplicationName("arb-desktop")
+        app.setStyle("Fusion")
+
+        store = preloaded_store or SettingsStore()
+        settings = preloaded_settings or store.load()
+        if preloaded_store is None:
+            store.apply_to_runtime(settings)
+        apply_theme(app, settings.ui_theme)
+
+        startup_log("[STARTUP 5] create MainWindow")
+        win = MainWindow(store=store, settings=settings)
+
+        startup_log("[STARTUP 8] show window")
+        win.show()
+        return app.exec()
+    except Exception as exc:
+        import sys as _sys
+
+        log_path = record_crash(exc, stage="run_app", tb=_sys.exc_info()[2])
+        show_crash_dialog(exc, log_path, stage="run_app")
         return 1
-
-    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    app = QApplication(sys.argv)
-    app.setApplicationName("arb-desktop")
-    app.setStyle("Fusion")
-
-    store = SettingsStore()
-    settings = store.load()
-    apply_theme(app, settings.ui_theme)
-
-    win = MainWindow()
-    win.show()
-    return app.exec()

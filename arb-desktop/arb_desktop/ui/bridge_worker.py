@@ -114,17 +114,37 @@ class BridgeWorker(QObject):
 
     @pyqtSlot()
     def bootstrap(self) -> None:
+        from arb_desktop.startup_crash import startup_log
+
+        startup_log("[STARTUP 6] start Bridge")
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._start_bridge())
+            startup_log("[STARTUP 7] start FX worker")
             self.ready.emit()
+        except Exception as exc:
+            startup_log(f"[STARTUP 6] Bridge failed: {type(exc).__name__}: {exc}")
+            self.error.emit(f"Bridge ERROR: {exc}")
+            self._watch_engine.set_idle()
+            self._emit_watch_state()
+            if not self._fx_task:
+                try:
+                    startup_log("[STARTUP 7] start FX worker (degraded)")
+                    self._fx_task = asyncio.create_task(self._fx_loop())
+                except Exception as fx_exc:
+                    startup_log(f"[STARTUP 7] FX failed: {type(fx_exc).__name__}: {fx_exc}")
+                    self.error.emit(f"FX ERROR: {fx_exc}")
+        try:
             self._loop.run_forever()
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
             if self._runtime and self._loop:
-                self._loop.run_until_complete(self._runtime.stop())
+                try:
+                    self._loop.run_until_complete(self._runtime.stop())
+                except Exception:
+                    pass
             if self._loop:
                 self._loop.close()
 
@@ -274,11 +294,12 @@ class BridgeWorker(QObject):
                     self._app_settings.usdt_rate = snap.rate
                 self.fx_updated.emit(snap)
                 self._emit_live_metrics()
-                asyncio.run_coroutine_threadsafe(self._maybe_stake_sync(), self._loop)
+                if self._loop:
+                    asyncio.run_coroutine_threadsafe(self._maybe_stake_sync(), self._loop)
                 if self._watching:
                     await self._evaluate_watch()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.error.emit(f"FX ERROR: {exc}")
             await asyncio.sleep(self._app_settings.fx_refresh_seconds)
 
     async def _poll_loop(self) -> None:

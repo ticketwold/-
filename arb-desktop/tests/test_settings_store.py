@@ -129,7 +129,7 @@ def test_main_window_init_offscreen(tmp_path, monkeypatch) -> None:
         mock_cls.return_value = store
         from arb_desktop.ui.main_window import MainWindow
 
-        win = MainWindow()
+        win = MainWindow(store=store, settings=store.load())
         assert win._settings is not None
         win.close()
         app.processEvents()
