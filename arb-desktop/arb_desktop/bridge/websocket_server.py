@@ -142,10 +142,31 @@ class BridgeWebSocketServer:
             self._manager.apply_status_message(StatusMessage.model_validate(data))
             return
         if msg_type == "slip_update":
+            item = (data.get("result") or {}).get("items") or []
+            first = item[0] if item else {}
+            logger.info(
+                "[PYTHON RX] type=%s site=%s tab_id=%s frame_id=%s frame_url=%s status=%s odds=%s slip_count=%s",
+                msg_type,
+                data.get("site"),
+                data.get("tab_id"),
+                data.get("frame_id"),
+                data.get("frame_url"),
+                first.get("status") or (data.get("result") or {}).get("parsed_status"),
+                first.get("odds") or (data.get("result") or {}).get("extracted_odds"),
+                (data.get("result") or {}).get("slip_count"),
+            )
             self._manager.apply_slip_update(SlipUpdateMessage.model_validate(data))
             return
         if msg_type == "bridge_debug":
+            logger.info(
+                "[PYTHON RX] type=%s site=%s block=%s frame_url=%s",
+                msg_type,
+                data.get("site"),
+                data.get("block"),
+                data.get("frame_url"),
+            )
             self._manager.apply_debug(data)
+            self._maybe_save_dom_snapshot(data)
             return
         if msg_type == "stake_sync_result":
             self._manager.apply_debug(
@@ -163,3 +184,21 @@ class BridgeWebSocketServer:
             return
         if msg_type == "hello":
             await self.request_status()
+
+    async def _maybe_save_dom_snapshot(self, data: dict[str, Any]) -> None:
+        snapshot = data.get("dom_snapshot")
+        filename = data.get("dom_snapshot_file")
+        if not snapshot or not filename:
+            return
+        try:
+            from pathlib import Path
+
+            log_dir = Path.home() / ".config" / "arb-desktop" / "logs"
+            if hasattr(self._manager, "logs_dir"):
+                log_dir = getattr(self._manager, "logs_dir", log_dir)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path = log_dir / str(filename)
+            path.write_text(str(snapshot), encoding="utf-8")
+            logger.info("[DOM SNAPSHOT] saved %s bytes=%s", path, len(str(snapshot)))
+        except OSError as exc:
+            logger.warning("[DOM SNAPSHOT] save failed: %s", exc)

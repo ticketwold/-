@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "arb Chrome Bridge",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "description": "BC.Game / x10x10s BetSlip bridge for arb-desktop (auto-pairing)",
 
   "permissions": [
@@ -47,6 +47,7 @@
       "js": [
         "bet_type_parser.js",
         "frame_scanner.js",
+        "debug_trace.js",
         "stake_actions.js",
         "frame_agent.js",
         "content_bc.js"
@@ -65,6 +66,7 @@
       "js": [
         "bet_type_parser.js",
         "frame_scanner.js",
+        "debug_trace.js",
         "stake_actions.js",
         "frame_agent.js",
         "content_x10.js"

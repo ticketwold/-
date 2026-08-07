@@ -81,9 +81,20 @@ class BcSlipDebugPanel(QWidget):
         if not payload:
             return
         block = str(payload.get("block") or "").upper()
-        if block not in {"BC DEBUG", "BC FRAME", "CONTENT SCRIPT LOADED", "SLIP ITEM", "SLIP ROOT FOUND"}:
+        if block not in {"BC DEBUG", "BC FRAME", "CONTENT SCRIPT LOADED", "SLIP ITEM", "SLIP ROOT FOUND", "FRAME SCAN", "PIPELINE TRACE"}:
             if not payload.get("slip_root_found") and not payload.get("selector_hits"):
                 return
+
+        trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else None
+        if trace:
+            lines = [f"{k}={v}" for k, v in trace.items() if k != "injected_frame_urls"]
+            self.txt_inner.setPlainText("\n".join(lines))
+
+        urls = payload.get("injected_frame_urls") or (trace or {}).get("injected_frame_urls") or []
+        if urls:
+            url_text = "\n".join(str(u) for u in urls)
+            prev = self.txt_inner.toPlainText()
+            self.txt_inner.setPlainText((prev + "\n\n[frame urls]\n" + url_text).strip())
 
         injected = payload.get("injected_frames")
         if injected is not None:

@@ -63,6 +63,26 @@ class BridgeWorker(QObject):
         self._odds_log: OddsLogManager | None = None
         self._last_engine_log_state: str = ""
         self._bet_button_cache: dict[str, str] = {"x10": "?", "bc": "?"}
+        self._pipeline_trace: dict[str, dict[str, str]] = {
+            "bc": {
+                "content_loaded": "no",
+                "injected_frames": "0",
+                "betslipSelection_count": "0",
+                "body_has_bet_keywords": "no",
+                "service_worker_received": "no",
+                "python_received": "no",
+                "gui_applied": "no",
+            },
+            "x10": {
+                "content_loaded": "no",
+                "injected_frames": "0",
+                "betslip_selector_count": "0",
+                "body_has_bet_keywords": "no",
+                "service_worker_received": "no",
+                "python_received": "no",
+                "gui_applied": "no",
+            },
+        }
         get_exec_logger().set_log_dir(store.logs_dir)
         get_exec_logger().add_listener(self._on_exec_log)
 
@@ -134,6 +154,10 @@ class BridgeWorker(QObject):
             self.bridge_status.emit(status)
 
         def on_slip(site: str, read: BetSlipReadResult) -> None:
+            site_key = "bc" if site == "bc" else "x10"
+            self._pipeline_trace[site_key]["python_received"] = "yes"
+            self._pipeline_trace[site_key]["gui_applied"] = "yes"
+            self._emit_pipeline_trace(site_key)
             label = "BC" if site == "bc" else "X10"
             odds = f"{read.first.odds:.2f}" if read.first and read.first.odds else "-"
             status = read.first.status.value if read.first else "EMPTY"
@@ -171,6 +195,32 @@ class BridgeWorker(QObject):
         def on_debug(payload: dict[str, Any]) -> None:
             site = str(payload.get("site") or "").lower()
             block = str(payload.get("block") or "").upper()
+            site_key = "bc" if site == "bc" else "x10" if site in {"x10", "bti"} else ""
+            if site_key:
+                if block == "CONTENT SCRIPT LOADED" or payload.get("type") == "content_loaded":
+                    self._pipeline_trace[site_key]["content_loaded"] = "yes"
+                    self._pipeline_trace[site_key]["service_worker_received"] = "yes"
+                    injected = payload.get("injected_frames")
+                    if injected is not None:
+                        self._pipeline_trace[site_key]["injected_frames"] = str(injected)
+                    urls = payload.get("injected_frame_urls") or []
+                    if urls:
+                        self._pipeline_trace[site_key]["injected_frame_urls"] = urls
+                if block == "FRAME SCAN":
+                    self._pipeline_trace[site_key]["service_worker_received"] = "yes"
+                    if payload.get("betslipSelection_count") is not None and site_key == "bc":
+                        self._pipeline_trace[site_key]["betslipSelection_count"] = str(
+                            payload.get("betslipSelection_count")
+                        )
+                    if payload.get("total_selector_matches") is not None and site_key == "x10":
+                        self._pipeline_trace[site_key]["betslip_selector_count"] = str(
+                            payload.get("total_selector_matches")
+                        )
+                    if payload.get("body_has_bet_keywords") is not None:
+                        self._pipeline_trace[site_key]["body_has_bet_keywords"] = (
+                            "yes" if payload.get("body_has_bet_keywords") else "no"
+                        )
+                self._emit_pipeline_trace(site_key)
             if site == "bc":
                 if block.startswith("BC STAKE") or block == "BC INPUT SCAN" or payload.get("step"):
                     self.bc_stake_debug.emit(payload)
@@ -180,10 +230,19 @@ class BridgeWorker(QObject):
                     "CONTENT SCRIPT LOADED",
                     "SLIP ITEM",
                     "SLIP ROOT FOUND",
+                    "FRAME SCAN",
+                    "PIPELINE TRACE",
                 } or payload.get("slip_root_found"):
                     self.bc_slip_debug.emit(payload)
             if site in {"x10", "bti"}:
-                if block in {"X10 DEBUG", "SLIP ROOT FOUND", "FRAME DEBUG", "FRAME SCAN", "CONTENT SCRIPT LOADED"}:
+                if block in {
+                    "X10 DEBUG",
+                    "SLIP ROOT FOUND",
+                    "FRAME DEBUG",
+                    "FRAME SCAN",
+                    "CONTENT SCRIPT LOADED",
+                    "PIPELINE TRACE",
+                }:
                     self.x10_debug.emit(payload)
                 if block == "X10 DEBUG":
                     inner = str(payload.get("slip_inner_text") or "")[:1000]
@@ -492,6 +551,21 @@ class BridgeWorker(QObject):
             self._emit_watch_state()
         finally:
             self._dispatch_running = False
+
+    def _emit_pipeline_trace(self, site_key: str) -> None:
+        trace = self._pipeline_trace.get(site_key, {})
+        payload = {
+            "block": "PIPELINE TRACE",
+            "site": site_key,
+            "trace": trace,
+            "injected_frame_urls": trace.get("injected_frame_urls", []),
+        }
+        if site_key == "bc":
+            self.bc_slip_debug.emit(payload)
+        else:
+            self.x10_debug.emit(payload)
+        line = " ".join(f"{k}={v}" for k, v in trace.items())
+        self.log_message.emit("TRACE", site_key.upper(), "-", "-", line, f"TRACE|{site_key}|{line}")
 
     @pyqtSlot()
     def scan_x10_bet_button(self) -> None:

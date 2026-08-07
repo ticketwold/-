@@ -44,8 +44,68 @@ const frameSlipCache = {};
 
 const FRAME_CACHE_TTL_MS = 45_000;
 
+/** Per-site injected frame registry for debug. */
+const injectedFramesBySite = {
+  bc: new Map(),
+  x10: new Map(),
+};
+
+/** Last ACTIVE slip timestamp per site (ms). */
+const lastActiveTs = { bc: 0, x10: 0 };
+const ACTIVE_GUARD_MS = 3000;
+
 /** @type {Record<number, { frameId: number, frame_url: string, selector: string, score: number }>} */
 const bcStakeLocatorByTab = {};
+
+function frameInjectKey(tabId, frameId) {
+  return `${tabId ?? "x"}:${frameId ?? 0}`;
+}
+
+function registerInjectedFrame(site, sender, message) {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId;
+  const href = message.href || message.frame_url || sender.url || "";
+  const map = injectedFramesBySite[site];
+  map.set(frameInjectKey(tabId, frameId), {
+    tab_id: tabId ?? null,
+    frame_id: frameId ?? null,
+    href,
+    top_frame: message.top_frame ?? null,
+    ready_state: message.ready_state || message.readyState || "",
+    ts: Date.now(),
+  });
+  siteState[site].injected_frames = map.size;
+  return [...map.values()];
+}
+
+function injectedFrameUrls(site) {
+  return [...injectedFramesBySite[site].values()].map((f) => f.href);
+}
+
+function logFrameMessage(message, sender) {
+  const site = message.site === "bc" ? "bc" : message.site === "x10" ? "x10" : "";
+  const item = message.result?.items?.[0] || {};
+  console.log("[FRAME MESSAGE]", {
+    tabId: sender.tab?.id,
+    frameId: sender.frameId,
+    url: sender.url || message.frame_url || message.href,
+    site,
+    type: message.type,
+    status: message.status || item.status || message.result?.parsed_status || "",
+    odds: message.odds ?? item.odds ?? message.result?.extracted_odds ?? null,
+  });
+}
+
+function forwardToPython(label, payload) {
+  console.log("[FORWARD TO PYTHON]", label, {
+    type: payload.type,
+    site: payload.site,
+    frame_id: payload.frame_id,
+    frame_url: payload.frame_url,
+    block: payload.block,
+  });
+  client?.send(payload);
+}
 
 function mapRawSlipStatus(result) {
   if (!result || result.empty || !result.items?.length) return "empty";
@@ -103,10 +163,13 @@ function pruneFrameCache() {
 
 function pickBestSiteResult(site) {
   pruneFrameCache();
+  const now = Date.now();
+  const recentActive = lastActiveTs[site] && now - lastActiveTs[site] < ACTIVE_GUARD_MS;
   let best = null;
   let bestPriority = -1;
   for (const [key, entry] of Object.entries(frameSlipCache)) {
     if (!key.startsWith(`${site}:`)) continue;
+    if (recentActive && entry.priority < 80) continue;
     if (entry.priority > bestPriority) {
       bestPriority = entry.priority;
       best = entry;
@@ -169,6 +232,10 @@ function maybeForwardSlip(site, result, meta) {
   const tabId = meta?.tab_id;
   const frameId = meta?.frame_id;
   const priority = slipPriority(result);
+  if (priority >= 100) {
+    lastActiveTs[site] = Date.now();
+  }
+
   const key = frameCacheKey(site, tabId, frameId);
 
   frameSlipCache[key] = {
@@ -186,6 +253,12 @@ function maybeForwardSlip(site, result, meta) {
   const bestEntry = updateSiteStateFromBest(site);
   if (!bestEntry) return;
 
+  const now = Date.now();
+  if (lastActiveTs[site] && now - lastActiveTs[site] < ACTIVE_GUARD_MS && bestEntry.priority < 80) {
+    console.log("[FORWARD SKIP]", { site, reason: "active-guard", priority: bestEntry.priority });
+    return;
+  }
+
   const best = bestEntry.result;
   const bestMeta = bestEntry.meta;
   const payloadKey = slipPayloadKey(best);
@@ -194,7 +267,7 @@ function maybeForwardSlip(site, result, meta) {
 
   bestSlip[site] = best;
   updateSlipStatus(site, best);
-  client?.send({
+  forwardToPython("slip_update", {
     type: "slip_update",
     site,
     tab_id: bestMeta.tab_id,
@@ -204,6 +277,7 @@ function maybeForwardSlip(site, result, meta) {
     result: best,
     site_state: {
       injected_frames: siteState[site].injected_frames,
+      injected_frame_urls: injectedFrameUrls(site),
       best_frame_id: siteState[site].best_frame_id,
       best_frame_url: siteState[site].best_frame_url,
       best_priority: siteState[site].best_priority,
@@ -216,7 +290,13 @@ function maybeForwardSlip(site, result, meta) {
 
 function maybeForwardDebug(message) {
   let key;
-  if (message.block === "BC STAKE" || message.step) {
+  if (
+    message.block === "BC STAKE" ||
+    message.step ||
+    message.block === "FRAME SCAN" ||
+    message.block === "CONTENT SCRIPT LOADED" ||
+    message.block === "PIPELINE TRACE"
+  ) {
     key = [
       message.block || "",
       message.step || "",
@@ -249,7 +329,7 @@ function maybeForwardDebug(message) {
   if (lastDebugKeys.size > 5000) {
     lastDebugKeys.clear();
   }
-  client?.send({
+  forwardToPython("bridge_debug", {
     type: "bridge_debug",
     ...message,
   });
@@ -418,9 +498,6 @@ async function scanBcStakeInputsAllFrames(message) {
     current_value: merged.current_value,
     ...merged.debug,
   });
-  return merged;
-}
-
   return merged;
 }
 
@@ -632,18 +709,24 @@ async function startBridge() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
-  if (message?.type === "content_script_loaded") {
+  if (!message?.type) return;
+  logFrameMessage(message, sender);
+
+  if (message.type === "content_loaded" || message.type === "content_script_loaded") {
     const site = message.site === "bc" ? "bc" : message.site === "x10" ? "x10" : null;
     if (site) {
-      siteState[site].injected_frames += 1;
+      const frames = registerInjectedFrame(site, sender, message);
       maybeForwardDebug({
         block: "CONTENT SCRIPT LOADED",
         site,
         tab_id: sender.tab?.id ?? null,
         frame_id: sender.frameId ?? null,
-        frame_url: message.frame_url || sender.url || "",
-        readyState: message.readyState || "",
+        frame_url: message.href || message.frame_url || sender.url || "",
+        href: message.href || message.frame_url || sender.url || "",
+        top_frame: message.top_frame ?? null,
+        readyState: message.ready_state || message.readyState || "",
         injected_frames: siteState[site].injected_frames,
+        injected_frame_urls: frames.map((f) => f.href),
       });
     }
     return;
