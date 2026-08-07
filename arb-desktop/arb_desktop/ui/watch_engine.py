@@ -88,6 +88,8 @@ class WatchMetrics:
     user_confirmed: bool = False
     watch_enabled: bool = False
     watch_started_at: str = ""
+    bti_display_odds: float | None = None
+    x10_status_reason: str = ""
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:
@@ -516,6 +518,17 @@ def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: Bet
     metrics.bc_display_selection = bc_parsed.display_selection or bc_item.selection or "—"
     metrics.x10_raw_market = x10_parsed.raw_market_text or bti_item.market or "—"
     metrics.bc_raw_market = bc_parsed.raw_market_text or bc_item.market or "—"
+
+    prev_odds = bti_item.previous_odds
+    if bti_item.odds is not None:
+        metrics.bti_display_odds = bti_item.odds
+    elif prev_odds is not None:
+        metrics.bti_display_odds = prev_odds
+    else:
+        metrics.bti_display_odds = None
+
+    metrics.x10_status_reason = bti_item.status_reason or str((bti_item.raw or {}).get("status_reason") or "")
+    diag = (bti_item.raw or {}).get("status_diagnostics") or {}
     metrics.x10_parse_debug = {
         "raw_market_text": x10_parsed.raw_market_text,
         "raw_selection_text": x10_parsed.raw_selection_text,
@@ -524,4 +537,13 @@ def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: Bet
         "parsed_line": "" if x10_parsed.line is None else f"{x10_parsed.line:g}",
         "parsed_odds": "" if bti_item.odds is None else f"{bti_item.odds:g}",
         "parse_reason": x10_parsed.parse_reason or "—",
+        "raw_status_text": str(diag.get("raw_status_text") or ""),
+        "odds_element_present": str(diag.get("odds_element_present", "")),
+        "odds_element_disabled": str(diag.get("odds_element_disabled", "")),
+        "slip_root_class": str(diag.get("slip_root_class") or ""),
+        "bet_button_disabled": str(diag.get("bet_button_disabled", "")),
+        "aria_disabled": str(diag.get("aria_disabled", "")),
+        "matched_keyword": str(diag.get("matched_keyword") or ""),
+        "parsed_status": str(diag.get("parsed_status") or bti_item.status.value),
+        "status_reason": metrics.x10_status_reason or str(diag.get("reason") or ""),
     }

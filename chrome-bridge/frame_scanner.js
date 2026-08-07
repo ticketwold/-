@@ -53,6 +53,179 @@
     '[class*="betslip_fe"]',
   ];
 
+  const CLOSED_KEYWORD_RE =
+    /betting\s*closed|market\s*closed|odds\s*unavailable|배팅\s*닫|베팅\s*닫|닫힘|배팅불가|베팅불가|\bclosed\b|\blocked\b|\binactive\b|\bunavailable\b|마감/i;
+  const SUSPENDED_KEYWORD_RE = /\bsuspended\b|일시\s*정지|일시정지|\bpaused\b/i;
+  const DISABLED_KEYWORD_RE = /\bdisabled\b|배팅\s*불가|베팅\s*불가|정지(?!된)/i;
+  const STATUS_CLASS_RE = /\b(disabled|suspended|closed|locked|inactive|unavailable)\b/i;
+  const X10_CLOSED_PENDING_MS = 200;
+
+  const x10SlipState = {
+    lastActiveOdds: null,
+    lastStatus: "empty",
+    oddsMissingSince: 0,
+  };
+
+  function elementDisabled(el) {
+    if (!el) return false;
+    if (el.disabled) return true;
+    if (el.getAttribute?.("aria-disabled") === "true") return true;
+    if (el.hasAttribute?.("data-disabled")) return true;
+    const dataStatus = String(el.getAttribute?.("data-status") || "").toLowerCase();
+    if (/(closed|disabled|suspended|locked|inactive|unavailable)/.test(dataStatus)) return true;
+    if (STATUS_CLASS_RE.test(String(el.className || ""))) return true;
+    try {
+      const st = getComputedStyle(el);
+      if (st.pointerEvents === "none" || st.cursor === "not-allowed") return true;
+      if (Number(st.opacity) > 0 && Number(st.opacity) < 0.35) return true;
+    } catch (_err) {}
+    return false;
+  }
+
+  function inspectX10BetButton(root) {
+    if (!root) return { disabled: false, ariaDisabled: false };
+    let nodes = [];
+    try {
+      nodes = [...root.querySelectorAll("button, [role='button'], input[type='submit']")];
+    } catch (_err) {
+      return { disabled: false, ariaDisabled: false };
+    }
+    for (const btn of nodes) {
+      if (!visible(btn)) continue;
+      const label = text(btn).toLowerCase();
+      if (!/(bet|place|베팅|배팅|제출|확인)/i.test(label)) continue;
+      return {
+        disabled: btn.disabled || elementDisabled(btn),
+        ariaDisabled: btn.getAttribute("aria-disabled") === "true",
+      };
+    }
+    return { disabled: false, ariaDisabled: false };
+  }
+
+  function inspectX10OddsElements(root) {
+    const selectors = [
+      '[class*="odds" i]',
+      '[class*="coefficient" i]',
+      '[class*="coef" i]',
+      '[data-testid*="odds" i]',
+    ];
+    let present = false;
+    let disabled = false;
+    for (const sel of selectors) {
+      let nodes = [];
+      try {
+        nodes = [...root.querySelectorAll(sel)];
+      } catch (_err) {
+        continue;
+      }
+      for (const el of nodes) {
+        if (!visible(el)) continue;
+        present = true;
+        if (elementDisabled(el)) disabled = true;
+      }
+    }
+    return { present, disabled };
+  }
+
+  function inspectX10Container(root) {
+    let node = root;
+    let ariaDisabled = false;
+    let containerDisabled = false;
+    for (let i = 0; i < 12 && node; i += 1) {
+      if (elementDisabled(node)) {
+        containerDisabled = true;
+        if (node.getAttribute?.("aria-disabled") === "true") ariaDisabled = true;
+        break;
+      }
+      if (node.getAttribute?.("aria-disabled") === "true") {
+        ariaDisabled = true;
+        containerDisabled = true;
+        break;
+      }
+      node = node.parentElement;
+    }
+    return { containerDisabled, ariaDisabled };
+  }
+
+  function matchX10Keywords(blockText) {
+    for (const [re, status, reason] of [
+      [CLOSED_KEYWORD_RE, "closed", "closed-keyword"],
+      [SUSPENDED_KEYWORD_RE, "suspended", "suspended-keyword"],
+      [DISABLED_KEYWORD_RE, "disabled", "disabled-keyword"],
+    ]) {
+      const m = re.exec(blockText || "");
+      if (m) return { status, reason, keyword: m[0] };
+    }
+    return { status: "", reason: "", keyword: "" };
+  }
+
+  function resolveX10SlipStatus(root, blockText, extractedOdds) {
+    const betBtn = inspectX10BetButton(root);
+    const oddsEl = inspectX10OddsElements(root);
+    const container = inspectX10Container(root);
+    const kw = matchX10Keywords(blockText);
+    const slipRootClass = String(root?.className || "");
+
+    const diagnostics = {
+      raw_status_text: (blockText || "").slice(0, 240),
+      odds_element_present: extractedOdds != null || oddsEl.present,
+      odds_element_disabled: oddsEl.disabled,
+      slip_root_class: slipRootClass,
+      bet_button_disabled: betBtn.disabled,
+      aria_disabled: betBtn.ariaDisabled || container.ariaDisabled,
+      matched_keyword: kw.keyword || "",
+      parsed_status: "active",
+      reason: "active",
+    };
+
+    function finalize(status, reason, prevOdds) {
+      diagnostics.parsed_status = status;
+      diagnostics.reason = reason;
+      if (status === "active") {
+        x10SlipState.lastStatus = "active";
+        x10SlipState.oddsMissingSince = 0;
+        if (extractedOdds != null) x10SlipState.lastActiveOdds = extractedOdds;
+        return { status, reason, previous_odds: null, diagnostics };
+      }
+      const keepPrev = prevOdds ?? (extractedOdds != null ? extractedOdds : x10SlipState.lastActiveOdds);
+      x10SlipState.lastStatus = status;
+      if (status !== "closed_pending") x10SlipState.oddsMissingSince = 0;
+      return { status, reason, previous_odds: keepPrev, diagnostics };
+    }
+
+    if (betBtn.disabled) return finalize("closed", "bet-button-disabled", extractedOdds);
+    if (container.ariaDisabled) return finalize("disabled", "aria-disabled", extractedOdds);
+    if (container.containerDisabled) return finalize("closed", "disabled-container", extractedOdds);
+    if (oddsEl.disabled) return finalize("closed", "odds-element-disabled", extractedOdds);
+    if (kw.status === "closed") return finalize("closed", kw.reason, extractedOdds);
+    if (kw.status === "suspended") return finalize("suspended", kw.reason, extractedOdds);
+    if (kw.status === "disabled") return finalize("disabled", kw.reason, extractedOdds);
+    if (STATUS_CLASS_RE.test(slipRootClass)) {
+      const token = (slipRootClass.match(STATUS_CLASS_RE) || [])[1] || "";
+      if (/suspended/i.test(token)) return finalize("suspended", "suspended-class", extractedOdds);
+      return finalize("closed", "closed-class", extractedOdds);
+    }
+
+    if extracted_odds == null) {
+      const wasActive =
+        x10SlipState.lastActiveOdds != null &&
+        (x10SlipState.lastStatus === "active" || x10SlipState.lastStatus === "closed_pending");
+      if (wasActive) {
+        const now = Date.now();
+        if (!x10SlipState.oddsMissingSince) x10SlipState.oddsMissingSince = now;
+        if (now - x10SlipState.oddsMissingSince < X10_CLOSED_PENDING_MS) {
+          return finalize("closed_pending", "odds-missing", x10SlipState.lastActiveOdds);
+        }
+        return finalize("closed", "betting-closed", x10SlipState.lastActiveOdds);
+      }
+      return finalize("odds_missing", "odds-missing", null);
+    }
+
+    x10SlipState.oddsMissingSince = 0;
+    x10SlipState.lastActiveOdds = extractedOdds;
+    return finalize("active", "active", null);
+  }
+
   function isBetButtonDisabled(root) {
     if (!root) return false;
     let nodes = [];
@@ -425,6 +598,9 @@
     const bestRoot = roots[0] || null;
     const stake = bestRoot ? readX10Stake(bestRoot) : null;
     const oddsProbe = bestRoot ? extractX10OddsFromRoot(bestRoot, stake) : { odds: null, candidates: [] };
+    const statusProbe = bestRoot
+      ? resolveX10SlipStatus(bestRoot, text(bestRoot), oddsProbe.odds)
+      : { status: "empty", reason: "no-slip-root", diagnostics: {} };
     return {
       site: "x10",
       frame_url: location.href,
@@ -445,6 +621,9 @@
       selector_scans: selectorHits,
       odds_candidates: oddsProbe.candidates,
       extracted_odds: oddsProbe.odds,
+      status_diagnostics: statusProbe.diagnostics || {},
+      parsed_status: statusProbe.status || "empty",
+      status_reason: statusProbe.reason || "",
     };
   }
 
@@ -511,9 +690,6 @@
   function extractX10OddsFromRoot(root, stake) {
     const candidates = [];
     const context = text(root);
-    if (SUSPENDED_RE.test(context)) {
-      return { odds: null, candidates: [{ value: null, text: "", excluded: true, exclude_reason: "suspended", selected: false }] };
-    }
 
     for (const leaf of collectX10LeafTexts(root)) {
       const normalized = leaf.text.replace(/,/g, "");
@@ -564,22 +740,31 @@
       const rootText = text(root);
       const stake = readX10Stake(root);
       const { odds, candidates } = extractX10OddsFromRoot(root, stake);
-      const status = classifySlipStatus(rootText, odds, root);
+      const statusResult = resolveX10SlipStatus(root, rootText, odds);
+      const slipStatus = statusResult.status;
+      const usableOdds = slipStatus === "active" ? odds : null;
 
-      if (status === "suspended" || status === "closed" || status === "odds_missing") {
+      if (slipStatus !== "active") {
+        const parsed = parseX10SlipText(rootText);
         return {
           ok: true,
           empty: false,
           items: [
-            {
-              event: "",
-              market: "",
-              selection: "",
-              odds: null,
-              status,
-              stake,
-              container_selector: selectorHint(root),
-            },
+            enrichItem(
+              {
+                event: parsed.event,
+                market: parsed.market,
+                selection: parsed.selection,
+                odds: usableOdds,
+                previous_odds: statusResult.previous_odds ?? odds,
+                status: slipStatus,
+                status_reason: statusResult.reason,
+                stake,
+                container_selector: selectorHint(root),
+                status_diagnostics: statusResult.diagnostics,
+              },
+              parsed.event,
+            ),
           ],
           source: "dom",
           frame_url: location.href,
@@ -588,7 +773,10 @@
           slip_inner_text: slipInnerText,
           selector_hits: selectorHits,
           odds_candidates: candidates,
-          extracted_odds: null,
+          extracted_odds: odds,
+          parsed_status: slipStatus,
+          status_reason: statusResult.reason,
+          status_diagnostics: statusResult.diagnostics,
         };
       }
 
@@ -600,10 +788,12 @@
             market: parsed.market,
             selection: parsed.selection,
             odds,
-            status,
+            status: "active",
+            status_reason: "active",
             stake,
             container_selector: selectorHint(root),
             dom_hash: domHash(root),
+            status_diagnostics: statusResult.diagnostics,
           },
           parsed.event,
         );
@@ -619,6 +809,9 @@
           selector_hits: selectorHits,
           odds_candidates: candidates,
           extracted_odds: odds,
+          parsed_status: "active",
+          status_reason: "active",
+          status_diagnostics: statusResult.diagnostics,
         };
       }
     }
@@ -626,6 +819,41 @@
     const lastRoot = roots[0];
     const lastStake = lastRoot ? readX10Stake(lastRoot) : null;
     const lastProbe = lastRoot ? extractX10OddsFromRoot(lastRoot, lastStake) : { odds: null, candidates: [] };
+    const lastStatus = lastRoot
+      ? resolveX10SlipStatus(lastRoot, text(lastRoot), lastProbe.odds)
+      : { status: "odds_missing", reason: "odds-missing", diagnostics: {} };
+
+    if (lastStatus.status && lastStatus.status !== "active") {
+      return {
+        ok: true,
+        empty: false,
+        items: [
+          {
+            event: "",
+            market: "",
+            selection: "",
+            odds: null,
+            previous_odds: lastStatus.previous_odds ?? lastProbe.odds,
+            status: lastStatus.status,
+            status_reason: lastStatus.reason,
+            stake: lastStake,
+            container_selector: lastRoot ? selectorHint(lastRoot) : "",
+            status_diagnostics: lastStatus.diagnostics,
+          },
+        ],
+        source: "dom",
+        frame_url: location.href,
+        container_selector: lastRoot ? selectorHint(lastRoot) : "",
+        slip_root_found: "YES",
+        slip_inner_text: slipInnerText,
+        selector_hits: selectorHits,
+        odds_candidates: lastProbe.candidates,
+        extracted_odds: lastProbe.odds,
+        parsed_status: lastStatus.status,
+        status_reason: lastStatus.reason,
+        status_diagnostics: lastStatus.diagnostics,
+      };
+    }
 
     return {
       ok: true,
@@ -639,6 +867,9 @@
       selector_hits: selectorHits,
       odds_candidates: lastProbe.candidates,
       extracted_odds: null,
+      parsed_status: lastStatus.status || "odds_missing",
+      status_reason: lastStatus.reason || "odds-missing",
+      status_diagnostics: lastStatus.diagnostics || {},
     };
   }
 

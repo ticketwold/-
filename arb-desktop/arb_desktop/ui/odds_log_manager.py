@@ -153,19 +153,28 @@ class OddsLogManager:
         status: str,
         watch_enabled: bool,
         profit_rate: float | None,
+        status_reason: str = "",
+        display_odds: float | None = None,
     ) -> None:
         prev_o, prev_s = self._site_snapshot.get(site, ("-", status))
-        curr_o = self._fmt_odds(odds)
+        curr_o = self._fmt_odds(odds if odds is not None else display_odds)
         if prev_o == curr_o and prev_s == status:
             return
+        message = status_reason or ""
+        if prev_s != status and prev_s not in {"", "-"}:
+            if message:
+                message = f"{prev_s} → {status} | {message}"
+            else:
+                message = f"{prev_s} → {status}"
         self.log_site_change(
             site=site,
             previous_odds=None if prev_o == "-" else _parse_odds(prev_o),
-            current_odds=odds,
+            current_odds=odds if odds is not None else display_odds,
             previous_status=prev_s,
             current_status=status,
             watch_enabled=watch_enabled,
             profit_rate=profit_rate,
+            message=message,
         )
 
     def log_watch(self, *, enabled: bool) -> None:

@@ -18,7 +18,7 @@ const siteStatusDebounce = {
 function mapRawSlipStatus(result) {
   if (!result || result.empty || !result.items?.length) return "empty";
   const st = String(result.items[0]?.status || "empty").toLowerCase();
-  if (["active", "suspended", "closed", "odds_missing"].includes(st)) return st;
+  if (["active", "suspended", "closed", "disabled", "odds_missing", "closed_pending"].includes(st)) return st;
   return "empty";
 }
 
@@ -62,6 +62,8 @@ function slipPayloadKey(result) {
     String(item.odds ?? ""),
     String(item.stake ?? ""),
     item.status || "",
+    item.status_reason || "",
+    String(item.previous_odds ?? ""),
   ].join("|");
 }
 

@@ -9,6 +9,7 @@ SITE_LABELS: dict[SlipStatus, str] = {
     SlipStatus.ACTIVE: "ACTIVE",
     SlipStatus.CLOSED: "배팅 닫힘",
     SlipStatus.SUSPENDED: "일시 정지",
+    SlipStatus.DISABLED: "배팅 불가",
     SlipStatus.EMPTY: "카트 없음",
     SlipStatus.ODDS_MISSING: "배당 없음",
     SlipStatus.ERROR: "오류",
@@ -20,7 +21,13 @@ def slip_status_from_read(read: BetSlipReadResult) -> SlipStatus:
     if read.empty or not read.first:
         return SlipStatus.EMPTY
     item = read.first
-    if item.status in {SlipStatus.CLOSED, SlipStatus.SUSPENDED, SlipStatus.ODDS_MISSING, SlipStatus.ACTIVE}:
+    if item.status in {
+        SlipStatus.CLOSED,
+        SlipStatus.SUSPENDED,
+        SlipStatus.DISABLED,
+        SlipStatus.ODDS_MISSING,
+        SlipStatus.ACTIVE,
+    }:
         return item.status
     if item.odds is None and item.status != SlipStatus.ACTIVE:
         return SlipStatus.ODDS_MISSING
