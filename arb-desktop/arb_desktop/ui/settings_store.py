@@ -37,6 +37,7 @@ class AppSettings:
     odds_change_tolerance: float = 0.0
     parallel_execution_enabled: bool = False
     parallel_dry_run_on_ready: bool = True
+    ui_theme: str = "dark"
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 18765
     bridge_pair_port: int = 18766

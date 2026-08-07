@@ -1,0 +1,101 @@
+/* arb-desktop dark theme */
+
+QMainWindow, QWidget {
+    background-color: #1a1d23;
+    color: #e8eaed;
+    font-size: 13px;
+}
+
+QTabWidget::pane {
+    border: none;
+    background: #1a1d23;
+}
+
+QTabBar::tab {
+    background: #252830;
+    color: #9aa0a6;
+    padding: 8px 16px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 2px;
+}
+
+QTabBar::tab:selected {
+    background: #2d3139;
+    color: #e8eaed;
+}
+
+QGroupBox, .Card {
+    background-color: #22262e;
+    border: 1px solid #2f343d;
+    border-radius: 10px;
+    margin-top: 12px;
+    padding: 12px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: #9aa0a6;
+}
+
+QLabel[class="hero"] {
+    font-size: 24px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+QLabel[class="metric"] {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+QLabel[class="muted"] {
+    color: #9aa0a6;
+    font-size: 11px;
+}
+
+QLabel[class="status-ok"] { color: #7ee787; font-weight: 600; }
+QLabel[class="status-warn"] { color: #f0c674; font-weight: 600; }
+QLabel[class="status-bad"] { color: #ff6b6b; font-weight: 600; }
+QLabel[class="status-idle"] { color: #9aa0a6; }
+
+QPushButton {
+    background-color: #2d3139;
+    color: #e8eaed;
+    border: 1px solid #3c4048;
+    border-radius: 8px;
+    padding: 8px 14px;
+    min-height: 28px;
+}
+
+QPushButton:hover { background-color: #353a44; }
+QPushButton:pressed { background-color: #404650; }
+QPushButton:disabled { color: #6b7280; background: #252830; }
+
+QPushButton[class="primary"] {
+    background-color: #3d7eff;
+    border-color: #3d7eff;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+QPushButton[class="danger"] {
+    background-color: #5c2b2b;
+    border-color: #7a3a3a;
+    color: #ffb4b4;
+}
+
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #1a1d23;
+    border: 1px solid #3c4048;
+    border-radius: 6px;
+    padding: 4px 8px;
+    color: #e8eaed;
+}
+
+QScrollArea { background: transparent; border: none; }
+QStatusBar { background: #15171c; color: #9aa0a6; border-top: 1px solid #2f343d; }
+QCheckBox { spacing: 8px; }

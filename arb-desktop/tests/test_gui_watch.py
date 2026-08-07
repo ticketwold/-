@@ -54,13 +54,31 @@ def test_watch_engine_ready_without_event_match() -> None:
         site="bc",
         ok=True,
         empty=False,
-        items=[BetSlipItem(site="bc", event="", market="", selection="", odds=2.1, status=SlipStatus.ACTIVE)],
+        items=[
+            BetSlipItem(
+                site="bc",
+                event="A vs B",
+                market="승패",
+                selection="B팀 승",
+                odds=2.1,
+                status=SlipStatus.ACTIVE,
+            )
+        ],
     )
     bti = BetSlipReadResult(
         site="bti",
         ok=True,
         empty=False,
-        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.ACTIVE)],
+        items=[
+            BetSlipItem(
+                site="bti",
+                event="A vs B",
+                market="승패",
+                selection="A팀 승",
+                odds=2.05,
+                status=SlipStatus.ACTIVE,
+            )
+        ],
     )
     state, metrics, err = engine.tick(
         bridge_connected=True,
@@ -157,19 +175,19 @@ def test_watch_engine_recovers_after_closed() -> None:
         site="bc",
         ok=True,
         empty=False,
-        items=[BetSlipItem(site="bc", event="", market="", selection="", odds=2.1, status=SlipStatus.ACTIVE)],
+        items=[BetSlipItem(site="bc", market="승패", selection="B팀 승", odds=2.1, status=SlipStatus.ACTIVE)],
     )
     bti_closed = BetSlipReadResult(
         site="bti",
         ok=True,
         empty=False,
-        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.CLOSED)],
+        items=[BetSlipItem(site="bti", market="승패", selection="A팀 승", odds=2.05, status=SlipStatus.CLOSED)],
     )
     bti_active = BetSlipReadResult(
         site="bti",
         ok=True,
         empty=False,
-        items=[BetSlipItem(site="bti", event="", market="", selection="", odds=2.05, status=SlipStatus.ACTIVE)],
+        items=[BetSlipItem(site="bti", market="승패", selection="A팀 승", odds=2.05, status=SlipStatus.ACTIVE)],
     )
     engine._site_debounce._confirmed["x10"] = SlipStatus.CLOSED
     engine.tick(

@@ -117,6 +117,46 @@
     return `${t.length}:${t.slice(0, 64)}`;
   }
 
+  function enrichItem(item, event) {
+    if (global.ArbBetTypeParser?.enrichSlipItem) {
+      return global.ArbBetTypeParser.enrichSlipItem(item, event);
+    }
+    return item;
+  }
+
+  function parseX10SlipText(rootText) {
+    const lines = String(rootText || "")
+      .split(/\n+/)
+      .map((l) => l.replace(/\s+/g, " ").trim())
+      .filter((l) => l.length > 1 && l.length < 120);
+    const skip = /^(베팅|bet|slip|카트|총|total|stake|금액|배당|odds|@|\d+\.\d+$)/i;
+    const useful = lines.filter((l) => !skip.test(l) && !/^\d{1,3}(,\d{3})*$/.test(l));
+    let event = "";
+    let market = "";
+    let selection = "";
+    const vs = useful.find((l) => /\bvs\.?\b/i.test(l));
+    if (vs) event = vs;
+    const ou = useful.find((l) => /\b(over|under|오버|언더)\b/i.test(l));
+    const hc = useful.find((l) => /[+-]\d+(?:\.\d+)?/.test(l));
+    const win = useful.find((l) => /\b(승|win|winner|w[12])\b/i.test(l) && !/\b(over|under|오버|언더)\b/i.test(l));
+    if (ou) {
+      selection = ou;
+      market = useful.find((l) => /\b(total|합계|득점|언더\/오버|over\/under)\b/i.test(l)) || "언더/오버";
+    } else if (hc) {
+      selection = hc;
+      market = useful.find((l) => /handicap|핸디|spread/i.test(l)) || "핸디캡";
+    } else if (win) {
+      selection = win;
+      market = useful.find((l) => /승패|moneyline|winner|세트|맵|set|map/i.test(l) && l !== win) || "승패";
+    } else if (useful.length >= 2) {
+      selection = useful[useful.length - 1];
+      market = useful[useful.length - 2];
+    } else if (useful.length === 1) {
+      selection = useful[0];
+    }
+    return { event, market, selection };
+  }
+
   function scanSelectors(candidates) {
     const scans = [];
     for (const selector of candidates) {
@@ -318,15 +358,19 @@
     const odds = extractBcOdds(selectionEl, slip);
     const status = classifySlipStatus(blockText, odds, slip);
 
-    const item = {
+    const item = enrichItem(
+      {
+        event,
+        market,
+        selection,
+        odds: status === "active" ? odds : null,
+        status,
+        stake,
+        container_selector: selectorHint(selectionEl),
+        dom_hash: domHash(slip),
+      },
       event,
-      market,
-      selection,
-      odds: status === "active" ? odds : null,
-      status,
-      stake,
-      container_selector: selectorHint(selectionEl),
-    };
+    );
 
     if (!event && !selection && !odds) {
       return {
@@ -539,20 +583,24 @@
       }
 
       if (odds != null) {
+        const parsed = parseX10SlipText(rootText);
+        const item = enrichItem(
+          {
+            event: parsed.event,
+            market: parsed.market,
+            selection: parsed.selection,
+            odds,
+            status,
+            stake,
+            container_selector: selectorHint(root),
+            dom_hash: domHash(root),
+          },
+          parsed.event,
+        );
         return {
           ok: true,
           empty: false,
-          items: [
-            {
-              event: "",
-              market: "",
-              selection: "",
-              odds,
-              status: "active",
-              stake,
-              container_selector: selectorHint(root),
-            },
-          ],
+          items: [item],
           source: "dom",
           frame_url: location.href,
           container_selector: selectorHint(root),
