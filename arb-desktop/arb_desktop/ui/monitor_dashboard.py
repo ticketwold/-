@@ -31,6 +31,82 @@ def _odds_dir_class(direction: int) -> str:
     return "odds-flat"
 
 
+class WatchStatusPanel(QFrame):
+    """자동감시 ON/OFF + 현재 조건 분리 표시."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "Card")
+        self.setObjectName("WatchStatusPanel")
+        layout = QHBoxLayout(self)
+        layout.setSpacing(24)
+
+        watch_col = QVBoxLayout()
+        self.lbl_watch_title = QLabel("자동감시")
+        self.lbl_watch_title.setProperty("class", "muted")
+        self.lbl_watch_dot = QLabel("● OFF")
+        self.lbl_watch_dot.setProperty("class", "watch-off")
+        self.lbl_watch_sub = QLabel("감시 중지됨")
+        self.lbl_watch_sub.setProperty("class", "muted")
+        self.lbl_watch_started = QLabel("")
+        self.lbl_watch_started.setProperty("class", "muted")
+        watch_col.addWidget(self.lbl_watch_title)
+        watch_col.addWidget(self.lbl_watch_dot)
+        watch_col.addWidget(self.lbl_watch_sub)
+        watch_col.addWidget(self.lbl_watch_started)
+
+        cond_col = QVBoxLayout()
+        self.lbl_cond_title = QLabel("현재 조건")
+        self.lbl_cond_title.setProperty("class", "muted")
+        self.lbl_cond_state = QLabel("IDLE")
+        self.lbl_cond_state.setProperty("class", "engine-state")
+        self.lbl_cond_msg = QLabel("")
+        self.lbl_cond_msg.setProperty("class", "muted")
+        self.lbl_cond_msg.setWordWrap(True)
+        cond_col.addWidget(self.lbl_cond_title)
+        cond_col.addWidget(self.lbl_cond_state)
+        cond_col.addWidget(self.lbl_cond_msg)
+
+        layout.addLayout(watch_col, 1)
+        layout.addLayout(cond_col, 2)
+
+    def update_status(self, m: WatchMetrics, *, state: str = "", message: str = "") -> None:
+        state = state or m.engine_state or "IDLE"
+        if m.watch_enabled:
+            self.lbl_watch_dot.setText("● ON")
+            self.lbl_watch_dot.setProperty("class", "watch-on")
+            self.lbl_watch_sub.setText("실시간 배당 감시 중")
+            started = f"시작: {m.watch_started_at}" if m.watch_started_at else ""
+            self.lbl_watch_started.setText(started)
+        else:
+            self.lbl_watch_dot.setText("● OFF")
+            self.lbl_watch_dot.setProperty("class", "watch-off")
+            self.lbl_watch_sub.setText("감시 중지됨")
+            self.lbl_watch_started.setText("")
+
+        for w in (self.lbl_watch_dot,):
+            w.style().unpolish(w)
+            w.style().polish(w)
+
+        if not m.watch_enabled:
+            cond = "감시 중지"
+            cond_css = "engine-state status-idle"
+        else:
+            cond = _STATE_LABELS.get(state, state)
+            cond_css = _state_css(state)
+
+        self.lbl_cond_state.setText(cond)
+        self.lbl_cond_state.setProperty("class", cond_css)
+        self.lbl_cond_state.style().unpolish(self.lbl_cond_state)
+        self.lbl_cond_state.style().polish(self.lbl_cond_state)
+        self.lbl_cond_msg.setText(message or m.message or "")
+
+        glow = "watch-on" if m.watch_enabled else "watch-off"
+        self.setProperty("glow", glow)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
 class ProfitHeroPanel(QFrame):
     """현재 수익률 · 목표까지 — 가장 크게 표시."""
 
@@ -52,10 +128,13 @@ class ProfitHeroPanel(QFrame):
         self.lbl_target_label.setProperty("class", "muted")
         self.lbl_target_delta = QLabel("—")
         self.lbl_target_delta.setProperty("class", "target-delta")
+        self.lbl_target_pct = QLabel("목표 —")
+        self.lbl_target_pct.setProperty("class", "muted")
         self.lbl_min_profit = QLabel("최저 보장 —")
         self.lbl_min_profit.setProperty("class", "muted")
         row.addWidget(self.lbl_target_label)
         row.addWidget(self.lbl_target_delta)
+        row.addWidget(self.lbl_target_pct)
         row.addStretch()
         row.addWidget(self.lbl_min_profit)
 
@@ -75,6 +154,7 @@ class ProfitHeroPanel(QFrame):
             self.lbl_target_delta.style().unpolish(self.lbl_target_delta)
             self.lbl_target_delta.style().polish(self.lbl_target_delta)
             self.lbl_min_profit.setText(f"최저 보장 {m.min_guaranteed_profit_krw:,.0f} KRW")
+            self.lbl_target_pct.setText(f"목표 {m.target_profit_pct:.2f}%")
             rate_css = "profit-positive" if rate >= m.target_profit_pct else "profit-negative"
             self.lbl_rate.setProperty("class", rate_css)
             self.lbl_rate.style().unpolish(self.lbl_rate)
@@ -82,6 +162,7 @@ class ProfitHeroPanel(QFrame):
         else:
             self.lbl_rate.setText("—")
             self.lbl_target_delta.setText("—")
+            self.lbl_target_pct.setText("목표 —")
             self.lbl_min_profit.setText("최저 보장 —")
 
 
@@ -140,7 +221,7 @@ class OddsTickerCard(QFrame):
 
 
 class ReadinessChecklist(QGroupBox):
-  CHECK_ITEMS = (
+    CHECK_ITEMS = (
         ("bridge", "Bridge 연결"),
         ("bc_active", "BC ACTIVE"),
         ("x10_active", "x10 ACTIVE"),
@@ -162,6 +243,10 @@ class ReadinessChecklist(QGroupBox):
             layout.addWidget(lbl, i // 2, i % 2)
 
     def update_checks(self, m: WatchMetrics) -> None:
+        if not m.watch_enabled:
+            self.hide()
+            return
+        self.show()
         checks = {
             "bridge": m.bridge_connected,
             "bc_active": m.bc_site_label == "ACTIVE",
@@ -280,6 +365,9 @@ class StabilizeBar(QWidget):
         layout.addWidget(self.bar)
 
     def update_progress(self, m: WatchMetrics) -> None:
+        if not m.watch_enabled:
+            self.hide()
+            return
         if m.engine_state not in {"STABILIZING", "READY", "TARGET WAIT"} or not m.stable_count_required:
             self.hide()
             return
@@ -306,6 +394,9 @@ class MonitorDashboard(QWidget):
 
         self.status_banner = StatusBanner()
         root.addWidget(self.status_banner)
+
+        self.watch_status = WatchStatusPanel()
+        root.addWidget(self.watch_status)
 
         self.profit_hero = ProfitHeroPanel()
         root.addWidget(self.profit_hero)
@@ -337,18 +428,11 @@ class MonitorDashboard(QWidget):
         self.checklist = ReadinessChecklist()
         root.addWidget(self.checklist)
 
-        self.lbl_engine_state = QLabel("IDLE")
-        self.lbl_engine_state.setProperty("class", "engine-state")
-        self.lbl_engine_msg = QLabel("")
-        self.lbl_engine_msg.setProperty("class", "muted")
-        self.lbl_engine_msg.setWordWrap(True)
-        root.addWidget(self.lbl_engine_state)
-        root.addWidget(self.lbl_engine_msg)
-
         self._last_state = ""
 
     def update_all(self, m: WatchMetrics, *, state: str = "", message: str = "") -> None:
         state = state or m.engine_state or "IDLE"
+        self.watch_status.update_status(m, state=state, message=message)
         self.profit_hero.update_metrics(m)
         self.odds_x10.update_odds(
             odds=m.bti_odds,
@@ -380,20 +464,14 @@ class MonitorDashboard(QWidget):
         self.checklist.update_checks(m)
         self.stabilize_bar.update_progress(m)
 
-        display = _STATE_LABELS.get(state, state)
-        self.lbl_engine_state.setText(display)
-        self.lbl_engine_msg.setText(message or m.message or m.dispatch_note or "")
-
-        css = _state_css(state)
-        self.lbl_engine_state.setProperty("class", css)
-        self.lbl_engine_state.style().unpolish(self.lbl_engine_state)
-        self.lbl_engine_state.style().polish(self.lbl_engine_state)
-
-        self._update_banner(state, message or m.message)
-        self._update_dashboard_glow(state)
+        self._update_banner(m, state, message or m.message)
+        self._update_dashboard_glow(m, state)
         self._last_state = state
 
-    def _update_banner(self, state: str, message: str) -> None:
+    def _update_banner(self, m: WatchMetrics, state: str, message: str) -> None:
+        if not m.watch_enabled:
+            self.status_banner.hide_banner()
+            return
         if state == "READY":
             self.status_banner.show_ready()
         elif state in {"PREPARING", "DISPATCHING", "VERIFYING RESULT"}:
@@ -405,12 +483,17 @@ class MonitorDashboard(QWidget):
         else:
             self.status_banner.hide_banner()
 
-    def _update_dashboard_glow(self, state: str) -> None:
-        glow = "ready" if state == "READY" else "normal"
-        if state in {"PARTIAL BET", "FAILED"}:
+    def _update_dashboard_glow(self, m: WatchMetrics, state: str) -> None:
+        if not m.watch_enabled:
+            glow = "normal"
+        elif state == "READY":
+            glow = "ready"
+        elif state in {"PARTIAL BET", "FAILED"}:
             glow = "alert"
-        elif state == "AUTO BET WAIT" and self.status_banner.isVisible():
+        elif state == "AUTO BET WAIT" and ("닫" in (m.message or "")):
             glow = "warn"
+        else:
+            glow = "normal"
         self.setProperty("glow", glow)
         self.style().unpolish(self)
         self.style().polish(self)
@@ -422,7 +505,6 @@ _STATE_LABELS = {
     "STABILIZING": "배당 안정화 중",
     "READY": "자동배팅 준비 완료",
     "AUTO BET WAIT": "자동배팅 대기",
-    "BET TYPE MISMATCH": "배팅 타입 불일치",
     "PREPARING": "동시 배팅 준비",
     "DISPATCHING": "양쪽 배팅 동시 전송 중",
     "VERIFYING RESULT": "결과 확인",
@@ -433,7 +515,7 @@ _STATE_LABELS = {
 
 
 def _state_css(state: str) -> str:
-    if state in {"PARTIAL BET", "FAILED", "BET TYPE MISMATCH"}:
+    if state in {"PARTIAL BET", "FAILED"}:
         return "engine-state status-bad"
     if state == "READY":
         return "engine-state status-ok"

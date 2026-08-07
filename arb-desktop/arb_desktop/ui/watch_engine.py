@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
-from arb_desktop.betslip.bet_type import BetType, validate_bet_pair
 from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics, odds_in_range
 from arb_desktop.market_data.bithumb_fx import FxSnapshot, FxStatus
 from arb_desktop.ui.settings_store import AppSettings
@@ -87,6 +86,8 @@ class WatchMetrics:
     stabilize_seconds: float = 0.0
     bridge_connected: bool = False
     user_confirmed: bool = False
+    watch_enabled: bool = False
+    watch_started_at: str = ""
 
 
 def _metrics_from_odds_only(calc: OddsOnlyMetrics, fx: FxSnapshot | None) -> WatchMetrics:
@@ -134,11 +135,13 @@ class WatchEngine:
     _site_debounce: SiteStatusDebouncer = field(default_factory=SiteStatusDebouncer)
     _was_auto_bet_wait: bool = False
     _dispatch_armed: bool = False
+    _watch_started_at: float | None = None
 
     def start_watch(self, *, user_confirmed: bool = False) -> None:
         self._watching = True
         self._user_confirmed = user_confirmed
         self._dispatch_armed = False
+        self._watch_started_at = time.time()
         if self.state in {WatchState.IDLE, WatchState.ABORTED}:
             self.state = WatchState.TARGET_WAIT
 
@@ -147,8 +150,10 @@ class WatchEngine:
         self.state = WatchState.IDLE
         self._was_auto_bet_wait = False
         self._dispatch_armed = False
+        self._watch_started_at = None
         self._reset_stabilize()
         self._site_debounce.reset()
+        self.metrics.message = "감시 중지됨"
 
     def set_connecting(self) -> None:
         if not self._watching:
@@ -259,6 +264,8 @@ class WatchEngine:
         metrics.engine_state = self.state.value
         metrics.bridge_connected = bridge_connected
         metrics.user_confirmed = user_confirmed
+        metrics.watch_enabled = self._watching
+        metrics.watch_started_at = _format_ts(self._watch_started_at) if self._watch_started_at else ""
         metrics.stable_count = self._stable_count
         metrics.stable_count_required = settings.stable_count_required
         metrics.stabilize_seconds = settings.stabilize_seconds
@@ -283,6 +290,15 @@ class WatchEngine:
         self.metrics = self.compute_live_metrics(bc=bc, bti=bti, settings=settings, fx=fx)
 
         if not self._watching:
+            self.state = WatchState.IDLE
+            self._reset_stabilize()
+            self.metrics.engine_state = WatchState.IDLE.value
+            self.enrich_ui_context(
+                self.metrics,
+                settings=settings,
+                bridge_connected=bridge_connected,
+                user_confirmed=user_confirmed,
+            )
             return self.state, self.metrics, None
 
         if self.state in {WatchState.PREPARING, WatchState.DISPATCHING, WatchState.VERIFYING_RESULT}:
@@ -321,14 +337,6 @@ class WatchEngine:
         if slip_err:
             self._enter_auto_bet_wait(slip_err, slip_err)
             return self.state, self.metrics, slip_err
-
-        bet_err = _validate_bet_types(bc, bti, self.metrics)
-        if bet_err == "bet-type-mismatch":
-            self._enter_bet_type_mismatch(self.metrics.message)
-            return self.state, self.metrics, bet_err
-        if bet_err:
-            self._enter_auto_bet_wait(self.metrics.message, bet_err)
-            return self.state, self.metrics, bet_err
 
         bc_item = bc.first
         bti_item = bti.first
@@ -504,10 +512,8 @@ def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: Bet
         return
     x10_parsed = bti_item.parsed()
     bc_parsed = bc_item.parsed()
-    metrics.x10_display_selection = x10_parsed.display_selection or "—"
-    metrics.bc_display_selection = bc_parsed.display_selection or "—"
-    metrics.x10_bet_type_label = x10_parsed.bet_type_label
-    metrics.bc_bet_type_label = bc_parsed.bet_type_label
+    metrics.x10_display_selection = x10_parsed.display_selection or bti_item.selection or "—"
+    metrics.bc_display_selection = bc_parsed.display_selection or bc_item.selection or "—"
     metrics.x10_raw_market = x10_parsed.raw_market_text or bti_item.market or "—"
     metrics.bc_raw_market = bc_parsed.raw_market_text or bc_item.market or "—"
     metrics.x10_parse_debug = {
@@ -519,30 +525,3 @@ def _populate_bet_metrics(metrics: WatchMetrics, bc: BetSlipReadResult, bti: Bet
         "parsed_odds": "" if bti_item.odds is None else f"{bti_item.odds:g}",
         "parse_reason": x10_parsed.parse_reason or "—",
     }
-    pair = validate_bet_pair(x10_parsed, bc_parsed)
-    metrics.combined_bet_type_label = pair.combined_type_label or x10_parsed.bet_type_label
-    metrics.period_label = x10_parsed.period_label
-    metrics.line_label = pair.line_label or x10_parsed.line_label
-    metrics.verify_label = pair.verify_label
-    metrics.bet_mismatch_kind = pair.mismatch_kind
-
-
-def _validate_bet_types(bc: BetSlipReadResult, bti: BetSlipReadResult, metrics: WatchMetrics) -> str | None:
-    bc_item = bc.first
-    bti_item = bti.first
-    if not bc_item or not bti_item:
-        return None
-    x10_parsed = bti_item.parsed()
-    bc_parsed = bc_item.parsed()
-    pair = validate_bet_pair(x10_parsed, bc_parsed)
-    _populate_bet_metrics(metrics, bc, bti)
-    if x10_parsed.bet_type == BetType.UNKNOWN or bc_parsed.bet_type == BetType.UNKNOWN:
-        metrics.message = "배팅 타입 확인 필요"
-        return "unknown-bet-type"
-    if not pair.ok:
-        if pair.mismatch_kind == "LINE_MISMATCH":
-            metrics.message = f"기준점 불일치 — {pair.line_label}"
-            return "bet-type-mismatch"
-        metrics.message = f"타입 불일치 — {metrics.x10_bet_type_label} / {metrics.bc_bet_type_label}"
-        return "bet-type-mismatch"
-    return None

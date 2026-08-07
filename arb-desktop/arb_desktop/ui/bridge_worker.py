@@ -14,6 +14,7 @@ from arb_desktop.betslip.odds_only_calc import compute_odds_only_metrics
 from arb_desktop.config import settings as runtime_settings
 from arb_desktop.execution.parallel_orchestrator import DispatchContext, ParallelBetOrchestrator
 from arb_desktop.market_data.bithumb_fx import BithumbFxProvider, FxSnapshot
+from arb_desktop.ui.odds_log_manager import OddsLogManager
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.watch_engine import WatchEngine, WatchMetrics, WatchState
 
@@ -51,6 +52,19 @@ class BridgeWorker(QObject):
         self._bridge_started = False
         self._orchestrator = ParallelBetOrchestrator()
         self._dispatch_running = False
+        self._odds_log: OddsLogManager | None = None
+        self._last_engine_log_state: str = ""
+
+    def attach_odds_log(self, manager: OddsLogManager) -> None:
+        self._odds_log = manager
+
+    @property
+    def watch_enabled(self) -> bool:
+        return self._watching
+
+    @property
+    def watch_metrics(self) -> WatchMetrics:
+        return self._watch_engine.metrics
 
     @property
     def app_settings(self) -> AppSettings:
@@ -215,7 +229,28 @@ class BridgeWorker(QObject):
             bridge_connected=self._runtime.manager.bridge_connected,
             user_confirmed=self._user_confirmed,
         )
+        self._log_odds_metrics(metrics)
         self.live_metrics.emit(metrics)
+
+    def _log_odds_metrics(self, metrics: WatchMetrics) -> None:
+        if not self._odds_log:
+            return
+        profit = metrics.current_profit_rate if metrics.total_stake_krw else None
+        watch = self._watching
+        self._odds_log.observe_site(
+            site="X10",
+            odds=metrics.bti_odds,
+            status=metrics.x10_site_label,
+            watch_enabled=watch,
+            profit_rate=profit,
+        )
+        self._odds_log.observe_site(
+            site="BC",
+            odds=metrics.bc_odds,
+            status=metrics.bc_site_label,
+            watch_enabled=watch,
+            profit_rate=profit,
+        )
 
     async def _evaluate_watch(self) -> None:
         if not self._runtime:
@@ -338,7 +373,62 @@ class BridgeWorker(QObject):
                 user_confirmed=self._user_confirmed,
             )
         msg = m.message or err or ""
+        self._log_engine_state(self._watch_engine.state.value, m, err, msg)
         self.watch_state.emit(self._watch_engine.state.value, m, msg)
+
+    def _log_engine_state(
+        self,
+        state: str,
+        metrics: WatchMetrics,
+        err: str | None,
+        msg: str,
+    ) -> None:
+        if not self._odds_log:
+            return
+        profit = metrics.current_profit_rate if metrics.total_stake_krw else None
+        watch = self._watching
+        key = f"{state}|{err}|{msg}|{profit}"
+        if key == self._last_engine_log_state:
+            return
+
+        if state == "READY":
+            self._odds_log.log_engine(
+                status="READY",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=f"현재 수익률 {profit:.2f}%" if profit is not None else "READY",
+            )
+            self._last_engine_log_state = key
+        elif err == "below-target" or (state == "TARGET WAIT" and "below-target" in msg):
+            self._odds_log.log_engine(
+                status="TARGET WAIT",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=f"현재 수익률 {profit:.2f}%" if profit is not None else msg,
+            )
+            self._last_engine_log_state = key
+        elif state == "AUTO BET WAIT" and ("닫" in msg or "CLOSED" in msg.upper()):
+            site = "X10" if "텐텐" in msg or "x10" in msg.lower() else "BC" if "BC" in msg else "ENGINE"
+            self._odds_log.log_engine(
+                status="CLOSED",
+                watch_enabled=watch,
+                profit_rate=profit,
+                message=msg or "자동배팅 대기",
+            )
+            if site in {"X10", "BC"}:
+                self._odds_log.log_site_change(
+                    site=site,
+                    previous_odds=metrics.bti_odds if site == "X10" else metrics.bc_odds,
+                    current_odds=metrics.bti_odds if site == "X10" else metrics.bc_odds,
+                    previous_status="ACTIVE",
+                    current_status="CLOSED",
+                    watch_enabled=watch,
+                    profit_rate=profit,
+                    message="closed",
+                )
+            self._last_engine_log_state = key
+        elif state == "IDLE" and not watch:
+            self._last_engine_log_state = key
 
     @pyqtSlot()
     def reconnect(self) -> None:
@@ -364,7 +454,10 @@ class BridgeWorker(QObject):
     @pyqtSlot()
     def start_watch(self) -> None:
         self._watching = True
+        self._last_engine_log_state = ""
         self._watch_engine.start_watch(user_confirmed=self._user_confirmed)
+        if self._odds_log:
+            self._odds_log.log_watch(enabled=True)
         self._emit_watch_state()
         if self._loop:
             asyncio.run_coroutine_threadsafe(self._evaluate_watch(), self._loop)
@@ -373,6 +466,9 @@ class BridgeWorker(QObject):
     def stop_watch(self) -> None:
         self._watching = False
         self._watch_engine.stop_watch()
+        if self._odds_log:
+            self._odds_log.log_watch(enabled=False)
+        self._last_engine_log_state = ""
         self._emit_watch_state()
 
     @pyqtSlot()

@@ -323,6 +323,50 @@ QPushButton[class="danger"] {
     color: #ff7b72;
 }
 
+QPushButton[class="watch-on"] {
+    background-color: #1f6f3d;
+    border-color: #2ea043;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+QPushButton[class="watch-stop-active"] {
+    background-color: #8b1e1e;
+    border-color: #f85149;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+QPushButton[class="watch-stop-idle"] {
+    background-color: #21262d;
+    border-color: #30363d;
+    color: #484f58;
+}
+
+QLabel[class="watch-on"] {
+    font-size: 28px;
+    font-weight: 800;
+    color: #3fb950;
+}
+
+QLabel[class="watch-off"] {
+    font-size: 28px;
+    font-weight: 800;
+    color: #8b949e;
+}
+
+#WatchStatusPanel[glow="watch-on"] {
+    border: 1px solid #238636;
+    border-radius: 12px;
+    background: #0f1f14;
+}
+
+#WatchStatusPanel[glow="watch-off"] {
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    background: #161b22;
+}
+
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background: #0d1117;
     border: 1px solid #30363d;

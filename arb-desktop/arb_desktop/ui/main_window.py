@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread
@@ -30,18 +31,14 @@ from arb_desktop.ui.bridge_worker import BridgeWorker
 from arb_desktop.ui.log_manager import LogManager
 from arb_desktop.ui.log_window import LogWindow
 from arb_desktop.ui.monitor_dashboard import MonitorDashboard
+from arb_desktop.ui.odds_log_manager import OddsLogEntry, OddsLogManager
+from arb_desktop.ui.odds_log_panel import OddsLogPanel
 from arb_desktop.ui.settings_dialog import SettingsDialog
 from arb_desktop.ui.settings_store import AppSettings, SettingsStore
 from arb_desktop.ui.setup_wizard import SetupWizard
 from arb_desktop.ui.theme_manager import apply_theme
 from arb_desktop.ui.watch_engine import WatchMetrics
 from arb_desktop.ui.x10_debug_panel import X10DebugPanel
-
-
-def _chrome_bridge_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "chrome-bridge"  # type: ignore[attr-defined]
-    return Path(__file__).resolve().parents[3] / "chrome-bridge"
 
 
 class _VerticalScrollArea(QScrollArea):
@@ -80,8 +77,11 @@ class MainWindow(QMainWindow):
 
         self._log_window: LogWindow | None = None
         self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
+        self._odds_log = OddsLogManager(self._store.logs_dir, on_entry=self._on_odds_log_entry)
         self._log_collapsed = True
         self._current_state = "IDLE"
+        self._watch_enabled_ui = False
+        self._watch_started_at = ""
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -99,7 +99,9 @@ class MainWindow(QMainWindow):
         dash.addWidget(self._build_action_section())
 
         scroll = _VerticalScrollArea(dashboard)
-        self.tabs.addTab(scroll, "모니터")
+        self.tabs.addTab(scroll, "메인")
+        self.odds_log_panel = OddsLogPanel(self._odds_log, self._store.logs_dir)
+        self.tabs.addTab(self.odds_log_panel, "배당 로그")
         self.x10_debug_panel = X10DebugPanel()
         self.tabs.addTab(self.x10_debug_panel, "Debug")
 
@@ -109,6 +111,7 @@ class MainWindow(QMainWindow):
 
         self._thread = QThread()
         self._worker = BridgeWorker(self._store)
+        self._worker.attach_odds_log(self._odds_log)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.bootstrap)
         self._worker.ready.connect(self._on_bridge_ready)
@@ -122,6 +125,7 @@ class MainWindow(QMainWindow):
         self._worker.log_message.connect(self._on_worker_log)
 
         self._wire_buttons()
+        self._apply_watch_ui()
         self._refresh_settings_labels()
         self._thread.start()
 
@@ -161,10 +165,12 @@ class MainWindow(QMainWindow):
         self.btn_watch_start.setProperty("class", "primary")
         self.btn_watch_stop = QPushButton("중지")
         self.btn_watch_stop.setEnabled(False)
+        self.btn_watch_stop.setProperty("class", "watch-stop-idle")
         self.btn_dry_test = QPushButton("드라이런")
         self.btn_settings = QPushButton("설정")
         self.btn_reconnect = QPushButton("연결 확인")
         self.btn_log = QPushButton("로그 창")
+        self.btn_odds_log = QPushButton("배당 로그")
         self.btn_quit = QPushButton("종료")
         self.btn_quit.setProperty("class", "danger")
         for btn in (
@@ -174,6 +180,7 @@ class MainWindow(QMainWindow):
             self.btn_settings,
             self.btn_reconnect,
             self.btn_log,
+            self.btn_odds_log,
             self.btn_quit,
         ):
             row.addWidget(btn)
@@ -199,9 +206,33 @@ class MainWindow(QMainWindow):
         self.btn_dry_test.clicked.connect(self._dry_run_test)
         self.btn_settings.clicked.connect(self._open_settings)
         self.btn_log.clicked.connect(self._open_log_window)
+        self.btn_odds_log.clicked.connect(self._open_odds_log_tab)
         self.btn_toggle_log.clicked.connect(self._toggle_log_preview)
         self.btn_quit.clicked.connect(self.close)
         self.chk_confirm.toggled.connect(self._on_confirm_toggled)
+
+    def _apply_watch_ui(self) -> None:
+        if self._watch_enabled_ui:
+            self.btn_watch_start.setText("자동감시 실행 중")
+            self.btn_watch_start.setEnabled(False)
+            self.btn_watch_start.setProperty("class", "watch-on")
+            self.btn_watch_stop.setEnabled(True)
+            self.btn_watch_stop.setProperty("class", "watch-stop-active")
+        else:
+            self.btn_watch_start.setText("자동감시 시작")
+            self.btn_watch_start.setEnabled(True)
+            self.btn_watch_start.setProperty("class", "primary")
+            self.btn_watch_stop.setEnabled(False)
+            self.btn_watch_stop.setProperty("class", "watch-stop-idle")
+        for btn in (self.btn_watch_start, self.btn_watch_stop):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _metrics_with_watch(self, m: WatchMetrics) -> WatchMetrics:
+        m.watch_enabled = self._watch_enabled_ui
+        if self._watch_enabled_ui and self._watch_started_at:
+            m.watch_started_at = self._watch_started_at
+        return m
 
     def _refresh_settings_labels(self) -> None:
         s = self._settings
@@ -225,9 +256,13 @@ class MainWindow(QMainWindow):
         self.lbl_last_log.setVisible(not self._log_collapsed)
         self.btn_toggle_log.setText("로그 접기" if not self._log_collapsed else "로그 펼치기")
 
+    def _open_odds_log_tab(self) -> None:
+        self.tabs.setCurrentWidget(self.odds_log_panel)
+
     def _on_reset_connection(self) -> None:
         if QMessageBox.question(self, "연결 초기화", "credential을 재발급합니다.") == QMessageBox.StandardButton.Yes:
             self._worker.reset_connection()
+            self._stop_watch()
             self.status.showMessage("연결 초기화됨")
 
     def _run_setup_wizard(self) -> None:
@@ -238,7 +273,8 @@ class MainWindow(QMainWindow):
 
     def _on_bridge_ready(self) -> None:
         self.status.showMessage("Bridge 실행 중")
-        self.btn_watch_start.setEnabled(True)
+        if not self._watch_enabled_ui:
+            self.btn_watch_start.setEnabled(True)
 
     def _on_bridge_status(self, status: BridgeStatus) -> None:
         bridge = "CONNECTED" if status.bridge == BridgeConnectionState.CONNECTED else status.bridge.value
@@ -262,7 +298,9 @@ class MainWindow(QMainWindow):
         self._refresh_settings_labels()
 
     def _on_live_metrics(self, m: WatchMetrics) -> None:
-        self.monitor.update_all(m, state=self._current_state)
+        m = self._metrics_with_watch(m)
+        state = self._current_state if self._watch_enabled_ui else "IDLE"
+        self.monitor.update_all(m, state=state)
         if m.x10_parse_debug:
             self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
 
@@ -274,10 +312,17 @@ class MainWindow(QMainWindow):
         self.x10_debug_panel.update_from_payload(payload)
 
     def _on_watch_state(self, state: str, metrics: WatchMetrics, message: str) -> None:
-        self._current_state = state
-        self.monitor.update_all(metrics, state=state, message=message)
-        if metrics.x10_parse_debug:
-            self.x10_debug_panel.update_parse_debug(metrics.x10_parse_debug)
+        if self._watch_enabled_ui:
+            self._current_state = state
+        else:
+            self._current_state = "IDLE"
+        m = self._metrics_with_watch(metrics)
+        self.monitor.update_all(m, state=self._current_state, message=message)
+        if m.x10_parse_debug:
+            self.x10_debug_panel.update_parse_debug(m.x10_parse_debug)
+
+    def _on_odds_log_entry(self, entry: OddsLogEntry) -> None:
+        self.odds_log_panel.append_entry(entry)
 
     def _on_worker_log(self, site: str, status: str, odds: str, profit: str, message: str, dedup: str) -> None:
         self._log.log(site=site, status=status, odds=odds, profit=profit, message=message, dedup_key=dedup)
@@ -298,21 +343,30 @@ class MainWindow(QMainWindow):
         if not self.chk_confirm.isChecked():
             self.status.showMessage("반대 선택 확인이 필요합니다")
             return
+        self._watch_enabled_ui = True
+        self._watch_started_at = datetime.now().strftime("%H:%M:%S")
+        self._current_state = "TARGET WAIT"
+        self._apply_watch_ui()
         self._worker.set_user_confirmed(True)
         self._worker.update_settings(self._settings)
         self._worker.start_watch()
-        self.btn_watch_start.setEnabled(False)
-        self.btn_watch_stop.setEnabled(True)
+        self.status.showMessage("자동감시 ON — 실시간 배당 감시 중")
 
     def _stop_watch(self) -> None:
+        self._watch_enabled_ui = False
+        self._watch_started_at = ""
+        self._current_state = "IDLE"
+        self._apply_watch_ui()
         self._worker.stop_watch()
-        self.btn_watch_start.setEnabled(True)
-        self.btn_watch_stop.setEnabled(False)
+        m = self._metrics_with_watch(self._worker.watch_metrics)
+        self.monitor.update_all(m, state="IDLE", message="감시 중지됨")
+        self.status.showMessage("자동감시 OFF — 감시 중지됨")
 
     def _dry_run_test(self) -> None:
-        self._worker.update_settings(self._settings)
-        self._worker.start_watch()
-        self.status.showMessage("드라이런 감시 시작")
+        if not self.chk_confirm.isChecked():
+            self.status.showMessage("반대 선택 확인이 필요합니다")
+            return
+        self._start_watch()
 
     def _open_log_window(self) -> None:
         if not self._log_window:
