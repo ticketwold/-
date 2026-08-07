@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from typing import Any
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
@@ -127,50 +129,83 @@ class BridgeWorker(QObject):
 
     @pyqtSlot()
     def bootstrap(self) -> None:
-        from arb_desktop.startup_crash import is_gui_thread, log_thread, startup_log
+        from arb_desktop.startup_crash import (
+            STARTUP_06,
+            STARTUP_07,
+            STARTUP_08,
+            STARTUP_09,
+            is_gui_thread,
+            log_thread,
+            record_crash,
+            startup_log,
+        )
 
         if is_gui_thread():
-            startup_log("[WARNING] Bridge bootstrap invoked on MAIN (GUI) thread")
+            startup_log("[WARNING] bootstrap called on GUI thread")
         log_thread("BRIDGE")
-        startup_log("[STARTUP 6] start Bridge")
-        if self._app_settings is None:
-            self._app_settings = self._store.load()
-        self._store.apply_to_runtime(self._app_settings)
-        self._pairing_store = self._store.pairing_store_from_settings(self._app_settings)
-        self._fx._refresh_interval = self._app_settings.fx_refresh_seconds
-        self._fx._max_stale_seconds = self._app_settings.fx_max_stale_seconds
+        startup_log(STARTUP_06)
+
+        try:
+            if self._app_settings is None:
+                self._app_settings = self._store.load()
+            self._store.apply_to_runtime(self._app_settings)
+            self._pairing_store = self._store.pairing_store_from_settings(self._app_settings)
+            self._fx._refresh_interval = self._app_settings.fx_refresh_seconds
+            self._fx._max_stale_seconds = self._app_settings.fx_max_stale_seconds
+        except Exception as exc:
+            record_crash(exc, stage="bootstrap-init")
+            startup_log(f"{STARTUP_06} settings init warning: {exc}")
+            self.error.emit(f"Bridge ERROR: {exc}")
+
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+
+        bridge_ok = False
         try:
             self._loop.run_until_complete(self._start_bridge())
-            startup_log("[STARTUP 7] start FX worker")
-            log_thread("FX")
-            self.ready.emit()
+            bridge_ok = True
         except Exception as exc:
-            startup_log(f"[STARTUP 6] Bridge failed: {type(exc).__name__}: {exc}")
+            record_crash(exc, stage="bridge-start", tb=exc.__traceback__)
+            startup_log(f"{STARTUP_06} failed: {type(exc).__name__}: {exc}")
             self.error.emit(f"Bridge ERROR: {exc}")
             self._watch_engine.set_idle()
             self._emit_watch_state()
+
+        startup_log(STARTUP_07)
+        log_thread("FX")
+        try:
             if not self._fx_task:
-                try:
-                    startup_log("[STARTUP 7] start FX worker (degraded)")
-                    log_thread("FX")
-                    self._fx_task = asyncio.create_task(self._fx_loop())
-                except Exception as fx_exc:
-                    startup_log(f"[STARTUP 7] FX failed: {type(fx_exc).__name__}: {fx_exc}")
-                    self.error.emit(f"FX ERROR: {fx_exc}")
+                self._fx_task = asyncio.create_task(self._fx_loop())
+        except Exception as exc:
+            record_crash(exc, stage="fx-start", tb=exc.__traceback__)
+            startup_log(f"{STARTUP_07} failed: {type(exc).__name__}: {exc}")
+            self.error.emit(f"FX ERROR: {exc}")
+
+        if bridge_ok:
+            startup_log(STARTUP_08)
+            log_thread("SCANNER")
+        else:
+            startup_log(f"{STARTUP_08} skipped (bridge degraded)")
+
+        startup_log(STARTUP_09)
+        self.ready.emit()
+
         try:
             self._loop.run_forever()
         except Exception as exc:
-            self.error.emit(str(exc))
+            record_crash(exc, stage="event-loop", tb=exc.__traceback__)
+            self.error.emit(f"Worker ERROR: {exc}")
         finally:
-            if self._runtime and self._loop:
-                try:
+            try:
+                if self._runtime and self._loop and self._loop.is_running():
                     self._loop.run_until_complete(self._runtime.stop())
-                except Exception:
-                    pass
-            if self._loop:
-                self._loop.close()
+            except Exception:
+                pass
+            try:
+                if self._loop and not self._loop.is_closed():
+                    self._loop.close()
+            except Exception:
+                pass
 
     async def _start_bridge(self) -> None:
         self._watch_engine.set_connecting()
@@ -303,7 +338,7 @@ class BridgeWorker(QObject):
         self._runtime.manager.on_stake_input_changed = on_stake_input_changed
         from arb_desktop.startup_crash import log_thread, startup_log
 
-        startup_log("[STARTUP 9] start Scanner")
+        startup_log("[STARTUP 08] Scanner start")
         log_thread("SCANNER")
         self._scanner = BetSlipScanner(self._runtime.session)
         await self._runtime.start()

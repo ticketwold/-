@@ -85,8 +85,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             from arb_desktop.startup_crash import startup_log
 
-            startup_log(f"[STARTUP 5] apply_to_runtime failed: {exc}")
-            raise
+            startup_log(f"[STARTUP 03] apply_to_runtime warning: {exc}")
 
         self._log_window: LogWindow | None = None
         self._log = LogManager(self._store.logs_dir, on_entry=self._on_log_entry)
@@ -135,7 +134,7 @@ class MainWindow(QMainWindow):
         self._worker = BridgeWorker(self._store, app_settings=self._settings)
         self._worker.attach_odds_log(self._odds_log)
         self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.bootstrap)
+        # bootstrap is invoked from start_background_services(), not thread.started
         self._worker.ready.connect(self._on_bridge_ready)
         self._worker.error.connect(self._on_error)
         self._worker.bridge_status.connect(self._on_bridge_status)
@@ -171,17 +170,18 @@ class MainWindow(QMainWindow):
         if self._background_started:
             return
         self._background_started = True
-        from arb_desktop.startup_crash import log_thread, startup_log
+        from arb_desktop.startup_crash import STARTUP_06, log_thread, startup_log
 
         log_thread("MAIN")
-        startup_log("[STARTUP 6] start Bridge thread")
+        startup_log(STARTUP_06)
         if not self._thread.isRunning():
+            self._thread.started.connect(self._worker.bootstrap)
             self._thread.start()
 
     def schedule_post_show_tasks(self) -> None:
-        """First-run wizard after GUI is interactive."""
+        """Deferred non-blocking tasks — no modal wizard during startup."""
         if not self._settings.setup_completed:
-            QTimer.singleShot(0, self._run_setup_wizard)
+            self.status.showMessage("첫 실행 — 페어링 버튼으로 Chrome Bridge를 연결하세요")
 
     def _build_action_section(self) -> QWidget:
         box = QWidget()
@@ -522,8 +522,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._worker.stop_watch()
         self._worker.stop_bridge()
-        self._thread.quit()
-        self._thread.wait(3000)
+        if self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(500)
         super().closeEvent(event)
 
 
@@ -532,17 +533,22 @@ def run_app(
     preloaded_store: SettingsStore | None = None,
     preloaded_settings: AppSettings | None = None,
 ) -> int:
-    from arb_desktop.startup_crash import record_crash, show_crash_dialog, startup_log
+    from arb_desktop.startup_crash import (
+        STARTUP_01,
+        STARTUP_03,
+        STARTUP_04,
+        STARTUP_05,
+        record_crash,
+        show_crash_dialog,
+        startup_log,
+    )
 
     try:
         lock = ensure_single_instance()
         if not lock.ok:
-            startup_log("[STARTUP 4] create QApplication (single-instance block)")
-            app = QApplication(sys.argv)
-            QMessageBox.warning(None, "arb-desktop", lock.message)
-            return 1
+            startup_log(f"{STARTUP_01} warning: {lock.message} — GUI will start anyway")
 
-        startup_log("[STARTUP 4] create QApplication")
+        startup_log(STARTUP_01)
         QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
         app = QApplication(sys.argv)
         app.setApplicationName("arb-desktop")
@@ -551,22 +557,28 @@ def run_app(
         store = preloaded_store or SettingsStore()
         settings = preloaded_settings or store.load()
         if preloaded_store is None:
-            store.apply_to_runtime(settings)
+            try:
+                store.apply_to_runtime(settings)
+            except Exception as exc:
+                startup_log(f"{STARTUP_01} apply_to_runtime warning: {exc}")
         apply_theme(app, settings.ui_theme)
 
-        startup_log("[STARTUP 5] create MainWindow")
+        startup_log(STARTUP_03)
         win = MainWindow(store=store, settings=settings)
 
-        startup_log("[STARTUP 8] show window")
+        startup_log(STARTUP_04)
         from arb_desktop.startup_crash import log_thread
 
         log_thread("MAIN")
         win.show()
         app.processEvents()
+        if not lock.ok:
+            win.status.showMessage(f"경고: {lock.message}")
         QTimer.singleShot(0, win.start_background_services)
         QTimer.singleShot(0, win.schedule_post_show_tasks)
+        QTimer.singleShot(250, lambda: startup_log(STARTUP_05))
         return app.exec()
-    except Exception as exc:
+    except BaseException as exc:
         import sys as _sys
 
         log_path = record_crash(exc, stage="run_app", tb=_sys.exc_info()[2])

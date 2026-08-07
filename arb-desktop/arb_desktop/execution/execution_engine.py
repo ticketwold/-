@@ -442,6 +442,7 @@ _ABORT_MESSAGES = {
     "redispatch-cooldown": "재실행 대기 중",
     "execution-lock-active": "실행 잠금",
     "bc-stake-sync-failed": "BC stake sync failed",
+    "bc-stake-verify-failed": "BC stake input verify failed",
     "slip-changed-before-dispatch": "카트 변경됨 — 배팅 취소",
     "locked": "실행 잠금",
 }

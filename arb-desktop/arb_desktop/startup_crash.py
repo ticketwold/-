@@ -10,6 +10,17 @@ from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 
+# Canonical startup step labels (crash.log)
+STARTUP_01 = "[STARTUP 01] QApplication"
+STARTUP_02 = "[STARTUP 02] Settings"
+STARTUP_03 = "[STARTUP 03] MainWindow construct"
+STARTUP_04 = "[STARTUP 04] MainWindow show"
+STARTUP_05 = "[STARTUP 05] Event loop alive"
+STARTUP_06 = "[STARTUP 06] Bridge worker start"
+STARTUP_07 = "[STARTUP 07] FX worker start"
+STARTUP_08 = "[STARTUP 08] Scanner start"
+STARTUP_09 = "[STARTUP 09] READY"
+
 
 def crash_log_path() -> Path:
     local = os.environ.get("LOCALAPPDATA")
@@ -31,7 +42,6 @@ def startup_log(message: str) -> None:
 
 
 def log_thread(label: str) -> None:
-    """Log thread id for startup diagnostics (MAIN / BRIDGE / FX / SCANNER)."""
     tid = threading.get_ident()
     startup_log(f"[THREAD {label}] id={tid}")
 
@@ -113,15 +123,45 @@ def show_crash_dialog(exc: BaseException, log_path: Path, *, stage: str = "") ->
         _present()
 
 
+def _handle_uncaught(
+    exc: BaseException,
+    *,
+    stage: str,
+    tb: TracebackType | None = None,
+    show_dialog: bool = False,
+) -> None:
+    path = record_crash(exc, stage=stage, tb=tb)
+    if show_dialog and is_gui_thread():
+        show_crash_dialog(exc, path, stage=stage)
+    else:
+        startup_log(f"[UNCAUGHT {stage}] {type(exc).__name__}: {exc} (log={path})")
+
+
 def install_global_hooks() -> None:
     def _sys_hook(exc_type, exc, tb) -> None:
         if exc_type is KeyboardInterrupt:
             sys.__excepthook__(exc_type, exc, tb)
             return
-        path = record_crash(exc, stage="sys.excepthook", tb=tb)
-        show_crash_dialog(exc, path, stage="sys.excepthook")
+        # Worker-thread exceptions must not modal-block the GUI or quit the app.
+        _handle_uncaught(
+            exc,
+            stage="sys.excepthook",
+            tb=tb,
+            show_dialog=is_gui_thread(),
+        )
 
     sys.excepthook = _sys_hook
+
+    if hasattr(threading, "excepthook"):
+        def _thread_hook(args: threading.ExceptHookArgs) -> None:
+            _handle_uncaught(
+                args.exc_value,
+                stage="threading.excepthook",
+                tb=args.exc_traceback,
+                show_dialog=False,
+            )
+
+        threading.excepthook = _thread_hook  # type: ignore[attr-defined]
 
     try:
         from PyQt6.QtCore import qInstallMessageHandler

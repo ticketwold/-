@@ -6,11 +6,21 @@ from arb_desktop.config import Settings
 from arb_desktop.ui.settings_store import RUNTIME_SETTINGS_MAP, AppSettings, SettingsStore
 
 
-def test_runtime_map_targets_defined_settings_fields() -> None:
+def test_bridge_worker_imports_asyncio() -> None:
+    import arb_desktop.ui.bridge_worker as bw
+
+    assert hasattr(bw, "asyncio")
+    assert bw.asyncio is not None
+
+
+def test_settings_runtime_fields_exhaustive() -> None:
+    """RUNTIME_SETTINGS_MAP values must exist on pydantic Settings — prevents startup crash."""
+    from arb_desktop.config import Settings
+
     runtime_fields = set(Settings.model_fields.keys())
-    used_runtime_fields = set(RUNTIME_SETTINGS_MAP.values())
-    missing = used_runtime_fields - runtime_fields
-    assert not missing, f"Runtime Settings missing fields: {missing}"
+    used = set(RUNTIME_SETTINGS_MAP.values())
+    missing = used - runtime_fields
+    assert not missing, f"Settings model missing mapped fields: {sorted(missing)}"
 
 
 def test_runtime_settings_has_execution_flags() -> None:

@@ -12,8 +12,8 @@ from arb_desktop.ui.watch_engine import WatchMetrics, WatchState
 
 CHECKLIST_ORDER: tuple[str, ...] = (
     "Bridge",
-    "X10 Slip",
-    "BC Slip",
+    "X10 Cart",
+    "BC Cart",
     "X10 Odds",
     "BC Odds",
     "BC Stake Input",
@@ -53,8 +53,8 @@ def build_exec_checklist(
     c: dict[str, str] = {}
 
     c["Bridge"] = _pass_fail(bridge_connected)
-    c["X10 Slip"] = _pass_fail(not bti.empty and bool(bti.first))
-    c["BC Slip"] = _pass_fail(not bc.empty and bool(bc.first))
+    c["X10 Cart"] = _pass_fail(not bti.empty and bool(bti.first))
+    c["BC Cart"] = _pass_fail(not bc.empty and bool(bc.first))
     c["X10 Odds"] = _pass_fail(bool(bti.first and odds_in_range(bti.first.odds)))
     c["BC Odds"] = _pass_fail(bool(bc.first and odds_in_range(bc.first.odds)))
 
@@ -91,8 +91,8 @@ def _ordered_failures(checklist: dict[str, str], keys: tuple[str, ...]) -> list[
     failures: list[str] = []
     reason_map = {
         "Bridge": "bridge_disconnected",
-        "X10 Slip": "x10_slip_missing",
-        "BC Slip": "bc_slip_missing",
+        "X10 Cart": "x10_slip_missing",
+        "BC Cart": "bc_slip_missing",
         "X10 Odds": "x10_odds_invalid",
         "BC Odds": "bc_odds_invalid",
         "BC Stake Input": "bc_stake_input_not_found",
@@ -134,8 +134,8 @@ def assess_manual_dispatch_readiness(
     )
     keys: tuple[str, ...] = (
         "Bridge",
-        "X10 Slip",
-        "BC Slip",
+        "X10 Cart",
+        "BC Cart",
         "X10 Odds",
         "BC Odds",
     )

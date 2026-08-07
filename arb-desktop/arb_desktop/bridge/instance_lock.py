@@ -51,7 +51,7 @@ class InstanceLock:
     @staticmethod
     def _is_arb_desktop_running() -> bool:
         try:
-            with urllib.request.urlopen("http://127.0.0.1:18766/health", timeout=1.0) as resp:
+            with urllib.request.urlopen("http://127.0.0.1:18766/health", timeout=0.2) as resp:
                 return resp.status == 200
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
