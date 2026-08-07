@@ -75,7 +75,7 @@ def assess_dispatch_readiness(
     c["X10 Bet Button"] = "?" 
     c["BC Bet Button"] = "?"
 
-    live_on = settings.live_execution_enabled and settings.parallel_execution_enabled
+    live_on = settings.live_execution_enabled
     c["Live Execution"] = "ON" if live_on else "OFF"
     c["Dry Run"] = "ON" if settings.dry_run else "OFF"
     c["Watch"] = "ON" if watch_enabled else "OFF"

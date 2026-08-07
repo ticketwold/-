@@ -135,3 +135,4 @@ class SettingsStore:
         runtime.default_usdt_rate = settings.usdt_rate
         runtime.dry_run = settings.dry_run
         runtime.live_execution_enabled = settings.live_execution_enabled
+        runtime.parallel_execution_enabled = settings.parallel_execution_enabled or settings.live_execution_enabled

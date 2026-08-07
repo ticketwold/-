@@ -23,7 +23,8 @@ class BcStakeDebugPanel(QWidget):
 
     scan_requested = pyqtSignal()
     test_requested = pyqtSignal(float)
-    bet_buttons_requested = pyqtSignal()
+    x10_bet_button_requested = pyqtSignal()
+    bc_bet_button_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -47,20 +48,24 @@ class BcStakeDebugPanel(QWidget):
         btn_row = QHBoxLayout()
         self.btn_scan = QPushButton("BC Stake Input 찾기")
         self.btn_test = QPushButton("BC 1.0 USDT 입력 테스트")
-        self.btn_bet_buttons = QPushButton("양쪽 Bet 버튼 찾기")
+        self.btn_x10_bet = QPushButton("X10 Bet 버튼 찾기")
+        self.btn_bc_bet = QPushButton("BC Bet 버튼 찾기")
         self.btn_scan.setProperty("class", "primary")
         self.btn_test.setProperty("class", "primary")
-        self.btn_bet_buttons.setProperty("class", "primary")
+        self.btn_x10_bet.setProperty("class", "primary")
+        self.btn_bc_bet.setProperty("class", "primary")
         self.lbl_test_result = QLabel("—")
         self.lbl_test_result.setWordWrap(True)
         self.lbl_test_result.setFont(self._mono)
         btn_row.addWidget(self.btn_scan)
         btn_row.addWidget(self.btn_test)
-        btn_row.addWidget(self.btn_bet_buttons)
+        btn_row.addWidget(self.btn_x10_bet)
+        btn_row.addWidget(self.btn_bc_bet)
         btn_row.addWidget(self.lbl_test_result, 1)
         self.btn_scan.clicked.connect(self._on_scan)
         self.btn_test.clicked.connect(self._on_test)
-        self.btn_bet_buttons.clicked.connect(self._on_bet_buttons)
+        self.btn_x10_bet.clicked.connect(self._on_x10_bet)
+        self.btn_bc_bet.clicked.connect(self._on_bc_bet)
 
         scan_box = QGroupBox("[BC INPUT SCAN]")
         scan_layout = QVBoxLayout(scan_box)
@@ -126,9 +131,13 @@ class BcStakeDebugPanel(QWidget):
         self.lbl_test_result.setText("1.0 USDT 입력 테스트 중...")
         self.test_requested.emit(1.0)
 
-    def _on_bet_buttons(self) -> None:
-        self.lbl_test_result.setText("Bet 버튼 탐색 중...")
-        self.bet_buttons_requested.emit()
+    def _on_x10_bet(self) -> None:
+        self.lbl_test_result.setText("X10 Bet 버튼 탐색 중...")
+        self.x10_bet_button_requested.emit()
+
+    def _on_bc_bet(self) -> None:
+        self.lbl_test_result.setText("BC Bet 버튼 탐색 중...")
+        self.bc_bet_button_requested.emit()
 
     def set_scan_status(self, *, scanning: bool) -> None:
         if scanning:
@@ -206,6 +215,14 @@ class BcStakeDebugPanel(QWidget):
             x10 = "OK" if payload.get("x10_found") else "FAIL"
             bc = "OK" if payload.get("bc_found") else "FAIL"
             self.lbl_test_result.setText(f"X10 Bet: {x10}\nBC Bet: {bc}")
+        elif block in {"X10 BET BUTTON", "BC BET BUTTON"}:
+            ok = bool(payload.get("ok") or payload.get("found"))
+            site = "X10" if block.startswith("X10") else "BC"
+            self.lbl_test_result.setText(
+                f"{site} Bet: {'OK' if ok else 'FAIL'}\n"
+                f"text={payload.get('button_text') or '-'}\n"
+                f"reason={payload.get('reason') or '-'}"
+            )
         elif block in {"BC STAKE SYNC OK", "BC STAKE SYNC FAILED"} and payload.get("test"):
             self.set_test_result(
                 ok=bool(payload.get("success")),
@@ -213,8 +230,11 @@ class BcStakeDebugPanel(QWidget):
                 reason=str(payload.get("reason") or ""),
             )
 
-        if block.startswith("BC"):
-            line = f"[{block}] found={found} selector={selector or '-'} value={current_value}"
+        if block.startswith("BC") or payload.get("step"):
+            line = f"[{block}]"
+            if payload.get("step"):
+                line += f" step={payload.get('step')}"
+            line += f" found={found} selector={selector or '-'} value={current_value}"
             self.txt_log.append(line)
 
     def _set_found_status(self, found: bool) -> None:

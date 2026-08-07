@@ -70,6 +70,7 @@
     const actions = global.ArbStakeActions;
     if (!actions) return { ok: false, error: "stake-actions-missing", frame_url: location.href };
     const cmd = message.command;
+    const site = message.site === "bc" ? "bc" : "x10";
 
     if (cmd === "scan_bet_buttons") {
       return actions.scanBetButton?.(site) || { ok: false, reason: "not-found", frame_url: location.href, deferred: true };
@@ -102,6 +103,19 @@
         if (!read.ok) return { ...read, deferred: true };
         return read;
       }
+      if (cmd === "set_bc_stake") {
+        try {
+          chrome.runtime.sendMessage({
+            type: "bridge_debug",
+            block: "BC STAKE",
+            step: "CONTENT_SCRIPT_RECEIVE",
+            site: "bc",
+            frame_url: location.href,
+            content_script_received: "PASS",
+            amount_usdt: message.amount_usdt,
+          });
+        } catch (_err) {}
+      }
       if (cmd === "set_bc_stake" && message.test && actions.testBcStakeInput) {
         return actions.testBcStakeInput(Number(message.amount_usdt));
       }
@@ -118,10 +132,10 @@
       return result;
     }
     if (cmd === "place_bc_bet") {
-      return actions.placeBcBet();
+      return actions.placeBcBet(message.execution_id);
     }
     if (cmd === "place_x10_bet") {
-      return actions.placeX10Bet();
+      return actions.placeX10Bet(message.execution_id);
     }
     return { ok: false, error: "unknown-command", frame_url: location.href };
   }

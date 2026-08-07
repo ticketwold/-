@@ -33,6 +33,15 @@
   let _lastDebug = null;
   let _stakeObserver = null;
   let _onStakeDomChange = null;
+  const _clickLocks = new Map();
+
+  function emitBcStakeStep(step, fields = {}) {
+    const payload = { block: "BC STAKE", step, frame_url: location.href, ...fields };
+    try {
+      console.log(`[BC STAKE] ${step} ${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    } catch (_err) {}
+    emitStakeDebug("BC STAKE", payload);
+  }
 
   function visible(el) {
     if (!el) return false;
@@ -91,8 +100,8 @@
 
   function setNativeValue(input, value) {
     const str = String(value);
+    input.focus?.({ preventScroll: true });
     if (input.isContentEditable) {
-      input.focus?.({ preventScroll: true });
       input.textContent = str;
       dispatchInput(input, str, "insertText");
       return;
@@ -395,13 +404,26 @@
     if (blocked) return { ok: false, reason: blocked, actual: null, locator: buildLocator(input, selector) };
 
     const before = parseStakeValue(readInputValue(input));
-    input.focus?.({ preventScroll: true });
+    emitBcStakeStep("LOCATE_BC_STAKE_INPUT", {
+      input_locator: "PASS",
+      frame_id: "",
+      selector,
+      before: before ?? "",
+    });
+    input.scrollIntoView?.({ block: "center", inline: "nearest" });
     clearNativeValue(input);
     await sleep(20);
     setNativeValue(input, want);
-    input.blur?.();
+    emitBcStakeStep("WRITE_VALUE", { write_value: "PASS", after: want });
 
     let verify = await verifyStakeValue(input, want);
+    emitBcStakeStep("VERIFY_VALUE", {
+      verify_0ms: verify.checks.before ?? "",
+      verify_50ms: verify.checks["50ms"] ?? "",
+      verify_100ms: verify.checks["100ms"] ?? "",
+      verify_250ms: verify.checks["250ms"] ?? "",
+      react_reset: verify.react_reset ? "true" : "false",
+    });
     if (verify.react_reset) {
       return {
         ok: false,
@@ -413,6 +435,7 @@
       };
     }
     if (verify.ok) {
+      input.blur?.();
       return {
         ok: true,
         reason: "ok",
@@ -435,6 +458,10 @@
   async function setBcStake(amountUsdt, { debug = true, test = false } = {}) {
     const want = Math.max(0.1, Math.round(Number(amountUsdt) * 10) / 10);
     const frameUrl = location.href;
+    emitBcStakeStep("CONTENT_SCRIPT_RECEIVE", {
+      content_script_received: "PASS",
+      calculated: want,
+    });
     let lastResult = {
       ok: false,
       reason: "stake-input-not-found",
@@ -454,6 +481,12 @@
       const best = scan.best;
       if (!best?.input) {
         lastResult.reason = scan.slip.root ? "stake-input-not-found" : "frame-not-found";
+        emitBcStakeStep("LOCATE_BC_STAKE_INPUT", {
+          input_locator: "FAIL",
+          selector: scan.slip.selector || "",
+          before: "",
+          reason: lastResult.reason,
+        });
         continue;
       }
 
@@ -491,6 +524,11 @@
       };
 
       if (applied.ok) {
+        emitBcStakeStep("ACK_TO_PYTHON", {
+          ack: "PASS",
+          requested: want,
+          actual: applied.actual ?? "",
+        });
         if (debug) {
           emitStakeDebug("BC STAKE INPUT FOUND", {
             ...lastResult.debug,
@@ -510,6 +548,12 @@
       break;
     }
 
+    emitBcStakeStep("ACK_TO_PYTHON", {
+      ack: "FAIL",
+      requested: want,
+      actual: lastResult.actual ?? "",
+      reason: lastResult.reason,
+    });
     emitStakeDebug("BC STAKE INPUT FAILED", {
       ...(lastResult.debug || {}),
       reason: lastResult.reason === "stake-input-not-found" ? "not-found" : lastResult.reason,
@@ -619,6 +663,38 @@
     });
   }
 
+  function buttonMeta(btn) {
+    if (!btn) return null;
+    return {
+      site: "",
+      frame_url: location.href,
+      selector: btn.id ? `#${btn.id}` : btn.tagName?.toLowerCase() || "button",
+      text: text(btn),
+      disabled: !!btn.disabled,
+      "aria-disabled": btn.getAttribute("aria-disabled") || "",
+      class: btn.className || "",
+    };
+  }
+
+  function clickElement(btn, executionId) {
+    if (!btn) return false;
+    const lockKey = executionId || "default";
+    if (_clickLocks.get(lockKey)) return false;
+    _clickLocks.set(lockKey, true);
+    try {
+      btn.scrollIntoView?.({ block: "center", inline: "nearest" });
+      btn.focus?.();
+      try {
+        btn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        btn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      } catch (_err) {}
+      btn.click();
+      return true;
+    } finally {
+      setTimeout(() => _clickLocks.delete(lockKey), 500);
+    }
+  }
   function findBcBetButton() {
     const slip = findBcSlipRoot().root;
     if (!slip) return null;
@@ -713,55 +789,85 @@
     return got && got > 0 ? { ok: true, actual: got } : { ok: false, reason: "x10-stake-not-applied" };
   }
 
-  async function placeBcBet() {
+  async function placeBcBet(executionId) {
     const slip = findBcSlipRoot().root;
     if (!slip) {
       return { ok: false, reason: "betslip-not-in-frame", deferred: true, frame_url: location.href };
     }
     const btn = findBcBetButton();
     if (!btn) {
+      emitStakeDebug("BET BUTTON FAILED", { site: "bc", reason: "button-not-found", frame_url: location.href });
       return { ok: false, reason: "bc-bet-button-not-found", deferred: true, frame_url: location.href };
     }
     if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-      return { ok: false, reason: "bc-bet-button-disabled", frame_url: location.href };
+      return { ok: false, reason: "bc-bet-button-disabled", frame_url: location.href, ...buttonMeta(btn) };
     }
-    btn.focus?.();
-    btn.click();
-    return { ok: true, reason: "ok", frame_url: location.href, button_text: text(btn) };
+    const meta = buttonMeta(btn);
+    meta.site = "bc";
+    emitStakeDebug("BET BUTTON FOUND", meta);
+    const clicked = clickElement(btn, executionId ? `bc:${executionId}` : "bc");
+    return {
+      ok: clicked,
+      reason: clicked ? "ok" : "click-locked",
+      frame_url: location.href,
+      button_text: text(btn),
+      ...meta,
+    };
   }
 
-  async function placeX10Bet() {
+  async function placeX10Bet(executionId) {
     const btn = findX10BetButton();
     if (!btn) {
+      emitStakeDebug("BET BUTTON FAILED", { site: "x10", reason: "button-not-found", frame_url: location.href });
       return { ok: false, reason: "x10-bet-button-not-found", deferred: true, frame_url: location.href };
     }
     if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
-      return { ok: false, reason: "x10-bet-button-disabled", frame_url: location.href };
+      return { ok: false, reason: "x10-bet-button-disabled", frame_url: location.href, ...buttonMeta(btn) };
     }
-    btn.focus?.();
-    btn.click();
-    return { ok: true, reason: "ok", frame_url: location.href, button_text: text(btn) };
+    const meta = buttonMeta(btn);
+    meta.site = "x10";
+    emitStakeDebug("BET BUTTON FOUND", meta);
+    const clicked = clickElement(btn, executionId ? `x10:${executionId}` : "x10");
+    return {
+      ok: clicked,
+      reason: clicked ? "ok" : "click-locked",
+      frame_url: location.href,
+      button_text: text(btn),
+      ...meta,
+    };
   }
 
   function scanBetButton(site) {
-    if (site === "bc") {
-      const btn = findBcBetButton();
-      return {
-        ok: !!btn,
-        found: !!btn,
-        reason: btn ? "ok" : "not-found",
+    const siteKey = site === "bc" ? "bc" : "x10";
+    const btn = siteKey === "bc" ? findBcBetButton() : findX10BetButton();
+    if (!btn) {
+      const fail = {
+        ok: false,
+        found: false,
+        site: siteKey,
+        reason: "button-not-found",
         frame_url: location.href,
-        button_text: btn ? text(btn) : "",
+        button_text: "",
       };
+      emitStakeDebug("BET BUTTON FAILED", fail);
+      return fail;
     }
-    const btn = findX10BetButton();
-    return {
-      ok: !!btn,
-      found: !!btn,
-      reason: btn ? "ok" : "not-found",
+    const meta = buttonMeta(btn);
+    meta.site = siteKey;
+    const result = {
+      ok: true,
+      found: true,
+      site: siteKey,
+      reason: "ok",
       frame_url: location.href,
-      button_text: btn ? text(btn) : "",
+      button_text: text(btn),
+      disabled: meta.disabled,
+      "aria-disabled": meta["aria-disabled"],
+      class: meta.class,
+      selector: meta.selector,
     };
+    emitStakeDebug("BET BUTTON FOUND", result);
+    return result;
   }
 
   global.ArbStakeActions = {

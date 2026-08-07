@@ -5,6 +5,7 @@ from enum import Enum
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
 from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics, odds_in_range
+from arb_desktop.bridge.command_bus import CommandResult
 from arb_desktop.execution.exec_logger import get_exec_logger
 from arb_desktop.market_data.bithumb_fx import FxSnapshot
 from arb_desktop.ui.settings_store import AppSettings
@@ -137,6 +138,7 @@ class StakeSyncService:
             bc_odds=metrics.bc_odds,
             bc_stake=target,
         )
+        get_exec_logger().log("BC_STAKE", calculated=target, send_command="PASS")
         if self._last_target is not None and abs(self._last_target - target) < 0.05:
             if self.last_status.state == StakeSyncState.OK and self.last_status.actual_usdt is not None:
                 if abs(self.last_status.actual_usdt - target) <= 0.15:
@@ -154,6 +156,14 @@ class StakeSyncService:
             "bc",
             "set_bc_stake",
             amount_usdt=target,
+        )
+        ack_ok = bool(write.ok and write.actual is not None)
+        get_exec_logger().log(
+            "BC_STAKE",
+            ack="PASS" if ack_ok else "FAIL",
+            requested=target,
+            actual=write.actual,
+            reason=write.reason or write.error or "",
         )
         debug = write.raw.get("debug") if isinstance(write.raw.get("debug"), dict) else write.raw
         reason = normalize_reason(write.reason or write.error or "")

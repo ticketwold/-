@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 
@@ -200,7 +201,7 @@ class ExecutionEngine:
                 self.state.phase = ExecutionPhase.FAILED
                 return result
 
-            live = settings.live_execution_enabled and settings.parallel_execution_enabled
+            live = settings.live_execution_enabled
             if manual and live:
                 dry = False
             else:
@@ -215,17 +216,56 @@ class ExecutionEngine:
             self.state.message = "양쪽 배팅 전송 중..." if not dry else "Dry Run — 양쪽 배팅 시뮬레이션..."
             get_exec_logger().log("DISPATCH", ok=live and not dry)
 
+            x10_button_ok = True
+            bc_button_ok = True
+            if live and not dry and server:
+                x10_scan = await server.send_command("x10", "scan_bet_buttons")
+                bc_scan = await server.send_command("bc", "scan_bet_buttons")
+                x10_button_ok = bool(x10_scan.ok)
+                bc_button_ok = bool(bc_scan.ok)
+                get_exec_logger().log("X10_BET_BUTTON", ok=x10_button_ok, reason=x10_scan.reason or x10_scan.error or "")
+                get_exec_logger().log("BC_BET_BUTTON", ok=bc_button_ok, reason=bc_scan.reason or bc_scan.error or "")
+                if manual:
+                    get_exec_logger().log("MANUAL_BET", x10_button_locator="PASS" if x10_button_ok else "FAIL")
+                    get_exec_logger().log("MANUAL_BET", bc_button_locator="PASS" if bc_button_ok else "FAIL")
+                if not x10_button_ok or not bc_button_ok:
+                    missing = []
+                    if not x10_button_ok:
+                        missing.append("x10-bet-button-not-found")
+                    if not bc_button_ok:
+                        missing.append("bc-bet-button-not-found")
+                    abort = "-".join(missing)
+                    result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=abort)
+                    self.state.last_result = result
+                    self.state.message = _abort_message(abort)
+                    self.state.phase = ExecutionPhase.FAILED
+                    return result
+
             x10_click_fn = None
             bc_click_fn = None
+            execution_id = ""
             if live and not dry and server:
+                execution_id = str(uuid.uuid4())
 
                 async def _x10_click():
                     get_exec_logger().log("X10_CLICK_START", timestamp_ns=time.time_ns())
-                    return await server.send_command("x10", "place_x10_bet")
+                    resp = await server.send_command("x10", "place_x10_bet", execution_id=execution_id)
+                    get_exec_logger().log(
+                        "X10_CLICK_FINISH",
+                        ok=bool(getattr(resp, "ok", False)),
+                        result=getattr(resp, "reason", "") or getattr(resp, "error", ""),
+                    )
+                    return resp
 
                 async def _bc_click():
                     get_exec_logger().log("BC_CLICK_START", timestamp_ns=time.time_ns())
-                    return await server.send_command("bc", "place_bc_bet")
+                    resp = await server.send_command("bc", "place_bc_bet", execution_id=execution_id)
+                    get_exec_logger().log(
+                        "BC_CLICK_FINISH",
+                        ok=bool(getattr(resp, "ok", False)),
+                        result=getattr(resp, "reason", "") or getattr(resp, "error", ""),
+                    )
+                    return resp
 
                 x10_click_fn = _x10_click
                 bc_click_fn = _bc_click

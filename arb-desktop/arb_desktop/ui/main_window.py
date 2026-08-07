@@ -136,7 +136,8 @@ class MainWindow(QMainWindow):
         self._worker.log_message.connect(self._on_worker_log)
         self.bc_stake_debug_panel.test_requested.connect(self._worker.test_bc_stake)
         self.bc_stake_debug_panel.scan_requested.connect(self._worker.scan_bc_stake)
-        self.bc_stake_debug_panel.bet_buttons_requested.connect(self._worker.scan_bet_buttons)
+        self.bc_stake_debug_panel.x10_bet_button_requested.connect(self._worker.scan_x10_bet_button)
+        self.bc_stake_debug_panel.bc_bet_button_requested.connect(self._worker.scan_bc_bet_button)
 
         self._wire_buttons()
         self._apply_watch_ui()
@@ -396,8 +397,12 @@ class MainWindow(QMainWindow):
             self.status.showMessage("반대 선택 확인이 필요합니다")
             return
 
+        if not self._settings.live_execution_enabled:
+            self.status.showMessage("Live Execution OFF — 설정에서 Live Execution을 켜세요")
+            return
+
         m = self._metrics_with_watch(self._worker.watch_metrics)
-        live = self._settings.live_execution_enabled and self._settings.parallel_execution_enabled
+        live = self._settings.live_execution_enabled
         below = m.total_stake_krw > 0 and m.current_profit_rate < m.target_profit_pct
         skip_confirm = self._settings.manual_confirm_skip
 

@@ -216,7 +216,16 @@ function maybeForwardSlip(site, result, meta) {
 
 function maybeForwardDebug(message) {
   let key;
-  if (message.block === "X10 DEBUG") {
+  if (message.block === "BC STAKE" || message.step) {
+    key = [
+      message.block || "",
+      message.step || "",
+      message.frame_url || "",
+      String(message.calculated ?? message.requested ?? ""),
+      String(message.actual ?? ""),
+      String(Date.now()),
+    ].join("|");
+  } else if (message.block === "X10 DEBUG") {
     const bucket = Math.floor(Date.now() / 1500);
     key = ["X10 DEBUG", message.frame_url || "", String(message.frame_depth ?? ""), bucket].join("|");
   } else {
@@ -412,6 +421,104 @@ async function scanBcStakeInputsAllFrames(message) {
   return merged;
 }
 
+  return merged;
+}
+
+function mergeBcStakeWriteResults(frameResults) {
+  let best = null;
+  for (const fr of frameResults) {
+    if (!fr) continue;
+    if (fr.ok && fr.success !== false) {
+      if (!best || Number(fr.score || 0) >= Number(best.score || 0)) best = fr;
+    }
+  }
+  if (best) return best;
+  const ranked = frameResults
+    .filter((fr) => fr && !fr.deferred)
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  return ranked[0] || { ok: false, reason: "stake-input-not-found", deferred: false };
+}
+
+async function setBcStakeAllFrames(message) {
+  const tabs = await chrome.tabs.query({ url: BC_URLS });
+  if (!tabs.length) {
+    return { ok: false, reason: "frame-not-found", found: false };
+  }
+
+  const payload = {
+    type: "bridge_command",
+    site: "bc",
+    command: "set_bc_stake",
+    amount_usdt: message.amount_usdt,
+    request_id: message.request_id,
+    test: message.test,
+  };
+
+  const allFrameResults = [];
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const frameResults = await iterateTabFrames(tab.id, payload, { collectAll: true });
+    allFrameResults.push(...frameResults);
+  }
+  return mergeBcStakeWriteResults(allFrameResults);
+}
+
+async function scanBetButtonsAllFrames(message) {
+  const site = message.site === "bc" ? "bc" : "x10";
+  const urls = site === "bc" ? BC_URLS : X10_URLS;
+  const tabs = await chrome.tabs.query({ url: urls });
+  if (!tabs.length) {
+    return { ok: false, reason: "button-not-found", found: false, site };
+  }
+
+  const payload = {
+    type: "bridge_command",
+    site,
+    command: "scan_bet_buttons",
+    request_id: message.request_id,
+  };
+
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const frameResults = await iterateTabFrames(tab.id, payload, { collectAll: true });
+    for (const fr of frameResults) {
+      if (fr?.ok && fr.found !== false) {
+        return { ...fr, site };
+      }
+    }
+  }
+  return { ok: false, reason: "button-not-found", found: false, site };
+}
+
+async function placeBetAllFrames(message) {
+  const site = message.site === "bc" ? "bc" : "x10";
+  const command = site === "bc" ? "place_bc_bet" : "place_x10_bet";
+  const urls = site === "bc" ? BC_URLS : X10_URLS;
+  const tabs = await chrome.tabs.query({ url: urls });
+  if (!tabs.length) {
+    return { ok: false, reason: `${site}-tab-not-found`, deferred: true };
+  }
+
+  const payload = {
+    type: "bridge_command",
+    site,
+    command,
+    request_id: message.request_id,
+    execution_id: message.execution_id,
+  };
+
+  let last = { ok: false, reason: "button-not-found", deferred: true };
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const frameResults = await iterateTabFrames(tab.id, payload, { collectAll: true });
+    for (const fr of frameResults) {
+      if (fr?.ok) return fr;
+      if (fr && !fr.deferred) last = fr;
+    }
+  }
+  return last;
+}
+
 async function executeBridgeCommand(message) {
   const site = message.site === "bc" ? "bc" : "x10";
   const urls = site === "bc" ? BC_URLS : X10_URLS;
@@ -428,17 +535,11 @@ async function executeBridgeCommand(message) {
     amount_krw: message.amount_krw,
     request_id: message.request_id,
     test: message.test,
+    execution_id: message.execution_id,
   };
 
   if (message.command === "scan_bet_buttons") {
-    let last = { ok: false, reason: "not-found", frame_url: "" };
-    for (const tab of tabs) {
-      if (!tab.id) continue;
-      const result = await iterateTabFrames(tab.id, payload);
-      if (result?.ok) return result;
-      last = result || last;
-    }
-    return last;
+    return scanBetButtonsAllFrames(message);
   }
 
   let lastResult = { ok: false, error: "no-frame-response", reason: "no-frame-response" };
@@ -479,10 +580,18 @@ async function startBridge() {
         return;
       }
       if (message.type === "bridge_command") {
-        const result =
-          message.command === "scan_bc_stake" && message.site === "bc"
-            ? await scanBcStakeInputsAllFrames(message)
-            : await executeBridgeCommand(message);
+        let result;
+        if (message.command === "scan_bc_stake" && message.site === "bc") {
+          result = await scanBcStakeInputsAllFrames(message);
+        } else if (message.command === "set_bc_stake" && message.site === "bc") {
+          result = await setBcStakeAllFrames(message);
+        } else if (message.command === "scan_bet_buttons") {
+          result = await scanBetButtonsAllFrames(message);
+        } else if (message.command === "place_bc_bet" || message.command === "place_x10_bet") {
+          result = await placeBetAllFrames(message);
+        } else {
+          result = await executeBridgeCommand(message);
+        }
         client?.send({
           type: "command_result",
           request_id: message.request_id,
