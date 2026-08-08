@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arb-desktop"
-version = "1.4.0"
+version = "1.8.1"
 description = "양방 배팅 데스크톱 — WebSocket/Network → Playwright → OCR 다중 감지"
 readme = "README.md"
 requires-python = ">=3.11"

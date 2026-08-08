@@ -58,6 +58,8 @@ def main() -> int:
         str(ROOT),
         "--add-data",
         f"{CHROME_BRIDGE}{';' if sys.platform == 'win32' else ':'}chrome-bridge",
+        "--add-data",
+        f"{ROOT / 'arb_desktop' / 'ui' / 'themes'}{';' if sys.platform == 'win32' else ':'}arb_desktop/ui/themes",
         "--hidden-import",
         "websockets",
         "--hidden-import",

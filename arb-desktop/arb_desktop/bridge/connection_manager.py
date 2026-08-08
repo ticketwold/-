@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 from arb_desktop.betslip.models import BetSlipReadResult, SlipStatus
@@ -16,6 +18,9 @@ from arb_desktop.bridge.message_models import (
 )
 
 
+ACTIVE_GUARD_SEC = 0.0
+
+
 @dataclass
 class ConnectionManager:
     """확장프로그램 연결 상태 및 최신 BetSlip 스냅샷."""
@@ -23,8 +28,13 @@ class ConnectionManager:
     token: str
     on_status_change: Callable[[BridgeStatus], None] | None = None
     on_slip_update: Callable[[str, BetSlipReadResult], None] | None = None
+    on_slip_rx: Callable[[str, BetSlipReadResult], None] | None = None
     on_debug: Callable[[dict[str, Any]], None] | None = None
+    on_stake_input_changed: Callable[[], None] | None = None
     bridge_connected: bool = False
+    auth_state: BridgeConnectionState = BridgeConnectionState.WAITING
+    paired_extension_id: str = ""
+    last_connected_at: float = 0.0
     bc_tab: str = "not_found"
     x10_tab: str = "not_found"
     bc_betslip: str = "empty"
@@ -32,26 +42,53 @@ class ConnectionManager:
     bc_slip: BetSlipReadResult | None = None
     x10_slip: BetSlipReadResult | None = None
     last_x10_debug: dict[str, Any] | None = None
+    last_bc_stake_debug: dict[str, Any] | None = None
+    _last_active_at: dict[str, float] = field(default_factory=lambda: {"bc": 0.0, "x10": 0.0})
+    _last_revision: dict[str, int] = field(default_factory=lambda: {"bc": 0, "x10": 0})
+    _last_dom_hash: dict[str, str] = field(default_factory=lambda: {"bc": "", "x10": ""})
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def status(self) -> BridgeStatus:
+        bridge = self.auth_state
+        if self.bridge_connected:
+            bridge = BridgeConnectionState.CONNECTED
+        last_at = ""
+        if self.last_connected_at:
+            last_at = datetime.fromtimestamp(self.last_connected_at).strftime("%Y-%m-%d %H:%M:%S")
         return BridgeStatus(
-            bridge=BridgeConnectionState.CONNECTED if self.bridge_connected else BridgeConnectionState.DISCONNECTED,
+            bridge=bridge,
             bc_tab=tab_state_from_raw(self.bc_tab),
             x10_tab=tab_state_from_raw(self.x10_tab),
             bc_betslip=slip_state_from_raw(self.bc_betslip),
             x10_betslip=slip_state_from_raw(self.x10_betslip),
+            extension_id=self.paired_extension_id,
+            last_connected_at=last_at,
         )
 
     def _notify_status(self) -> None:
         if self.on_status_change:
             self.on_status_change(self.status())
 
-    def set_bridge_connected(self, connected: bool) -> None:
+    def set_bridge_connected(self, connected: bool, *, extension_id: str = "") -> None:
         self.bridge_connected = connected
-        if not connected:
+        if connected:
+            self.auth_state = BridgeConnectionState.CONNECTED
+            if extension_id:
+                self.paired_extension_id = extension_id
+            self.last_connected_at = time.time()
+        else:
+            self.auth_state = BridgeConnectionState.WAITING
             self.bc_betslip = "empty"
             self.x10_betslip = "empty"
+        self._notify_status()
+
+    def set_auth_failed(self, extension_id: str | None = None) -> None:
+        self.bridge_connected = False
+        self.auth_state = BridgeConnectionState.AUTH_FAILED
+        if extension_id:
+            self.paired_extension_id = extension_id
+        self.bc_betslip = "empty"
+        self.x10_betslip = "empty"
         self._notify_status()
 
     def apply_status_message(self, message: StatusMessage) -> None:
@@ -63,13 +100,66 @@ class ConnectionManager:
         self._notify_status()
 
     def apply_slip_update(self, message: SlipUpdateMessage) -> BetSlipReadResult | None:
+        import logging
+
+        log = logging.getLogger(__name__)
         site_key = "bc" if message.site == "bc" else "x10"
         site = "bc" if message.site == "bc" else "bti"
         read = _result_to_read(site, message.result, frame_url=message.frame_url)
+        if message.site_state:
+            read.raw = {**read.raw, "site_state": message.site_state}
+        if message.tab_id is not None:
+            read.raw = {**read.raw, "tab_id": message.tab_id, "frame_id": message.frame_id}
+
+        if self.on_slip_rx:
+            self.on_slip_rx(site, read)
+
+        prio = _slip_priority(read)
+        if prio >= 100:
+            self._last_active_at[site_key] = time.time()
 
         current = self.bc_slip if site_key == "bc" else self.x10_slip
-        if not _should_replace_slip(current, read):
+        cur_rev = self._last_revision.get(site_key, 0)
+        new_rev = _slip_revision(read)
+        new_hash = _slip_dom_hash(read)
+        cur_hash = self._last_dom_hash.get(site_key, "")
+
+        if new_rev and cur_rev and new_rev < cur_rev:
+            log.info("[PYTHON SKIP] stale-revision site=%s cur=%s new=%s", site_key, cur_rev, new_rev)
             return None
+
+        last_active = self._last_active_at.get(site_key, 0.0)
+        if (
+            ACTIVE_GUARD_SEC > 0
+            and last_active
+            and time.time() - last_active < ACTIVE_GUARD_SEC
+            and prio < 80
+            and not (new_rev > cur_rev or (new_hash and new_hash != cur_hash) or _invalidates_active(current, read))
+        ):
+            log.info("[PYTHON SKIP] active-guard site=%s prio=%s", site_key, prio)
+            return None
+        if not _should_replace_slip(current, read):
+            log.info(
+                "[PYTHON SKIP] lower-priority site=%s current_score=%s new_score=%s",
+                site_key,
+                _slip_score(current),
+                _slip_score(read),
+            )
+            return None
+
+        old_status = current.first.status.value if current and current.first else "EMPTY"
+        old_odds = current.first.odds if current and current.first else None
+        new_status = read.first.status.value if read.first else "EMPTY"
+        new_odds = read.first.odds if read.first else None
+        log.info(
+            "[GUI APPLY] site=%s old_status=%s new_status=%s old_odds=%s new_odds=%s source_frame=%s",
+            site_key,
+            old_status,
+            new_status,
+            old_odds,
+            new_odds,
+            message.frame_url,
+        )
 
         if site_key == "bc":
             self.bc_slip = read
@@ -80,16 +170,32 @@ class ConnectionManager:
             self.x10_tab = "found"
             self.x10_betslip = _slip_state_from_read(read)
 
+        if new_rev:
+            self._last_revision[site_key] = new_rev
+        if new_hash:
+            self._last_dom_hash[site_key] = new_hash
+
         self._notify_status()
         if self.on_slip_update:
             self.on_slip_update(site, read)
         return read
 
     def apply_debug(self, payload: dict[str, Any]) -> None:
-        if str(payload.get("site") or "").lower() in {"x10", "bti"}:
+        site = str(payload.get("site") or "").lower()
+        block = str(payload.get("block") or "").upper()
+        if site in {"x10", "bti"}:
             self.last_x10_debug = payload
+        if block in {"BC STAKE INPUT FOUND", "BC STAKE INPUT NOT FOUND", "BC INPUT SCAN"} or block.startswith("BC STAKE"):
+            self.last_bc_stake_debug = payload
         if self.on_debug:
             self.on_debug(payload)
+
+    def apply_stake_input_changed(self, _payload: dict[str, Any]) -> None:
+        if self.on_stake_input_changed:
+            self.on_stake_input_changed()
+
+    def get_bc_stake_debug(self) -> dict[str, Any] | None:
+        return self.last_bc_stake_debug
 
     def get_x10_debug(self) -> dict[str, Any] | None:
         return self.last_x10_debug
@@ -110,11 +216,37 @@ class ConnectionManager:
 
 
 def _slip_state_from_read(read: BetSlipReadResult) -> str:
-    if read.first and read.first.status == SlipStatus.SUSPENDED:
-        return "suspended"
-    if read.first and read.first.status == SlipStatus.ACTIVE:
+    from arb_desktop.ui.site_status import slip_status_from_read
+
+    status = slip_status_from_read(read)
+    if status.value == "ACTIVE":
         return "active"
+    if status.value in {"SUSPENDED", "CLOSED"}:
+        return "suspended"
+    if status.value == "ODDS_MISSING":
+        return "empty"
     return "empty"
+
+
+def _slip_priority(read: BetSlipReadResult | None) -> int:
+    if not read:
+        return 0
+    if not read.empty and read.first:
+        status = read.first.status
+        if status == SlipStatus.ACTIVE:
+            return 100
+        if status in {SlipStatus.CLOSED, SlipStatus.SUSPENDED}:
+            return 80
+        if status == SlipStatus.ODDS_MISSING:
+            return 60
+        return 55
+    if read.raw.get("slip_root_found") == "YES" or read.raw.get("slip_count"):
+        return 60
+    if read.reason == "empty-slip":
+        return 10
+    if read.reason == "no-slip-root":
+        return 0
+    return 5
 
 
 def _slip_score(read: BetSlipReadResult | None) -> int:
@@ -136,7 +268,51 @@ def _slip_score(read: BetSlipReadResult | None) -> int:
     return 3
 
 
+def _slip_revision(read: BetSlipReadResult | None) -> int:
+    if not read:
+        return 0
+    raw = read.raw or {}
+    try:
+        return int(raw.get("revision") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _slip_dom_hash(read: BetSlipReadResult | None) -> str:
+    if not read:
+        return ""
+    if read.first and read.first.dom_hash:
+        return str(read.first.dom_hash)
+    return str((read.raw or {}).get("dom_hash") or "")
+
+
+def _invalidates_active(current: BetSlipReadResult | None, new: BetSlipReadResult) -> bool:
+    if not current or current.empty:
+        return False
+    if not current.first or current.first.status != SlipStatus.ACTIVE:
+        return False
+    if new.empty:
+        return True
+    if new.first and new.first.status in {SlipStatus.CLOSED, SlipStatus.SUSPENDED, SlipStatus.EMPTY}:
+        return True
+    return False
+
+
 def _should_replace_slip(current: BetSlipReadResult | None, new: BetSlipReadResult) -> bool:
+    cur_rev = _slip_revision(current)
+    new_rev = _slip_revision(new)
+    if new_rev and new_rev > cur_rev:
+        return True
+    if new_rev and cur_rev and new_rev < cur_rev:
+        return False
+    cur_hash = _slip_dom_hash(current)
+    new_hash = _slip_dom_hash(new)
+    if cur_hash and new_hash and cur_hash != new_hash:
+        return True
+    if _invalidates_active(current, new):
+        return True
+    if current and current.first and new.first and current.first.odds != new.first.odds:
+        return True
     return _slip_score(new) >= _slip_score(current)
 
 
@@ -160,5 +336,5 @@ def _result_to_read(site: str, result: dict[str, Any], *, frame_url: str = "") -
         source=str(result.get("source") or "bridge"),
         container_selector=str(result.get("container_selector") or ""),
         reason=str(result.get("reason") or ""),
-        raw=result,
+        raw={**result, "revision": result.get("revision"), "dom_hash": result.get("dom_hash"), "root_id": result.get("root_id")},
     )

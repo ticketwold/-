@@ -24,15 +24,18 @@ class Settings(BaseSettings):
 
     # BetSlip-first mode (전체 경기 스캔 비활성화)
     betslip_first_mode: bool = True
+    odds_only_mode: bool = True
     betslip_network_tolerance: float = 0.06
     dry_run: bool = True
     live_execution_enabled: bool = False
+    parallel_execution_enabled: bool = False
     auto_retry_max: int = 3
 
     # Chrome Bridge (기존 Chrome 탭 + 확장프로그램)
     use_chrome_bridge: bool = True
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 18765
+    bridge_pair_port: int = 18766
     bridge_token: str = ""
 
     # Legacy browser settings (Playwright — 비활성화됨)

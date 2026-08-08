@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 class BridgeConnectionState(str, Enum):
     CONNECTED = "CONNECTED"
     DISCONNECTED = "DISCONNECTED"
+    WAITING = "WAITING"
+    AUTH_FAILED = "AUTH_FAILED"
 
 
 class TabState(str, Enum):
@@ -26,6 +28,10 @@ class SlipUpdateMessage(BaseModel):
     type: str = "slip_update"
     site: str
     frame_url: str = ""
+    tab_id: int | None = None
+    frame_id: int | None = None
+    frame_depth: int | None = None
+    site_state: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -39,11 +45,13 @@ class StatusMessage(BaseModel):
 
 
 class BridgeStatus(BaseModel):
-    bridge: BridgeConnectionState = BridgeConnectionState.DISCONNECTED
+    bridge: BridgeConnectionState = BridgeConnectionState.WAITING
     bc_tab: TabState = TabState.NOT_FOUND
     x10_tab: TabState = TabState.NOT_FOUND
     bc_betslip: BetSlipState = BetSlipState.EMPTY
     x10_betslip: BetSlipState = BetSlipState.EMPTY
+    extension_id: str = ""
+    last_connected_at: str = ""
 
     def format_lines(self) -> list[str]:
         def tab(value: TabState) -> str:
@@ -52,13 +60,27 @@ class BridgeStatus(BaseModel):
         def slip(value: BetSlipState) -> str:
             return value.value
 
-        return [
-            f"Chrome Bridge: {self.bridge.value}",
+        bridge_label = self.bridge.value
+        if self.bridge == BridgeConnectionState.CONNECTED:
+            bridge_label = "CONNECTED"
+        elif self.bridge == BridgeConnectionState.WAITING:
+            bridge_label = "WAITING"
+        elif self.bridge == BridgeConnectionState.AUTH_FAILED:
+            bridge_label = "AUTH FAILED"
+
+        lines = [
+            f"Chrome Bridge: {bridge_label}",
             f"BC.Game tab: {tab(self.bc_tab)}",
             f"x10x10s tab: {tab(self.x10_tab)}",
             f"BC BetSlip: {slip(self.bc_betslip)}",
             f"x10 BetSlip: {slip(self.x10_betslip)}",
         ]
+        if self.extension_id:
+            short = f"{self.extension_id[:8]}…" if len(self.extension_id) > 10 else self.extension_id
+            lines.append(f"Extension: {short}")
+        if self.last_connected_at:
+            lines.append(f"Last connected: {self.last_connected_at}")
+        return lines
 
     def format_block(self) -> str:
         return "\n".join(self.format_lines())

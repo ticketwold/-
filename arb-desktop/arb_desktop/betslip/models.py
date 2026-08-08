@@ -5,12 +5,14 @@ from enum import Enum
 from typing import Any
 
 from arb_desktop.betslip.normalize import EventPhase, MarketKind
+from arb_desktop.betslip.bet_type import ParsedBet, parse_bet_item
 
 
 class SlipStatus(str, Enum):
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
     CLOSED = "CLOSED"
+    DISABLED = "DISABLED"
     ODDS_MISSING = "ODDS_MISSING"
     EMPTY = "EMPTY"
     ERROR = "ERROR"
@@ -21,6 +23,8 @@ _STATUS_MAP = {
     "active": SlipStatus.ACTIVE,
     "suspended": SlipStatus.SUSPENDED,
     "closed": SlipStatus.CLOSED,
+    "disabled": SlipStatus.DISABLED,
+    "closed_pending": SlipStatus.CLOSED,
     "odds_missing": SlipStatus.ODDS_MISSING,
     "empty": SlipStatus.EMPTY,
     "error": SlipStatus.ERROR,
@@ -43,7 +47,32 @@ class BetSlipItem:
     event_phase: EventPhase = EventPhase.UNKNOWN
     market_kind: MarketKind = MarketKind.UNKNOWN
     item_key: str = ""
+    display_selection: str = ""
+    raw_market_text: str = ""
+    raw_selection_text: str = ""
+    bet_type: str = ""
+    period: str = ""
+    line: float | None = None
+    side: str = ""
+    dom_hash: str = ""
+    previous_odds: float | None = None
+    status_reason: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+
+    def parsed(self) -> ParsedBet:
+        return parse_bet_item(
+            market=self.market,
+            selection=self.selection,
+            event=self.event,
+            display_selection=self.display_selection,
+            raw_market_text=self.raw_market_text or self.market,
+            raw_selection_text=self.raw_selection_text or self.selection,
+            bet_type=self.bet_type,
+            period=self.period,
+            line=self.line,
+            side=self.side,
+            odds=self.odds,
+        )
 
     @classmethod
     def from_dict(
@@ -91,6 +120,26 @@ class BetSlipItem:
         except ValueError:
             market_kind = MarketKind.UNKNOWN
 
+        line_raw = data.get("line")
+        line_val: float | None
+        if line_raw is None or line_raw == "":
+            line_val = None
+        else:
+            try:
+                line_val = float(line_raw)
+            except (TypeError, ValueError):
+                line_val = None
+
+        prev_raw = data.get("previous_odds")
+        previous_odds: float | None
+        if prev_raw is None or prev_raw == "":
+            previous_odds = None
+        else:
+            try:
+                previous_odds = float(prev_raw)
+            except (TypeError, ValueError):
+                previous_odds = None
+
         return cls(
             site=site,
             event=str(data.get("event") or "").strip(),
@@ -105,6 +154,16 @@ class BetSlipItem:
             event_phase=event_phase,
             market_kind=market_kind,
             item_key=str(data.get("item_key") or ""),
+            display_selection=str(data.get("display_selection") or data.get("selection") or "").strip(),
+            raw_market_text=str(data.get("raw_market_text") or data.get("market") or "").strip(),
+            raw_selection_text=str(data.get("raw_selection_text") or data.get("selection") or "").strip(),
+            bet_type=str(data.get("bet_type") or "").strip().upper(),
+            period=str(data.get("period") or "").strip().upper(),
+            line=line_val,
+            side=str(data.get("side") or "").strip().upper(),
+            dom_hash=str(data.get("dom_hash") or "").strip(),
+            previous_odds=previous_odds,
+            status_reason=str(data.get("status_reason") or "").strip(),
             raw=data,
         )
 

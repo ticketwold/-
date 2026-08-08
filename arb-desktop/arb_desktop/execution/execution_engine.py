@@ -1,0 +1,471 @@
+from __future__ import annotations
+
+import logging
+import time
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+
+from arb_desktop.betslip.models import BetSlipReadResult
+from arb_desktop.betslip.odds_only_calc import OddsOnlyMetrics, compute_odds_only_metrics
+from arb_desktop.config import settings as runtime_settings
+from arb_desktop.execution.exec_logger import begin_bet, bet_step, get_exec_logger
+from arb_desktop.execution.parallel_orchestrator import (
+    BetOutcome,
+    DispatchContext,
+    DispatchResult,
+    ParallelBetOrchestrator,
+)
+from arb_desktop.execution.stake_sync_service import StakeSyncService, StakeSyncStatus
+from arb_desktop.market_data.bithumb_fx import FxSnapshot
+from arb_desktop.ui.settings_store import AppSettings
+
+logger = logging.getLogger(__name__)
+
+
+def _slip_snapshot(bc: BetSlipReadResult, bti: BetSlipReadResult) -> dict[str, object]:
+    def _rev(read: BetSlipReadResult) -> int:
+        try:
+            return int((read.raw or {}).get("revision") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _hash(read: BetSlipReadResult) -> str:
+        if read.first and read.first.dom_hash:
+            return str(read.first.dom_hash)
+        return str((read.raw or {}).get("dom_hash") or "")
+
+    return {
+        "bc_rev": _rev(bc),
+        "x10_rev": _rev(bti),
+        "bc_hash": _hash(bc),
+        "x10_hash": _hash(bti),
+        "bc_odds": bc.first.odds if bc.first else None,
+        "x10_odds": bti.first.odds if bti.first else None,
+    }
+
+
+def _slip_changed(before: dict[str, object], bc: BetSlipReadResult, bti: BetSlipReadResult) -> str | None:
+    after = _slip_snapshot(bc, bti)
+    for key in ("bc_rev", "x10_rev"):
+        b = int(before.get(key) or 0)
+        a = int(after.get(key) or 0)
+        if a and b and a != b:
+            return "slip-changed-before-dispatch"
+    for key in ("bc_hash", "x10_hash"):
+        b = str(before.get(key) or "")
+        a = str(after.get(key) or "")
+        if a and b and a != b:
+            return "slip-changed-before-dispatch"
+    for key, read in (("bc_odds", bc), ("x10_odds", bti)):
+        b = before.get(key)
+        cur = read.first.odds if read.first else None
+        if b is not None and cur is not None and b != cur:
+            return "slip-changed-before-dispatch"
+    return None
+
+
+class ExecutionPhase(str, Enum):
+    IDLE = "IDLE"
+    PREPARE = "PREPARE"
+    FINAL_RECHECK = "FINAL_RECHECK"
+    SYNC_STAKES = "SYNC_STAKES"
+    DISPATCH = "DISPATCH"
+    VERIFY = "VERIFY"
+    SUCCESS = "SUCCESS"
+    PARTIAL = "PARTIAL BET"
+    FAILED = "FAILED"
+
+
+@dataclass
+class ExecutionState:
+    phase: ExecutionPhase = ExecutionPhase.IDLE
+    message: str = ""
+    dispatch_gap_ms: float = 0.0
+    last_result: DispatchResult | None = None
+    stake_sync: StakeSyncStatus | None = None
+
+
+class ExecutionEngine:
+    """자동/수동 배팅 공통 실행 엔진."""
+
+    def __init__(self) -> None:
+        self._orchestrator = ParallelBetOrchestrator()
+        self._stake_sync = StakeSyncService()
+        self.state = ExecutionState()
+        self._locked = False
+
+    @property
+    def is_locked(self) -> bool:
+        return self._locked or self._orchestrator.is_locked
+
+    @property
+    def stake_sync(self) -> StakeSyncService:
+        return self._stake_sync
+
+    async def maybe_sync_stakes(
+        self,
+        *,
+        server,
+        bridge_connected: bool,
+        bc: BetSlipReadResult,
+        bti: BetSlipReadResult,
+        settings: AppSettings,
+        fx: FxSnapshot | None,
+    ) -> StakeSyncStatus | None:
+        block = self._stake_sync.can_sync(
+            bridge_connected=bridge_connected,
+            bc=bc,
+            bti=bti,
+            fx=fx,
+            settings=settings,
+        )
+        if block:
+            get_exec_logger().log("SYNC_BC_STAKE", ok=False, reason=block)
+            self.state.stake_sync = StakeSyncStatus(
+                message=block,
+            )
+            return self.state.stake_sync
+        metrics = self._stake_sync.compute_metrics(bc=bc, bti=bti, settings=settings, fx=fx)
+        if not metrics:
+            return None
+        status = await self._stake_sync.sync_bc_stake(
+            server=server,
+            metrics=metrics,
+            settings=settings,
+        )
+        self.state.stake_sync = status
+        return status
+
+    def build_context(
+        self,
+        *,
+        bc: BetSlipReadResult,
+        bti: BetSlipReadResult,
+        settings: AppSettings,
+        fx: FxSnapshot | None,
+        metrics: OddsOnlyMetrics | None = None,
+    ) -> DispatchContext | None:
+        rate = settings.usdt_rate
+        if fx and fx.rate:
+            rate = fx.rate
+        if not metrics:
+            metrics = compute_odds_only_metrics(
+                bti_odds=float(bti.first.odds or 0) if bti.first else 0,
+                bc_odds=float(bc.first.odds or 0) if bc.first else 0,
+                bti_stake_krw=settings.bti_stake_krw,
+                usdt_rate=rate,
+                round_unit_krw=settings.round_unit_krw,
+                round_unit_usdt=settings.round_unit_usdt,
+                target_profit_pct=settings.target_profit_pct,
+            )
+        if not metrics:
+            return None
+        return DispatchContext(
+            bc=bc,
+            bti=bti,
+            metrics=metrics,
+            settings=settings,
+            usdt_rate=rate,
+            dom_hash_bc=str(bc.first.dom_hash if bc.first else ""),
+            dom_hash_x10=str(bti.first.dom_hash if bti.first else ""),
+        )
+
+    async def prepare_and_dispatch(
+        self,
+        *,
+        server,
+        bridge_connected: bool,
+        bc: BetSlipReadResult,
+        bti: BetSlipReadResult,
+        settings: AppSettings,
+        fx: FxSnapshot | None,
+        manual: bool = False,
+        skip_target_check: bool = False,
+        force_dry: bool = False,
+        get_reads: Callable[[], tuple[BetSlipReadResult, BetSlipReadResult]] | None = None,
+    ) -> DispatchResult:
+        begin_bet(manual=manual)
+
+        if self.is_locked:
+            bet_step("EXECUTION_START", ok=False, reason="locked")
+            bet_step("RESULT", ok=False, reason="locked")
+            return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="locked")
+
+        self._locked = True
+        self.state.phase = ExecutionPhase.PREPARE
+        self.state.message = "양쪽 병렬 배팅 준비 중"
+        slip_snapshot = _slip_snapshot(bc, bti)
+        gui_live = settings.live_execution_enabled
+        runtime_live = bool(getattr(runtime_settings, "live_execution_enabled", False))
+
+        try:
+            if not bridge_connected:
+                bet_step("EXECUTION_START", ok=False, reason="bridge-disconnected")
+                bet_step("RESULT", ok=False, reason="bridge-disconnected")
+                return DispatchResult(
+                    execution_id="",
+                    outcome=BetOutcome.CANCELLED,
+                    abort_reason="bridge-disconnected",
+                )
+
+            ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
+            if not ctx:
+                bet_step("EXECUTION_START", ok=False, reason="calc-error")
+                bet_step("RESULT", ok=False, reason="calc-error")
+                return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
+
+            bet_step(
+                "EXECUTION_START",
+                ok=True,
+                reason="prepare",
+                manual=manual,
+                gui_live_execution=gui_live,
+                runtime_live_execution=runtime_live,
+                live_match=gui_live == runtime_live,
+            )
+
+            self.state.phase = ExecutionPhase.SYNC_STAKES
+            sync_status = await self._stake_sync.sync_bc_stake(server=server, metrics=ctx.metrics, settings=settings)
+            self.state.stake_sync = sync_status
+            if settings.stake_sync_enabled and sync_status.state.name != "OK":
+                bet_step("RESULT", ok=False, reason="bc-stake-sync-failed")
+                return DispatchResult(
+                    execution_id="",
+                    outcome=BetOutcome.CANCELLED,
+                    abort_reason="bc-stake-sync-failed",
+                )
+            if settings.stake_sync_enabled and server:
+                read_back = await server.send_command("bc", "read_bc_stake")
+                actual = getattr(read_back, "actual", None)
+                target = float(ctx.metrics.bc_stake_usdt)
+                verify_ok = actual is not None and abs(float(actual) - target) <= 0.15
+                if not verify_ok:
+                    bet_step("RESULT", ok=False, reason="bc-stake-verify-failed", actual=actual, requested=target)
+                    return DispatchResult(
+                        execution_id="",
+                        outcome=BetOutcome.CANCELLED,
+                        abort_reason="bc-stake-verify-failed",
+                    )
+
+            # 최신 slip 기준으로 metrics 재계산
+            if get_reads:
+                bc, bti = get_reads()
+            ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
+            if not ctx:
+                return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
+
+            changed = _slip_changed(slip_snapshot, bc, bti)
+            if changed:
+                bet_step("FINAL_RECHECK", ok=False, reason=changed)
+                bet_step("RESULT", ok=False, reason=changed)
+                result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=changed)
+                self.state.last_result = result
+                self.state.message = _abort_message(changed)
+                self.state.phase = ExecutionPhase.FAILED
+                return result
+
+            self.state.phase = ExecutionPhase.FINAL_RECHECK
+            abort = self._orchestrator.pre_dispatch_validate(
+                ctx,
+                manual=manual,
+                skip_target_check=skip_target_check,
+            )
+            bet_step(
+                "FINAL_RECHECK",
+                ok=abort is None,
+                reason=abort or "ok",
+                profit_rate=f"{ctx.metrics.current_profit_rate:.2f}",
+            )
+            skippable = {
+                "target-lost-before-dispatch",
+                "odds-changed-before-dispatch",
+            }
+            if abort and not (manual and skip_target_check and abort in skippable):
+                bet_step("RESULT", ok=False, reason=abort)
+                result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=abort)
+                self.state.last_result = result
+                self.state.message = _abort_message(abort)
+                self.state.phase = ExecutionPhase.FAILED
+                return result
+
+            live = settings.live_execution_enabled
+            if force_dry:
+                dry = True
+            elif manual and live:
+                dry = False
+            else:
+                dry = settings.dry_run or not live
+
+            self.state.phase = ExecutionPhase.DISPATCH
+            if force_dry or dry:
+                self.state.message = "Dry Run — 양쪽 병렬 배팅 시뮬레이션"
+                bet_step("X10_BUTTON_FOUND", ok=True, reason="skipped dry_run")
+                bet_step("BC_BUTTON_FOUND", ok=True, reason="skipped dry_run")
+            elif not live:
+                bet_step("X10_BUTTON_FOUND", ok=True, reason="skipped live_disabled")
+                bet_step("BC_BUTTON_FOUND", ok=True, reason="skipped live_disabled")
+            else:
+                self.state.message = "양쪽 병렬 배팅 전송 중"
+
+            x10_button_ok = True
+            bc_button_ok = True
+            if live and not dry and server:
+                x10_scan = await server.send_command("x10", "scan_bet_buttons")
+                bc_scan = await server.send_command("bc", "scan_bet_buttons")
+                x10_button_ok = bool(x10_scan.ok)
+                bc_button_ok = bool(bc_scan.ok)
+                bet_step(
+                    "X10_BUTTON_FOUND",
+                    ok=x10_button_ok,
+                    reason=x10_scan.reason or x10_scan.error or ("ok" if x10_button_ok else "not-found"),
+                    frame_url=(x10_scan.raw or {}).get("frame_url", ""),
+                    button_text=(x10_scan.raw or {}).get("button_text", ""),
+                    selector=(x10_scan.raw or {}).get("selector", ""),
+                )
+                bet_step(
+                    "BC_BUTTON_FOUND",
+                    ok=bc_button_ok,
+                    reason=bc_scan.reason or bc_scan.error or ("ok" if bc_button_ok else "not-found"),
+                    frame_url=(bc_scan.raw or {}).get("frame_url", ""),
+                    button_text=(bc_scan.raw or {}).get("button_text", ""),
+                    selector=(bc_scan.raw or {}).get("selector", ""),
+                )
+                if not x10_button_ok or not bc_button_ok:
+                    missing = []
+                    if not x10_button_ok:
+                        missing.append("x10-bet-button-not-found")
+                    if not bc_button_ok:
+                        missing.append("bc-bet-button-not-found")
+                    abort = "-".join(missing)
+                    bet_step("RESULT", ok=False, reason=abort)
+                    result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=abort)
+                    self.state.last_result = result
+                    self.state.message = _abort_message(abort)
+                    self.state.phase = ExecutionPhase.FAILED
+                    return result
+
+            x10_click_fn = None
+            bc_click_fn = None
+            execution_id = ""
+            if live and not dry and server:
+                execution_id = str(uuid.uuid4())
+
+                async def _x10_click():
+                    resp = await server.send_command("x10", "place_x10_bet", execution_id=execution_id)
+                    ok = bool(getattr(resp, "ok", False))
+                    bet_step(
+                        "X10_CLICK",
+                        ok=ok,
+                        reason=getattr(resp, "reason", "") or getattr(resp, "error", "") or ("ok" if ok else "click-failed"),
+                        timestamp_ns=time.time_ns(),
+                    )
+                    return resp
+
+                async def _bc_click():
+                    resp = await server.send_command("bc", "place_bc_bet", execution_id=execution_id)
+                    ok = bool(getattr(resp, "ok", False))
+                    bet_step(
+                        "BC_CLICK",
+                        ok=ok,
+                        reason=getattr(resp, "reason", "") or getattr(resp, "error", "") or ("ok" if ok else "click-failed"),
+                        timestamp_ns=time.time_ns(),
+                    )
+                    return resp
+
+                x10_click_fn = _x10_click
+                bc_click_fn = _bc_click
+
+            if get_reads:
+                bc, bti = get_reads()
+                changed = _slip_changed(slip_snapshot, bc, bti)
+                if changed:
+                    bet_step("DISPATCH_START", ok=False, reason=changed)
+                    bet_step("RESULT", ok=False, reason=changed)
+                    result = DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason=changed)
+                    self.state.last_result = result
+                    self.state.message = _abort_message(changed)
+                    self.state.phase = ExecutionPhase.FAILED
+                    return result
+                ctx = self.build_context(bc=bc, bti=bti, settings=settings, fx=fx)
+                if not ctx:
+                    bet_step("DISPATCH_START", ok=False, reason="calc-error")
+                    bet_step("RESULT", ok=False, reason="calc-error")
+                    return DispatchResult(execution_id="", outcome=BetOutcome.CANCELLED, abort_reason="calc-error")
+
+            bet_step(
+                "DISPATCH_START",
+                ok=True,
+                reason="dry_run" if (dry or force_dry) else ("live" if live else "live_disabled"),
+            )
+            if dry or force_dry:
+                bet_step("X10_CLICK", ok=True, reason="skipped dry_run")
+                bet_step("BC_CLICK", ok=True, reason="skipped dry_run")
+            elif not live:
+                bet_step("X10_CLICK", ok=True, reason="skipped live_disabled")
+                bet_step("BC_CLICK", ok=True, reason="skipped live_disabled")
+
+            result = await self._orchestrator.dispatch(
+                ctx,
+                dry_run=dry or force_dry,
+                live_enabled=live and not force_dry,
+                x10_click=x10_click_fn,
+                bc_click=bc_click_fn,
+                manual=manual,
+                skip_target_check=skip_target_check,
+            )
+
+            self.state.dispatch_gap_ms = result.dispatch_gap_ms
+            self.state.last_result = result
+            self.state.phase = self._phase_from_result(result)
+            outcome_ok = result.outcome.name.endswith("SUCCESS") or result.outcome.value == "DRY_RUN_MOCK"
+            bet_step(
+                "RESULT",
+                ok=outcome_ok,
+                reason=result.abort_reason or result.outcome.value,
+                outcome=result.outcome.value,
+                partial=result.partial,
+            )
+            if result.abort_reason:
+                self.state.message = _abort_message(result.abort_reason)
+            elif dry and result.outcome == BetOutcome.DRY_RUN_MOCK:
+                self.state.message = "Dry Run 완료 (실제 Bet 클릭 없음)"
+            else:
+                self.state.message = result.outcome.value
+            return result
+        finally:
+            self._locked = False
+
+    @staticmethod
+    def _phase_from_result(result: DispatchResult) -> ExecutionPhase:
+        if result.partial:
+            return ExecutionPhase.PARTIAL
+        if result.outcome.name.endswith("SUCCESS") or result.outcome.value == "DRY_RUN_MOCK":
+            return ExecutionPhase.SUCCESS
+        if result.outcome.name == "CANCELLED":
+            return ExecutionPhase.IDLE
+        return ExecutionPhase.FAILED
+
+
+_ABORT_MESSAGES = {
+    "bridge-disconnected": "Bridge 연결 필요",
+    "calc-error": "수익률 계산 실패",
+    "slip-missing": "양쪽 BetSlip 필요",
+    "bc-closed-before-dispatch": "BC 배팅 닫힘",
+    "x10-closed-before-dispatch": "X10 배팅 닫힘",
+    "slip-count-not-one": "양쪽 카트는 각 1개여야 함",
+    "odds-changed-before-dispatch": "배당 변경됨 — 재시도",
+    "target-lost-before-dispatch": "목표 수익률 미달",
+    "duplicate-execution-blocked": "중복 실행 차단",
+    "redispatch-cooldown": "재실행 대기 중",
+    "execution-lock-active": "실행 잠금",
+    "bc-stake-sync-failed": "BC stake sync failed",
+    "bc-stake-verify-failed": "BC stake input verify failed",
+    "slip-changed-before-dispatch": "카트 변경됨 — 배팅 취소",
+    "locked": "실행 잠금",
+}
+
+
+def _abort_message(reason: str) -> str:
+    return _ABORT_MESSAGES.get(reason, reason.replace("-", " "))
