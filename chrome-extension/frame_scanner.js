@@ -786,6 +786,16 @@
         ? `${c.value} SELECTED odds`
         : `${c.value} EXCLUDED ${c.exclude_reason || "rejected"}`,
     }));
+    const rootStatus = pipeline.steps?.X10_ROOT === "PASS" ? "FOUND" : "MISSING";
+    const selectionText = pipeline.selection_text || "";
+    const oddsText = pipeline.odds_text || "";
+    const extracted = pipeline.odds;
+    const oddsLocatorDebug = [
+      `Root ${rootStatus}`,
+      selectionText ? `Selection:\n${selectionText}` : "Selection:",
+      oddsText ? `Odds:\n${oddsText}` : "Odds:",
+      extracted != null ? `Extracted:\n${extracted}` : "Extracted:",
+    ].join("\n\n");
     return {
       site: "x10",
       frame_url: location.href,
@@ -808,6 +818,20 @@
       odds_candidates: debugCandidates,
       odds_source: pipeline.odds_source || "",
       extracted_odds: pipeline.odds,
+      selection_text: selectionText,
+      selection_node: pipeline.selection_node || null,
+      odds_text: oddsText,
+      odds_node: pipeline.odds_node || null,
+      odds_locator: {
+        root: rootStatus,
+        selection_text: selectionText,
+        selection_node: pipeline.selection_node || null,
+        odds_text: oddsText,
+        odds_node: pipeline.odds_node || null,
+        extracted_odds: extracted,
+        method: pipeline.odds_method || pipeline.odds_source || "",
+      },
+      odds_locator_debug: oddsLocatorDebug,
       parsed_status: pipeline.status || "empty",
       status_reason: pipeline.steps?.first_failure || pipeline.status || "",
       keyword_candidates: pipeline.keyword_candidates || [],
@@ -892,6 +916,7 @@
   function isX10LineValue(val, leafText, parentText, contextBlob) {
     const blob = `${contextBlob} ${parentText} ${leafText}`.toLowerCase();
     const valStr = String(val);
+    if (isX10ParenLineValue(leafText, valStr) || isX10ParenLineValue(parentText, valStr)) return true;
     if (/[+-]\s*\d/.test(leafText) || /[+-]\d/.test(leafText)) {
       const m = leafText.match(/[+-]\s*(\d+(?:\.\d+)?)/);
       if (m && Math.abs(parseFloat(m[1]) - val) < 0.001) return true;
@@ -943,6 +968,202 @@
     return leaves;
   }
 
+  function x10NodeDescriptor(node) {
+    if (!node) return null;
+    return {
+      tag: node.tagName?.toLowerCase() || "",
+      className: String(node.className || "").slice(0, 80),
+      text: (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+      selector: selectorHint(node),
+    };
+  }
+
+  /** selection 행: 오버 (6.5) — 괄호 안 6.5는 기준점 */
+  function isX10SelectionLineText(rawText) {
+    const t = String(rawText || "").trim();
+    if (!t || t.length > 120) return false;
+    if (/^(베팅슬립|베팅 슬립|싱글|조합|멀티|더블)$/i.test(t)) return false;
+    if (/배팅\s*수락|베팅하기|배팅하기|당첨/i.test(t)) return false;
+    if (/\d+\.\d+\s*@\s*\d/.test(t)) return false;
+    if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
+    if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
+    return false;
+  }
+
+  function isX10ParenLineValue(lineText, token) {
+    const escaped = String(token).replace(".", "\\.");
+    return new RegExp(`\\(\\s*${escaped}\\s*\\)`).test(lineText || "");
+  }
+
+  function isX10StandaloneOddsLine(rawText) {
+    const t = String(rawText || "").trim();
+    const m = t.match(/^@?\s*(\d{1,3}(?:\.\d{1,3})?)$/);
+    if (!m) return false;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= X10_ODDS_MIN && n <= X10_ODDS_MAX;
+  }
+
+  function buildX10OddsPick(pick, candidates, extra) {
+    return {
+      odds: pick.value,
+      candidates,
+      source: pick.source,
+      selection_text: extra.selection_text || "",
+      selection_node: extra.selection_node || null,
+      odds_text: extra.odds_text || pick.text || String(pick.value),
+      odds_node: extra.odds_node || null,
+      method: extra.method || pick.source,
+    };
+  }
+
+  /** 우선순위 1: root 내부 selection → 다음 줄/오른쪽 배당 */
+  function extractX10OddsFromSelection(root, stake, contextBlob) {
+    if (!root) return { odds: null, candidates: [], source: "" };
+
+    const candidates = [];
+    const leaves = collectX10LeafTexts(root);
+
+    for (let li = 0; li < leaves.length; li += 1) {
+      const leaf = leaves[li];
+      if (!isX10SelectionLineText(leaf.text)) continue;
+
+      const selectionText = leaf.text.trim();
+      const selectionNode = x10NodeDescriptor(leaf.node);
+
+      const inlineAt = leaf.text.match(/@\s*(\d{1,3}(?:\.\d{1,3})?)\s*$/);
+      if (inlineAt) {
+        const val = parseFloat(inlineAt[1]);
+        const reason = x10ExcludeReason(val, inlineAt[1], leaf.parentText, contextBlob, stake);
+        const entry = {
+          value: val,
+          text: inlineAt[1],
+          tag: leaf.tag,
+          className: leaf.className,
+          parentText: leaf.parentText,
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: selectionText,
+            selection_node: selectionNode,
+            odds_text: inlineAt[1],
+            odds_node: x10NodeDescriptor(leaf.node),
+            method: "selection_inline_at",
+          });
+        }
+      }
+
+      const tokens = leaf.text.match(/\b(\d{1,3}(?:\.\d{1,3})?)\b/g) || [];
+      for (let ti = tokens.length - 1; ti >= 0; ti -= 1) {
+        const token = tokens[ti];
+        if (isX10ParenLineValue(leaf.text, token)) continue;
+        const val = parseFloat(token);
+        const reason = x10ExcludeReason(val, token, leaf.parentText, contextBlob, stake);
+        const entry = {
+          value: val,
+          text: token,
+          tag: leaf.tag,
+          className: leaf.className,
+          parentText: leaf.parentText,
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: selectionText,
+            selection_node: selectionNode,
+            odds_text: token,
+            odds_node: x10NodeDescriptor(leaf.node),
+            method: "selection_rightmost",
+          });
+        }
+      }
+
+      for (let fi = li + 1; fi < Math.min(li + 8, leaves.length); fi += 1) {
+        const follow = leaves[fi];
+        const lt = follow.text.trim();
+        if (/배팅|수락|원|KRW|₩|합계|당첨/i.test(lt)) break;
+        if (isX10SelectionLineText(lt)) break;
+        if (!isX10StandaloneOddsLine(lt)) continue;
+        const val = parseFloat(lt.replace(/^@/, ""));
+        const reason = x10ExcludeReason(
+          val,
+          lt,
+          follow.parentText,
+          `${follow.grandparentText} ${contextBlob}`,
+          stake,
+        );
+        const entry = {
+          value: val,
+          text: lt,
+          tag: follow.tag,
+          className: follow.className,
+          parentText: follow.parentText,
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: selectionText,
+            selection_node: selectionNode,
+            odds_text: lt,
+            odds_node: x10NodeDescriptor(follow.node),
+            method: "selection_following_line",
+          });
+        }
+      }
+    }
+
+    const lines = (root.innerText || "").replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length - 1; i += 1) {
+      if (!isX10SelectionLineText(lines[i])) continue;
+      for (let j = i + 1; j < Math.min(i + 6, lines.length); j += 1) {
+        if (/배팅|수락|당첨/i.test(lines[j])) break;
+        if (isX10SelectionLineText(lines[j])) break;
+        if (!isX10StandaloneOddsLine(lines[j])) continue;
+        const val = parseFloat(lines[j].replace(/^@/, ""));
+        const reason = x10ExcludeReason(val, lines[j], lines[i], contextBlob, stake);
+        const entry = {
+          value: val,
+          text: lines[j],
+          tag: "",
+          className: "",
+          parentText: lines[i],
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: lines[i],
+            selection_node: null,
+            odds_text: lines[j],
+            odds_node: null,
+            method: "selection_text_lines",
+          });
+        }
+      }
+    }
+
+    return { odds: null, candidates, source: "" };
+  }
+
   function extractX10OddsFromDedicated(root, stake, contextBlob) {
     const candidates = [];
     for (const sel of X10_ODDS_SELECTORS) {
@@ -984,10 +1205,22 @@
 
   function extractX10OddsFromRoot(root, stake) {
     const contextBlob = text(root);
-    const dedicated = extractX10OddsFromDedicated(root, stake, contextBlob);
-    if (dedicated.odds != null) return dedicated;
+    const fromSelection = extractX10OddsFromSelection(root, stake, contextBlob);
+    if (fromSelection.odds != null) return fromSelection;
 
-    const candidates = [...dedicated.candidates];
+    const dedicated = extractX10OddsFromDedicated(root, stake, contextBlob);
+    if (dedicated.odds != null) {
+      return {
+        ...dedicated,
+        selection_text: "",
+        selection_node: null,
+        odds_text: dedicated.candidates?.find((c) => c.selected)?.text || String(dedicated.odds),
+        odds_node: null,
+        method: dedicated.source,
+      };
+    }
+
+    const candidates = [...fromSelection.candidates, ...dedicated.candidates];
     for (const leaf of collectX10LeafTexts(root)) {
       const normalized = leaf.text.replace(/,/g, "");
       const m = normalized.match(/^@?\s*([+-]?\d+(?:\.\d{1,4})?)$/);
@@ -1006,6 +1239,7 @@
         tag: leaf.tag,
         className: leaf.className,
         parentText: leaf.parentText,
+        node: leaf.node,
         source: "leaf",
         excluded: Boolean(reason),
         exclude_reason: reason || "",
@@ -1021,7 +1255,16 @@
       pick.selected = true;
     }
 
-    return { odds, candidates, source: pick?.source || "leaf" };
+    return {
+      odds,
+      candidates,
+      source: pick?.source || "leaf",
+      selection_text: "",
+      selection_node: null,
+      odds_text: pick?.text || (odds != null ? String(odds) : ""),
+      odds_node: pick ? x10NodeDescriptor(pick.node) : null,
+      method: pick?.source || "leaf",
+    };
   }
 
   function readX10Slip() {
