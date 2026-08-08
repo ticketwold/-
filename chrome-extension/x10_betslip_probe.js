@@ -389,21 +389,36 @@
     const end = moneyBoundary > slipIndex ? moneyBoundary : lines.length;
     const candidateLines = lines.slice(slipIndex + 2, end);
 
+    const parseSelectionLine = (text) => {
+      const parenMatch = text.match(
+        /(오버|언더|Over|Under|핸디|핸디캡).*?\(([+-]?\d+(?:\.\d+)?)\)/i,
+      );
+      if (parenMatch) {
+        return { selection: text, line: Number(parenMatch[2]) };
+      }
+      if (/^W[12]$/i.test(text)) {
+        return { selection: text, line: null };
+      }
+      if (/^[12]$/.test(text)) {
+        return { selection: text, line: null };
+      }
+      if (/^(홈|원정|승|패)$/.test(text)) {
+        return { selection: text, line: null };
+      }
+      return null;
+    };
+
     let lineValue = null;
     let selectionIndex = -1;
     let selection = "";
 
     for (let i = 0; i < candidateLines.length; i += 1) {
-      const text = candidateLines[i];
-      const m = text.match(
-        /(오버|언더|Over|Under|W1|W2|승|패|핸디|핸디캡).*?\(([+-]?\d+(?:\.\d+)?)\)/i,
-      );
-      if (m) {
-        selectionIndex = i;
-        selection = text;
-        lineValue = Number(m[2]);
-        break;
-      }
+      const parsedSelection = parseSelectionLine(candidateLines[i]);
+      if (!parsedSelection) continue;
+      selectionIndex = i;
+      selection = parsedSelection.selection;
+      lineValue = parsedSelection.line;
+      break;
     }
 
     let odds = null;
@@ -412,9 +427,8 @@
         const text = candidateLines[i];
         if (!/^\d+(?:\.\d+)?$/.test(text)) continue;
         const value = Number(text);
-        if (value >= 1.01 && value <= 100 && value !== lineValue) {
+        if (value >= 1.01 && value <= 100 && (lineValue == null || value !== lineValue)) {
           odds = value;
-          break;
         }
       }
     }
