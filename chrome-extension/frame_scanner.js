@@ -764,15 +764,18 @@
     return scanX10DiagnosticSelectors();
   }
 
-  function buildX10DebugSnapshot(frameDepth) {
+  function buildX10DebugSnapshot(frameDepth, frameProbe) {
     const probeApi = global.ArbX10Probe;
-    const frameInfo = probeApi?.probeFrame?.() || {
+    const frameInfo = frameProbe || probeApi?.probeFrame?.() || {
       frame_url: location.href,
       readyState: document.readyState,
       bodyLength: 0,
       hasBetSlipKeyword: false,
     };
-    const pipeline = probeApi?.runPipeline?.((root, stake) => extractX10OddsFromRoot(root, stake)) || {
+    const pipeline = probeApi?.runPipeline?.(
+      (root, stake) => extractX10OddsFromRoot(root, stake),
+      { frame: frameInfo },
+    ) || {
       steps: {},
       root: null,
       odds: null,
@@ -815,6 +818,7 @@
       root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
       slip_root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
       fallback_used: !!pipeline.fallback_used,
+      fallback_attempted: !!pipeline.fallback_attempted,
       root_selector: pipeline.rootSelector || "",
       container_selector: pipeline.rootSelector || "",
       slip_count: pipeline.slip_count ?? 0,
@@ -1280,7 +1284,7 @@
     };
   }
 
-  function readX10Slip() {
+  function readX10Slip(frameProbe) {
     const probeApi = global.ArbX10Probe;
     if (!probeApi?.runPipeline) {
       return {
@@ -1292,23 +1296,28 @@
       };
     }
 
-    const pipeline = probeApi.runPipeline((root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake));
+    const frameInfo = frameProbe || probeApi.probeFrame?.();
+    const pipeline = probeApi.runPipeline(
+      (root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake),
+      { frame: frameInfo },
+    );
     const steps = pipeline.steps || {};
     const root = pipeline.root || null;
     const fallbackUsed = !!pipeline.fallback_used;
-    const hasSlipData = !!pipeline.ok || pipeline.status === "active" || (pipeline.slip_count === 1 && pipeline.odds != null);
 
-    if (!root && !hasSlipData) {
+    if (!pipeline.ok && !root) {
       resetX10SlipState();
       return {
-        ok: steps.X10_FRAME === "PASS" && steps.X10_TEXT_BLOCK === "PASS",
+        ok: false,
         empty: true,
         items: [],
-        reason: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "no-slip-root",
+        reason: pipeline.fallback_attempted ? "fallback-parse-failed" : "no-slip-root",
         frame_url: location.href,
         slip_root_found: "NO",
         root_found: "NO",
         fallback_used: fallbackUsed,
+        fallback_attempted: !!pipeline.fallback_attempted,
+        anchor_hits: pipeline.anchor_hits || frameInfo?.anchor_hits || {},
         slip_inner_text: pipeline.bodySnippet || pipeline.frame?.bodySnippet || "",
         pipeline_steps: steps,
         first_failure: steps.first_failure || "",
@@ -1346,6 +1355,8 @@
       slip_root_found: root ? "YES" : "NO",
       root_found: root ? "YES" : "NO",
       fallback_used: fallbackUsed,
+      fallback_attempted: !!pipeline.fallback_attempted,
+      anchor_hits: pipeline.anchor_hits || frameInfo?.anchor_hits || {},
       slip_count: slipCount,
       slip_inner_text: pipeline.bodySnippet || rootText.slice(0, 1500),
       pipeline_steps: steps,

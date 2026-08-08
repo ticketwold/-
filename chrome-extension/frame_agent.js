@@ -438,8 +438,9 @@
       if (site === "x10" && message?.type === "x10_probe") {
         const scanner = global.ArbFrameScanner;
         const probe = global.ArbX10Probe;
-        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
         const frame = probe?.probeFrame?.() || {};
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth, frame) || {};
+        const slip = scanner?.readX10Slip?.(frame) || {};
         const rootFound = snap.slip_root_found === "YES" || snap.root_found === "YES";
         const odds = snap.extracted_odds ?? null;
         const status = String(snap.parsed_status || "empty").toUpperCase();
@@ -462,9 +463,9 @@
         const scanner = global.ArbFrameScanner;
         const probe = global.ArbX10Probe;
         scan(true);
-        const slip = scanner?.readX10Slip?.() || {};
-        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
         const frame = probe?.probeFrame?.() || {};
+        const slip = scanner?.readX10Slip?.(frame) || {};
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth, frame) || {};
         const rootFound = slip.slip_root_found === "YES" || snap.slip_root_found === "YES";
         const fallbackUsed = !!(slip.fallback_used ?? snap.fallback_used);
         const slipCount = slip.slip_count ?? snap.slip_count ?? 0;
@@ -486,9 +487,10 @@
           status,
           body_has_keywords: bodyHasKeywords,
           keyword_frame: bodyHasKeywords,
-          anchor_hits: frame.anchor_hits || {},
+          anchor_hits: slip.anchor_hits || frame.anchor_hits || {},
           pipeline_steps: slip.pipeline_steps || snap.pipeline_steps || {},
           first_failure: slip.first_failure || snap.first_failure || "",
+          fallback_attempted: !!(slip.fallback_attempted ?? snap.fallback_attempted),
           odds_locator_debug: snap.odds_locator_debug || "",
           slip,
           ...snap,

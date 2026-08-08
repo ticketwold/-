@@ -116,13 +116,25 @@ assert(anchorOnlyResult.steps.X10_ODDS === "PASS", "runPipeline: anchor text →
 assert(anchorOnlyResult.steps.X10_STATUS === "PASS", "runPipeline: anchor text → X10_STATUS PASS");
 assert(anchorOnlyResult.steps.first_failure === null, "runPipeline: anchor text → first_failure null");
 
-const anchorHits = anchorOnlyFrame.anchor_hits;
 if (
   anchorHits["베팅슬립"]?.text?.includes("베팅슬립") &&
   anchorHits["베팅슬립"]?.text?.includes("베팅하기")
 ) {
   assert(anchorOnlyResult.fallback_attempted === true, "regression: anchor text present must attempt fallback");
   assert(anchorOnlyResult.fallback_used === true, "regression: anchor text present must use fallback");
+  assert(anchorOnlyResult.steps.X10_TEXT_BLOCK === "PASS", "regression: anchor text present must not fail TEXT_BLOCK");
 }
+
+const emptyDomFrame = {
+  frame_url: "test://",
+  readyState: "complete",
+  bodyLength: 0,
+  hasBetSlipKeyword: false,
+  body_has_keywords: false,
+  anchor_hits: {},
+  bodySnippet: "",
+};
+const emptyDomResult = runPipeline(null, { frame: emptyDomFrame });
+assert(emptyDomResult.fallback_attempted === false, "runPipeline: no anchor text → no fallback attempt");
 
 console.log("test_x10_odds: PASS");

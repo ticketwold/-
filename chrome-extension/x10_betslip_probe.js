@@ -111,7 +111,7 @@
     const betslipBlock = findBetSlipAnchorTextBlock();
 
     if (betslipBlock) {
-      hits["베팅슬립"] = { selector: "(text-block)", text: betslipBlock.slice(0, 800) };
+      hits["베팅슬립"] = { selector: "(text-block)", text: betslipBlock };
       const parsed = parseX10SlipText(betslipBlock);
       if (/\b싱글\b/.test(betslipBlock)) hits["싱글"] = { selector: "(text-block)", text: "싱글" };
       if (parsed.selection) hits.selection = { selector: "(text-block)", text: parsed.selection };
@@ -383,7 +383,7 @@
     const moneyBoundary = lines.findIndex(
       (x, i) =>
         i > slipIndex &&
-        (x === "₩" || x === "최대" || x.includes("당첨 예상금액") || x === "베팅하기"),
+        (x === "₩" || x === "최대" || x.includes("당첨 예상금액")),
     );
 
     const end = moneyBoundary > slipIndex ? moneyBoundary : lines.length;
@@ -771,10 +771,11 @@
       steps.X10_ROOT = "WARN";
     }
 
-    if ((!odds || effectiveCount !== 1) && anchorText) {
+    if (betslipAnchor?.text) {
       fallback_attempted = true;
-      fallback = parseX10BetSlipText(anchorText);
-      if (fallback.ok) {
+      fallback = parseX10BetSlipText(betslipAnchor.text);
+      const needsFallback = !odds || effectiveCount !== 1 || !root;
+      if (fallback.ok && needsFallback) {
         fallback_used = true;
         steps.X10_TEXT_BLOCK = "PASS";
         odds = fallback.odds;
@@ -784,7 +785,7 @@
         odds_text = String(fallback.odds);
         odds_source = "anchor-text-fallback";
         odds_method = "anchor-text-fallback";
-        bodySnippet = anchorText;
+        bodySnippet = betslipAnchor.text;
         steps.X10_ROOT = "WARN";
       }
     }
