@@ -36,21 +36,24 @@
     '[class*="betInformation"]',
   ];
 
-  const X10_DEBUG_SELECTORS = [
-    ".bet-slip-item",
-    ".bet-slip",
-    ".bet-slip-container",
-    '[data-editor-id]',
-    '[class*="slip" i]',
-    '[class*="coupon" i]',
+  const X10_DIAG_SELECTORS = [
+    '[id*="betslip" i]',
     '[class*="betslip" i]',
     '[class*="bet-slip" i]',
-    '[class*="betcart" i]',
-    '[class*="bet-cart" i]',
+    '[class*="coupon" i]',
     '[class*="ticket" i]',
     '[class*="selection" i]',
-    '[class*="betInformation"]',
-    '[class*="betslip_fe"]',
+  ];
+
+  const X10_ODDS_SELECTORS = [
+    '[class*="odds" i]',
+    '[class*="coef" i]',
+    '[class*="coefficient" i]',
+    '[class*="price" i]',
+    '[data-testid*="odds" i]',
+    '[data-odds]',
+    '[data-coef]',
+    '[data-coefficient]',
   ];
 
   const CLOSED_KEYWORD_RE =
@@ -65,6 +68,31 @@
     lastStatus: "empty",
     oddsMissingSince: 0,
   };
+
+  const x10RootTracker = { key: "", revision: 0 };
+
+  function resetX10SlipState() {
+    x10SlipState.lastActiveOdds = null;
+    x10SlipState.lastStatus = "empty";
+    x10SlipState.oddsMissingSince = 0;
+    x10RootTracker.key = "";
+  }
+
+  function trackX10Root(root) {
+    if (!root) {
+      resetX10SlipState();
+      return x10RootTracker.revision;
+    }
+    const key = `${slipRootId(root)}:${domHash(root)}`;
+    if (x10RootTracker.key && x10RootTracker.key !== key) {
+      x10SlipState.lastActiveOdds = null;
+      x10SlipState.lastStatus = "empty";
+      x10SlipState.oddsMissingSince = 0;
+      x10RootTracker.revision += 1;
+    }
+    x10RootTracker.key = key;
+    return x10RootTracker.revision;
+  }
 
   function elementDisabled(el) {
     if (!el) return false;
@@ -83,23 +111,24 @@
   }
 
   function inspectX10BetButton(root) {
-    if (!root) return { disabled: false, ariaDisabled: false };
+    if (!root) return { disabled: false, ariaDisabled: false, found: false };
     let nodes = [];
     try {
       nodes = [...root.querySelectorAll("button, [role='button'], input[type='submit']")];
     } catch (_err) {
-      return { disabled: false, ariaDisabled: false };
+      return { disabled: false, ariaDisabled: false, found: false };
     }
     for (const btn of nodes) {
       if (!visible(btn)) continue;
       const label = text(btn).toLowerCase();
       if (!/(bet|place|베팅|배팅|제출|확인)/i.test(label)) continue;
       return {
+        found: true,
         disabled: btn.disabled || elementDisabled(btn),
         ariaDisabled: btn.getAttribute("aria-disabled") === "true",
       };
     }
-    return { disabled: false, ariaDisabled: false };
+    return { disabled: false, ariaDisabled: false, found: false };
   }
 
   function inspectX10OddsElements(root) {
@@ -700,19 +729,43 @@
     return text(root).slice(0, 1000);
   }
 
+  function scanX10DiagnosticSelectors() {
+    const scans = [];
+    for (const selector of X10_DIAG_SELECTORS) {
+      let nodes = [];
+      try {
+        nodes = [...document.querySelectorAll(selector)];
+      } catch (_err) {
+        scans.push({ selector, match_count: 0, sample_text: "(invalid selector)" });
+        continue;
+      }
+      const visibleNodes = nodes.filter((el) => visible(el));
+      const sample = visibleNodes[0] ? text(visibleNodes[0]).slice(0, 500) : "";
+      scans.push({ selector, match_count: visibleNodes.length, sample_text: sample });
+    }
+    return scans;
+  }
+
   function scanX10DebugSelectors() {
-    return scanSelectors(X10_DEBUG_SELECTORS);
+    return scanX10DiagnosticSelectors();
   }
 
   function buildX10DebugSnapshot(frameDepth) {
     const roots = findX10SlipRoots();
-    const selectorHits = scanX10DebugSelectors();
-    const bestRoot = roots[0] || null;
+    const selectorHits = scanX10DiagnosticSelectors();
+    const bestRoot = pickBestX10Root(roots);
     const stake = bestRoot ? readX10Stake(bestRoot) : null;
-    const oddsProbe = bestRoot ? extractX10OddsFromRoot(bestRoot, stake) : { odds: null, candidates: [] };
+    const oddsProbe = bestRoot ? extractX10OddsFromRoot(bestRoot, stake) : { odds: null, candidates: [], source: "" };
     const statusProbe = bestRoot
       ? resolveX10SlipStatus(bestRoot, text(bestRoot), oddsProbe.odds)
       : { status: "empty", reason: "no-slip-root", diagnostics: {} };
+    const rootInner = bestRoot ? text(bestRoot).slice(0, 1500) : "";
+    const debugCandidates = (oddsProbe.candidates || []).map((c) => ({
+      ...c,
+      label: c.selected
+        ? `${c.value} SELECTED odds`
+        : `${c.value} EXCLUDED ${c.exclude_reason || "rejected"}`,
+    }));
     return {
       site: "x10",
       frame_url: location.href,
@@ -726,16 +779,22 @@
           return 0;
         }
       })(),
+      root_found: roots.length ? "YES" : "NO",
       slip_root_found: roots.length ? "YES" : "NO",
       slip_root_count: roots.length,
-      slip_inner_text: getX10SlipInnerText(roots),
+      root_selector: bestRoot ? selectorHint(bestRoot) : "",
+      container_selector: bestRoot ? selectorHint(bestRoot) : "",
+      root_inner_text: rootInner,
+      slip_inner_text: rootInner || getX10SlipInnerText(roots),
       selector_hits: selectorHits,
       selector_scans: selectorHits,
-      odds_candidates: oddsProbe.candidates,
+      odds_candidates: debugCandidates,
+      odds_source: oddsProbe.source || "",
       extracted_odds: oddsProbe.odds,
       status_diagnostics: statusProbe.diagnostics || {},
       parsed_status: statusProbe.status || "empty",
       status_reason: statusProbe.reason || "",
+      revision: x10RootTracker.revision,
     };
   }
 
@@ -747,6 +806,35 @@
       /\b싱글\b/i.test(blob) ||
       /베팅하기|배당\s*수락/i.test(blob)
     );
+  }
+
+  function scoreX10Root(root) {
+    const blob = text(root);
+    let score = 0;
+    if (/베팅\s*슬립|베팅슬립|bet\s*slip/i.test(blob)) score += 60;
+    if (/베팅하기|배팅하기|place\s*bet/i.test(blob)) score += 40;
+    if (/\b싱글\b|\bsingle\b/i.test(blob)) score += 15;
+    if (inspectX10BetButton(root).found) score += 25;
+    const stake = readX10Stake(root);
+    const probe = extractX10OddsFromRoot(root, stake);
+    if (probe.odds != null) score += 120;
+    score += Math.min(blob.length / 120, 25);
+    if (blob.length > 6000) score -= 40;
+    return score;
+  }
+
+  function pickBestX10Root(roots) {
+    if (!roots?.length) return null;
+    let best = roots[0];
+    let bestScore = scoreX10Root(best);
+    for (let i = 1; i < roots.length; i += 1) {
+      const s = scoreX10Root(roots[i]);
+      if (s > bestScore) {
+        bestScore = s;
+        best = roots[i];
+      }
+    }
+    return best;
   }
 
   function findX10SlipRoots() {
@@ -765,7 +853,7 @@
         roots.push(el);
       }
     }
-    roots.sort((a, b) => text(b).length - text(a).length);
+    roots.sort((a, b) => scoreX10Root(b) - scoreX10Root(a));
     return roots;
   }
 
@@ -779,20 +867,40 @@
     return Number.isFinite(v) && v > 0 ? v : null;
   }
 
+  const X10_ODDS_MIN = 1.01;
+  const X10_ODDS_MAX = 100;
+
   const X10_CHIP_AMOUNTS = new Set([10, 20, 50, 100, 300, 1000, 10000, 100000, 500000, 0.2]);
 
-  function x10ExcludeReason(val, leafText, context, stake) {
+  function isX10LineValue(val, leafText, parentText, contextBlob) {
+    const blob = `${contextBlob} ${parentText} ${leafText}`.toLowerCase();
+    const valStr = String(val);
+    if (/[+-]\s*\d/.test(leafText) || /[+-]\d/.test(leafText)) {
+      const m = leafText.match(/[+-]\s*(\d+(?:\.\d+)?)/);
+      if (m && Math.abs(parseFloat(m[1]) - val) < 0.001) return true;
+    }
+    if (/(over|under|오버|언더|total|토탈|핸디|handicap|spread|기준)/i.test(blob)) {
+      if (/^\d+\.5$/.test(valStr) && val >= 1.5) return true;
+      if (new RegExp(`(?:over|under|오버|언더)\\s*${valStr.replace(".", "\\.")}`, "i").test(blob)) return true;
+      if (val >= 10 && val < 100 && /^\d+\.\d+$/.test(valStr)) return true;
+    }
+    if (/^\d+\.\d+$/.test(valStr) && val >= 20 && /^\d+\.5$/.test(valStr)) return true;
+    return false;
+  }
+
+  function x10ExcludeReason(val, leafText, parentText, contextBlob, stake) {
     if (!Number.isFinite(val)) return "not-a-number";
-    if (val <= 1.01 || val >= 100) return "out-of-range";
-    if (stake != null && Math.abs(val - stake) < 0.001) return "stake-input";
-    if (X10_CHIP_AMOUNTS.has(val)) return "chip-button";
-    if (Number.isInteger(val) && val >= 1000) return "large-integer";
-    const blob = `${leafText} ${context}`;
-    if (/당첨\s*예상금액|예상\s*금액|expected\s*payout/i.test(blob)) return "payout-context";
-    if (/잔액|balance/i.test(blob)) return "balance-context";
-    if (/\+\s*[\d,]+/.test(leafText)) return "chip-button";
-    if (/^\d{1,2}$/.test(leafText)) return "score-or-inning";
-    if (!/\./.test(leafText) && val < 10) return "small-integer";
+    if (val < X10_ODDS_MIN || val > X10_ODDS_MAX) return "out-of-range";
+    if (stake != null && Math.abs(val - stake) < 0.001) return "stake";
+    if (X10_CHIP_AMOUNTS.has(val)) return "stake";
+    if (Number.isInteger(val) && val >= 1000) return "stake";
+    const blob = `${leafText} ${parentText} ${contextBlob}`;
+    if (/당첨\s*예상|예상\s*금액|expected\s*payout|payout/i.test(blob)) return "payout";
+    if (/잔액|balance/i.test(blob)) return "balance";
+    if (/\+\s*[\d,]+/.test(leafText)) return "stake";
+    if (/^\d{1,2}$/.test(leafText.trim())) return "score";
+    if (isX10LineValue(val, leafText, parentText, contextBlob)) return "line";
+    if (!/\./.test(leafText) && val < 10 && Number.isInteger(val)) return "inning";
     return "";
   }
 
@@ -803,26 +911,85 @@
       const elementChildren = [...node.children].filter((ch) => ch.nodeType === 1);
       if (elementChildren.length > 0) return;
       const raw = (node.textContent || "").replace(/\s+/g, " ").trim();
-      if (!raw || raw.length > 32) return;
-      leaves.push({ node, text: raw });
+      if (!raw || raw.length > 48) return;
+      const parent = node.parentElement || root;
+      const grandparent = parent?.parentElement || root;
+      leaves.push({
+        node,
+        text: raw,
+        tag: node.tagName?.toLowerCase() || "",
+        className: String(node.className || ""),
+        parentText: text(parent).slice(0, 120),
+        grandparentText: text(grandparent).slice(0, 120),
+      });
     }, 0);
     return leaves;
   }
 
-  function extractX10OddsFromRoot(root, stake) {
+  function extractX10OddsFromDedicated(root, stake, contextBlob) {
     const candidates = [];
-    const context = text(root);
+    for (const sel of X10_ODDS_SELECTORS) {
+      let nodes = [];
+      try {
+        nodes = [...root.querySelectorAll(sel)];
+      } catch (_err) {
+        continue;
+      }
+      for (const node of nodes) {
+        if (!visible(node)) continue;
+        const raw = text(node).replace(/,/g, "").trim();
+        const m = raw.match(/^@?\s*([+-]?\d+(?:\.\d+)?)$/);
+        if (!m) continue;
+        const val = parseFloat(m[1]);
+        const parentText = text(node.parentElement || root);
+        const reason = x10ExcludeReason(val, raw, parentText, contextBlob, stake);
+        const entry = {
+          value: val,
+          text: raw,
+          tag: node.tagName?.toLowerCase() || "",
+          className: String(node.className || ""),
+          parentText: parentText.slice(0, 120),
+          source: "selector",
+          selector: sel,
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return { odds: val, candidates, source: "selector" };
+        }
+      }
+    }
+    return { odds: null, candidates, source: "" };
+  }
 
+  function extractX10OddsFromRoot(root, stake) {
+    const contextBlob = text(root);
+    const dedicated = extractX10OddsFromDedicated(root, stake, contextBlob);
+    if (dedicated.odds != null) return dedicated;
+
+    const candidates = [...dedicated.candidates];
     for (const leaf of collectX10LeafTexts(root)) {
       const normalized = leaf.text.replace(/,/g, "");
-      const m = normalized.match(/^@?\s*(\d+(?:\.\d{1,4})?)$/);
+      const m = normalized.match(/^@?\s*([+-]?\d+(?:\.\d{1,4})?)$/);
       if (!m) continue;
       const val = parseFloat(m[1]);
-      const parentText = text(leaf.node.parentElement || root);
-      const reason = x10ExcludeReason(val, leaf.text, `${parentText} ${context}`, stake);
+      const reason = x10ExcludeReason(
+        val,
+        leaf.text,
+        leaf.parentText,
+        `${leaf.grandparentText} ${contextBlob}`,
+        stake,
+      );
       candidates.push({
         value: val,
         text: leaf.text,
+        tag: leaf.tag,
+        className: leaf.className,
+        parentText: leaf.parentText,
+        source: "leaf",
         excluded: Boolean(reason),
         exclude_reason: reason || "",
         selected: false,
@@ -830,22 +997,24 @@
     }
 
     let odds = null;
-    for (let i = candidates.length - 1; i >= 0; i -= 1) {
-      if (!candidates[i].excluded) {
-        odds = candidates[i].value;
-        candidates[i].selected = true;
-        break;
-      }
+    const valid = candidates.filter((c) => !c.excluded && c.value >= X10_ODDS_MIN && c.value <= X10_ODDS_MAX);
+    const pick = valid.length ? valid[valid.length - 1] : null;
+    if (pick) {
+      odds = pick.value;
+      pick.selected = true;
     }
 
-    return { odds, candidates };
+    return { odds, candidates, source: pick?.source || "leaf" };
   }
 
   function readX10Slip() {
     const roots = findX10SlipRoots();
-    const selectorHits = scanX10DebugSelectors();
-    const slipInnerText = getX10SlipInnerText(roots);
-    if (!roots.length) {
+    const selectorHits = scanX10DiagnosticSelectors();
+    const root = pickBestX10Root(roots);
+    const slipInnerText = root ? text(root).slice(0, 1500) : getX10SlipInnerText(roots);
+
+    if (!root) {
+      resetX10SlipState();
       return {
         ok: false,
         empty: true,
@@ -853,141 +1022,34 @@
         reason: "no-slip-root",
         frame_url: location.href,
         slip_root_found: "NO",
+        root_found: "NO",
         slip_inner_text: slipInnerText,
         selector_hits: selectorHits,
+        extracted_odds: null,
+        revision: x10RootTracker.revision,
       };
     }
 
-    for (const root of roots) {
-      const rootText = text(root);
-      const stake = readX10Stake(root);
-      const { odds, candidates } = extractX10OddsFromRoot(root, stake);
-      const statusResult = resolveX10SlipStatus(root, rootText, odds);
-      const slipStatus = statusResult.status;
-      const usableOdds = slipStatus === "active" ? odds : null;
+    const revision = trackX10Root(root);
+    const rootText = text(root);
+    const stake = readX10Stake(root);
+    const { odds, candidates, source } = extractX10OddsFromRoot(root, stake);
+    const statusResult = resolveX10SlipStatus(root, rootText, odds);
+    let slipStatus = statusResult.status;
 
-      if (slipStatus !== "active") {
-        const parsed = parseX10SlipText(rootText);
-        return enrichSlipResult(
-          {
-            ok: true,
-            empty: false,
-            items: [
-              enrichItem(
-                {
-                  event: parsed.event,
-                  market: parsed.market,
-                  selection: parsed.selection,
-                  odds: usableOdds,
-                  previous_odds: statusResult.previous_odds ?? odds,
-                  status: slipStatus,
-                  status_reason: statusResult.reason,
-                  stake,
-                  container_selector: selectorHint(root),
-                  status_diagnostics: statusResult.diagnostics,
-                },
-                parsed.event,
-              ),
-            ],
-            source: "dom",
-            frame_url: location.href,
-            container_selector: selectorHint(root),
-            slip_root_found: "YES",
-            slip_inner_text: slipInnerText,
-            selector_hits: selectorHits,
-            odds_candidates: candidates,
-            extracted_odds: odds,
-            parsed_status: slipStatus,
-            status_reason: statusResult.reason,
-            status_diagnostics: statusResult.diagnostics,
-          },
-          root,
-        );
-      }
-
-      if (odds != null) {
-        const parsed = parseX10SlipText(rootText);
-        const item = enrichItem(
-          {
-            event: parsed.event,
-            market: parsed.market,
-            selection: parsed.selection,
-            odds,
-            status: "active",
-            status_reason: "active",
-            stake,
-            container_selector: selectorHint(root),
-            dom_hash: domHash(root),
-            status_diagnostics: statusResult.diagnostics,
-          },
-          parsed.event,
-        );
-        return enrichSlipResult(
-          {
-            ok: true,
-            empty: false,
-            items: [item],
-            source: "dom",
-            frame_url: location.href,
-            container_selector: selectorHint(root),
-            slip_root_found: "YES",
-            slip_inner_text: slipInnerText,
-            selector_hits: selectorHits,
-            odds_candidates: candidates,
-            extracted_odds: odds,
-            parsed_status: "active",
-            status_reason: "active",
-            status_diagnostics: statusResult.diagnostics,
-          },
-          root,
-        );
-      }
+    if (
+      odds != null &&
+      slipStatus !== "closed" &&
+      slipStatus !== "suspended" &&
+      slipStatus !== "disabled"
+    ) {
+      slipStatus = "active";
     }
 
-    const lastRoot = roots[0];
-    const lastStake = lastRoot ? readX10Stake(lastRoot) : null;
-    const lastProbe = lastRoot ? extractX10OddsFromRoot(lastRoot, lastStake) : { odds: null, candidates: [] };
-    const lastStatus = lastRoot
-      ? resolveX10SlipStatus(lastRoot, text(lastRoot), lastProbe.odds)
-      : { status: "odds_missing", reason: "odds-missing", diagnostics: {} };
+    const parsed = parseX10SlipText(rootText);
+    const closedLike = ["closed", "suspended", "disabled", "closed_pending"].includes(slipStatus);
 
-    if (lastStatus.status && lastStatus.status !== "active") {
-      return enrichSlipResult(
-        {
-          ok: true,
-          empty: false,
-          items: [
-            {
-              event: "",
-              market: "",
-              selection: "",
-              odds: null,
-              previous_odds: lastStatus.previous_odds ?? lastProbe.odds,
-              status: lastStatus.status,
-              status_reason: lastStatus.reason,
-              stake: lastStake,
-              container_selector: lastRoot ? selectorHint(lastRoot) : "",
-              status_diagnostics: lastStatus.diagnostics,
-            },
-          ],
-          source: "dom",
-          frame_url: location.href,
-          container_selector: lastRoot ? selectorHint(lastRoot) : "",
-          slip_root_found: "YES",
-          slip_inner_text: slipInnerText,
-          selector_hits: selectorHits,
-          odds_candidates: lastProbe.candidates,
-          extracted_odds: lastProbe.odds,
-          parsed_status: lastStatus.status,
-          status_reason: lastStatus.reason,
-          status_diagnostics: lastStatus.diagnostics,
-        },
-        lastRoot,
-      );
-    }
-
-    if (lastRoot && hasX10SlipContent(text(lastRoot), lastProbe.odds)) {
-      const parsed = parseX10SlipText(text(lastRoot));
+    if (closedLike) {
       return enrichSlipResult(
         {
           ok: true,
@@ -998,49 +1060,118 @@
                 event: parsed.event,
                 market: parsed.market,
                 selection: parsed.selection,
-                odds: lastProbe.odds,
-                status: lastProbe.odds != null ? "active" : "odds_missing",
-                status_reason: lastProbe.odds != null ? "active" : "root-found-no-odds",
-                stake: lastStake,
-                container_selector: selectorHint(lastRoot),
-                status_diagnostics: lastStatus.diagnostics || {},
+                odds: slipStatus === "active" ? odds : null,
+                previous_odds: statusResult.previous_odds ?? null,
+                status: slipStatus,
+                status_reason: statusResult.reason,
+                stake,
+                container_selector: selectorHint(root),
+                status_diagnostics: statusResult.diagnostics,
               },
               parsed.event,
             ),
           ],
           source: "dom",
           frame_url: location.href,
-          container_selector: selectorHint(lastRoot),
+          container_selector: selectorHint(root),
           slip_root_found: "YES",
+          root_found: "YES",
+          slip_count: 1,
           slip_inner_text: slipInnerText,
           selector_hits: selectorHits,
-          odds_candidates: lastProbe.candidates,
-          extracted_odds: lastProbe.odds,
-          parsed_status: lastProbe.odds != null ? "active" : "odds_missing",
-          status_reason: lastProbe.odds != null ? "active" : "root-found-no-odds",
+          odds_candidates: candidates,
+          odds_source: source,
+          extracted_odds: odds,
+          parsed_status: slipStatus,
+          status_reason: statusResult.reason,
+          status_diagnostics: statusResult.diagnostics,
+          revision,
         },
-        lastRoot,
+        root,
+      );
+    }
+
+    if (odds != null) {
+      const item = enrichItem(
+        {
+          event: parsed.event || "",
+          market: parsed.market || "",
+          selection: parsed.selection || "",
+          odds,
+          status: "active",
+          status_reason: "active",
+          stake,
+          container_selector: selectorHint(root),
+          dom_hash: domHash(root),
+          status_diagnostics: statusResult.diagnostics,
+        },
+        parsed.event,
+      );
+      return enrichSlipResult(
+        {
+          ok: true,
+          empty: false,
+          items: [item],
+          source: "dom",
+          frame_url: location.href,
+          container_selector: selectorHint(root),
+          slip_root_found: "YES",
+          root_found: "YES",
+          slip_count: 1,
+          slip_inner_text: slipInnerText,
+          selector_hits: selectorHits,
+          odds_candidates: candidates,
+          odds_source: source,
+          extracted_odds: odds,
+          parsed_status: "active",
+          status_reason: "active",
+          status_diagnostics: statusResult.diagnostics,
+          revision,
+        },
+        root,
       );
     }
 
     return enrichSlipResult(
       {
         ok: true,
-        empty: true,
-        items: [],
-        reason: "empty-slip",
+        empty: slipStatus === "empty",
+        items:
+          slipStatus === "empty"
+            ? []
+            : [
+                enrichItem(
+                  {
+                    event: parsed.event || "",
+                    market: parsed.market || "",
+                    selection: parsed.selection || "",
+                    odds: null,
+                    status: slipStatus || "odds_missing",
+                    status_reason: statusResult.reason || "odds-missing",
+                    stake,
+                    container_selector: selectorHint(root),
+                    status_diagnostics: statusResult.diagnostics,
+                  },
+                  parsed.event,
+                ),
+              ],
+        reason: slipStatus === "empty" ? "empty-slip" : "odds-missing",
         frame_url: location.href,
-        container_selector: lastRoot ? selectorHint(lastRoot) : "",
+        container_selector: selectorHint(root),
         slip_root_found: "YES",
+        root_found: "YES",
+        slip_count: 1,
         slip_inner_text: slipInnerText,
         selector_hits: selectorHits,
-        odds_candidates: lastProbe.candidates,
+        odds_candidates: candidates,
+        odds_source: source,
         extracted_odds: null,
-        parsed_status: lastStatus.status || "odds_missing",
-        status_reason: lastStatus.reason || "odds-missing",
-        status_diagnostics: lastStatus.diagnostics || {},
+        parsed_status: slipStatus || "odds_missing",
+        status_reason: statusResult.reason || "odds-missing",
+        status_diagnostics: statusResult.diagnostics,
+        revision,
       },
-      lastRoot,
+      root,
     );
   }
 
