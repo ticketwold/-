@@ -936,10 +936,14 @@
     if (stake != null && Math.abs(val - stake) < 0.001) return "stake";
     if (X10_CHIP_AMOUNTS.has(val)) return "stake";
     if (Number.isInteger(val) && val >= 1000) return "stake";
+    const lt = String(leafText || "").trim().replace(/,/g, "");
+    if (/^\+?[\d,]+$/.test(lt) && val >= 1000) return "stake";
     const blob = `${leafText} ${parentText} ${contextBlob}`;
     if (/당첨\s*예상|예상\s*금액|expected\s*payout|payout/i.test(blob)) return "payout";
     if (/잔액|balance/i.test(blob)) return "balance";
     if (/\+\s*[\d,]+/.test(leafText)) return "stake";
+    if (/^최대$/.test(leafText.trim())) return "stake";
+    if (/^₩$|^원$/.test(leafText.trim())) return "stake";
     if (/^\d{1,2}$/.test(leafText.trim())) return "score";
     if (isX10LineValue(val, leafText, parentText, contextBlob)) return "line";
     if (!/\./.test(leafText) && val < 10 && Number.isInteger(val)) return "inning";
@@ -996,11 +1000,40 @@
   }
 
   function isX10StandaloneOddsLine(rawText) {
-    const t = String(rawText || "").trim();
-    const m = t.match(/^@?\s*(\d{1,3}(?:\.\d{1,3})?)$/);
+    const t = String(rawText || "").trim().replace(/,/g, "");
+    const m = t.match(/^@?\s*(\d{1,2}\.\d{2})$/);
     if (!m) return false;
     const n = parseFloat(m[1]);
     return Number.isFinite(n) && n >= X10_ODDS_MIN && n <= X10_ODDS_MAX;
+  }
+
+  function isX10MoneyZoneLeaf(rawText) {
+    const t = String(rawText || "").trim();
+    if (t === "₩" || t === "원" || /^KRW$/i.test(t)) return true;
+    if (/^최대$/.test(t)) return true;
+    if (/^\+[\d,]+/.test(t)) return true;
+    if (/^[\d,]+\s*₩$/.test(t)) return true;
+    if (/당첨\s*예상/.test(t)) return true;
+    return false;
+  }
+
+  function extractX10LineNumbers(selectionText) {
+    const nums = new Set();
+    const t = String(selectionText || "");
+    for (const m of t.matchAll(/\(\s*([+-]?\d+(?:\.\d+)?)\s*\)/g)) {
+      const n = parseFloat(m[1]);
+      if (Number.isFinite(n)) nums.add(n);
+    }
+    const hc = t.match(/[+-]\s*(\d+(?:\.\d+)?)/);
+    if (hc) nums.add(parseFloat(hc[1]));
+    return nums;
+  }
+
+  function resolveX10OddsScope(root) {
+    const probe = global.ArbX10Probe;
+    const cards = probe?.findSlipCards?.(root) || [];
+    if (cards.length === 1) return cards[0];
+    return root;
   }
 
   function buildX10OddsPick(pick, candidates, extra) {
@@ -1016,95 +1049,50 @@
     };
   }
 
-  /** 우선순위 1: root 내부 selection → 다음 줄/오른쪽 배당 */
+  /** 우선순위 1: slip card 내부 selection → 다음 유효 leaf 배당 */
   function extractX10OddsFromSelection(root, stake, contextBlob) {
     if (!root) return { odds: null, candidates: [], source: "" };
 
+    const scope = resolveX10OddsScope(root);
+    const scopeBlob = text(scope);
     const candidates = [];
-    const leaves = collectX10LeafTexts(root);
+    const leaves = collectX10LeafTexts(scope);
+    let moneyZone = false;
 
     for (let li = 0; li < leaves.length; li += 1) {
       const leaf = leaves[li];
+      const lt = leaf.text.trim();
+
+      if (isX10MoneyZoneLeaf(lt)) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
+
       if (!isX10SelectionLineText(leaf.text)) continue;
 
       const selectionText = leaf.text.trim();
       const selectionNode = x10NodeDescriptor(leaf.node);
+      const lineNumbers = extractX10LineNumbers(selectionText);
 
-      const inlineAt = leaf.text.match(/@\s*(\d{1,3}(?:\.\d{1,3})?)\s*$/);
-      if (inlineAt) {
-        const val = parseFloat(inlineAt[1]);
-        const reason = x10ExcludeReason(val, inlineAt[1], leaf.parentText, contextBlob, stake);
-        const entry = {
-          value: val,
-          text: inlineAt[1],
-          tag: leaf.tag,
-          className: leaf.className,
-          parentText: leaf.parentText,
-          source: "selection",
-          excluded: Boolean(reason),
-          exclude_reason: reason || "",
-          selected: false,
-        };
-        candidates.push(entry);
-        if (!reason) {
-          entry.selected = true;
-          return buildX10OddsPick(entry, candidates, {
-            selection_text: selectionText,
-            selection_node: selectionNode,
-            odds_text: inlineAt[1],
-            odds_node: x10NodeDescriptor(leaf.node),
-            method: "selection_inline_at",
-          });
-        }
-      }
-
-      const tokens = leaf.text.match(/\b(\d{1,3}(?:\.\d{1,3})?)\b/g) || [];
-      for (let ti = tokens.length - 1; ti >= 0; ti -= 1) {
-        const token = tokens[ti];
-        if (isX10ParenLineValue(leaf.text, token)) continue;
-        const val = parseFloat(token);
-        const reason = x10ExcludeReason(val, token, leaf.parentText, contextBlob, stake);
-        const entry = {
-          value: val,
-          text: token,
-          tag: leaf.tag,
-          className: leaf.className,
-          parentText: leaf.parentText,
-          source: "selection",
-          excluded: Boolean(reason),
-          exclude_reason: reason || "",
-          selected: false,
-        };
-        candidates.push(entry);
-        if (!reason) {
-          entry.selected = true;
-          return buildX10OddsPick(entry, candidates, {
-            selection_text: selectionText,
-            selection_node: selectionNode,
-            odds_text: token,
-            odds_node: x10NodeDescriptor(leaf.node),
-            method: "selection_rightmost",
-          });
-        }
-      }
-
-      for (let fi = li + 1; fi < Math.min(li + 8, leaves.length); fi += 1) {
+      for (let fi = li + 1; fi < Math.min(li + 10, leaves.length); fi += 1) {
         const follow = leaves[fi];
-        const lt = follow.text.trim();
-        if (/배팅|수락|원|KRW|₩|합계|당첨/i.test(lt)) break;
-        if (isX10SelectionLineText(lt)) break;
-        if (!isX10StandaloneOddsLine(lt)) continue;
-        const val = parseFloat(lt.replace(/^@/, ""));
+        const followText = follow.text.trim();
+        if (isX10MoneyZoneLeaf(followText)) break;
+        if (isX10SelectionLineText(followText)) break;
+        if (!isX10StandaloneOddsLine(followText)) continue;
+        const val = parseFloat(followText.replace(/^@/, ""));
+        if (lineNumbers.has(val)) continue;
         const reason = x10ExcludeReason(
           val,
-          lt,
+          followText,
           follow.parentText,
-          `${follow.grandparentText} ${contextBlob}`,
+          `${follow.grandparentText} ${scopeBlob}`,
           stake,
         );
         const entry = {
           value: val,
-          text: lt,
+          text: followText,
           tag: follow.tag,
           className: follow.className,
           parentText: follow.parentText,
@@ -1119,23 +1107,32 @@
           return buildX10OddsPick(entry, candidates, {
             selection_text: selectionText,
             selection_node: selectionNode,
-            odds_text: lt,
+            odds_text: followText,
             odds_node: x10NodeDescriptor(follow.node),
-            method: "selection_following_line",
+            method: "selection_card_leaf",
+            line: [...lineNumbers][0] ?? null,
           });
         }
       }
     }
 
-    const lines = (root.innerText || "").replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+    moneyZone = false;
+    const lines = scopeBlob.replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
     for (let i = 0; i < lines.length - 1; i += 1) {
+      if (isX10MoneyZoneLeaf(lines[i])) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
       if (!isX10SelectionLineText(lines[i])) continue;
-      for (let j = i + 1; j < Math.min(i + 6, lines.length); j += 1) {
-        if (/배팅|수락|당첨/i.test(lines[j])) break;
+      const lineNumbers = extractX10LineNumbers(lines[i]);
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
+        if (isX10MoneyZoneLeaf(lines[j])) break;
         if (isX10SelectionLineText(lines[j])) break;
         if (!isX10StandaloneOddsLine(lines[j])) continue;
         const val = parseFloat(lines[j].replace(/^@/, ""));
-        const reason = x10ExcludeReason(val, lines[j], lines[i], contextBlob, stake);
+        if (lineNumbers.has(val)) continue;
+        const reason = x10ExcludeReason(val, lines[j], lines[i], scopeBlob, stake);
         const entry = {
           value: val,
           text: lines[j],
@@ -1156,6 +1153,7 @@
             odds_text: lines[j],
             odds_node: null,
             method: "selection_text_lines",
+            line: [...lineNumbers][0] ?? null,
           });
         }
       }
@@ -1205,10 +1203,11 @@
 
   function extractX10OddsFromRoot(root, stake) {
     const contextBlob = text(root);
+    const scope = resolveX10OddsScope(root);
     const fromSelection = extractX10OddsFromSelection(root, stake, contextBlob);
     if (fromSelection.odds != null) return fromSelection;
 
-    const dedicated = extractX10OddsFromDedicated(root, stake, contextBlob);
+    const dedicated = extractX10OddsFromDedicated(scope, stake, text(scope));
     if (dedicated.odds != null) {
       return {
         ...dedicated,
@@ -1221,9 +1220,15 @@
     }
 
     const candidates = [...fromSelection.candidates, ...dedicated.candidates];
-    for (const leaf of collectX10LeafTexts(root)) {
+    let moneyZone = false;
+    for (const leaf of collectX10LeafTexts(scope)) {
+      if (isX10MoneyZoneLeaf(leaf.text)) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
       const normalized = leaf.text.replace(/,/g, "");
-      const m = normalized.match(/^@?\s*([+-]?\d+(?:\.\d{1,4})?)$/);
+      const m = normalized.match(/^@?\s*(\d{1,2}\.\d{2})$/);
       if (!m) continue;
       const val = parseFloat(m[1]);
       const reason = x10ExcludeReason(
@@ -1313,7 +1318,8 @@
 
     const statusResult = resolveX10SlipStatus(root, rootText, odds);
     let slipStatus = pipeline.status === "active" ? "active" : statusResult.status;
-    if (odds != null && steps.X10_ODDS === "PASS" && steps.X10_ITEM === "PASS" && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
+    const itemOk = slipCount === 1;
+    if (odds != null && itemOk && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
       slipStatus = "active";
     }
 
@@ -1339,15 +1345,15 @@
       anchor_method: pipeline.anchorMethod || "text-anchor",
     };
 
-    if (slipStatus === "active" && odds != null && slipCount === 1) {
+    if ((slipStatus === "active" || pipeline.status === "active") && odds != null && itemOk) {
       const item = enrichItem(
         {
           event: parsed.event || "",
-          market: parsed.market || "",
-          selection: parsed.selection || "",
+          market: parsed.market || pipeline.selection_text || "",
+          selection: parsed.selection || pipeline.selection_text || "",
           odds,
           status: "active",
-          status_reason: "active",
+          status_reason: pipeline.item_warning ? `active:${pipeline.item_warning}` : "active",
           stake,
           container_selector: pipeline.rootSelector || selectorHint(root),
           dom_hash: domHash(root),

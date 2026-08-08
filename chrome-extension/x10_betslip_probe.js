@@ -219,62 +219,179 @@
     return false;
   }
 
+  function isBetSlipRootCandidate(blob) {
+    const t = String(blob || "");
+    const hasBetslip = /베팅\s*슬립|베팅슬립/.test(t);
+    const hasSingle = /\b싱글\b/.test(t);
+    const hasFooter = /당첨\s*예상\s*금액|배당\s*수락|배팅\s*수락/.test(t);
+    return hasBetslip && hasSingle && hasFooter;
+  }
+
+  function looksLikeMatchListPanel(blob) {
+    const t = String(blob || "");
+    const oddsHits = (t.match(/\b\d{1,2}\.\d{2}\b/g) || []).length;
+    const selectionHits = (t.match(/(오버|언더)\s*\(\s*\d+\.\d+\s*\)/gi) || []).length;
+    return oddsHits >= 5 && selectionHits >= 2;
+  }
+
+  function parseHeaderSlipCount(root) {
+    if (!root) return null;
+    const blob = (root.innerText || root.textContent || "").replace(/\r/g, "");
+    const m =
+      blob.match(/베팅\s*슬립[^\d]*(\d+)[^\n]*\n[^\n]*싱글/i) ||
+      blob.match(/베팅슬립[^\d]*(\d+)[^\n]*\n[^\n]*싱글/i);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function isStandaloneOddsLine(lineText) {
+    const t = String(lineText || "").trim().replace(/,/g, "");
+    const m = t.match(/^@?\s*(\d{1,2}\.\d{2})$/);
+    if (!m) return false;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= 1.01 && n <= 100;
+  }
+
+  function isMoneyZoneLine(lineText) {
+    const t = String(lineText || "").trim();
+    if (t === "₩" || t === "원" || /^KRW$/i.test(t)) return true;
+    if (/^최대$/.test(t)) return true;
+    if (/^\+[\d,]+/.test(t)) return true;
+    if (/^[\d,]+\s*₩$/.test(t)) return true;
+    if (/당첨\s*예상/.test(t)) return true;
+    return false;
+  }
+
+  function cardHasSelectionAndOdds(lines) {
+    const selIdx = lines.findIndex((l) => isSelectionLineText(l));
+    if (selIdx < 0) return false;
+    for (let j = selIdx + 1; j < Math.min(selIdx + 6, lines.length); j += 1) {
+      if (isMoneyZoneLine(lines[j])) break;
+      if (isSelectionLineText(lines[j])) break;
+      if (isStandaloneOddsLine(lines[j])) return true;
+    }
+    return false;
+  }
+
+  /** selection leaf → 가장 작은 slip card container */
+  function findCardForSelectionLeaf(leafEl, root) {
+    let node = leafEl;
+    let best = null;
+    for (let depth = 0; depth < 10 && node && isWithinRoot(root, node); depth += 1) {
+      const lines = (node.innerText || node.textContent || "")
+        .replace(/\r/g, "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (cardHasSelectionAndOdds(lines)) {
+        if (!best || lines.length <= (best.lines?.length || 9999)) {
+          best = { el: node, lines };
+        }
+      }
+      node = composedParent(node);
+    }
+    return best?.el || leafEl;
+  }
+
+  function findSlipCards(root) {
+    if (!root) return [];
+    const cardSet = new Set();
+    const selectionLeaves = [];
+
+    walkDeep(root, (el) => {
+      if (el.nodeType !== 1 || !isVisible(el)) return;
+      if (!isWithinRoot(root, el)) return;
+      const elementChildren = [...(el.children || [])].filter((ch) => ch.nodeType === 1);
+      if (elementChildren.length > 0) return;
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (isSelectionLineText(t)) selectionLeaves.push(el);
+    });
+
+    for (const leaf of selectionLeaves) {
+      const card = findCardForSelectionLeaf(leaf, root);
+      if (card && isWithinRoot(root, card)) cardSet.add(card);
+    }
+
+    const cards = [...cardSet].filter(
+      (el, _i, arr) => !arr.some((other) => other !== el && el.contains(other)),
+    );
+    return cards;
+  }
+
   function findTextAnchorRoot() {
-    const anchors = [];
+    const candidates = [];
+    const betslipAnchors = [];
+
     walkElements((el) => {
       if (!isVisible(el)) return;
-      const t = (el.innerText || "").replace(/\s+/g, " ").trim();
-      if (!ANCHOR_RE.test(t)) return;
-      if (t.length > 500) return;
-      anchors.push({ el, len: t.length });
+      const blob = el.innerText || el.textContent || "";
+      const compact = (el.innerText || "").replace(/\s+/g, " ").trim();
+      if (/베팅\s*슬립|베팅슬립/.test(compact) && compact.length <= 120) {
+        betslipAnchors.push(el);
+      }
+      if (!isBetSlipRootCandidate(blob)) return;
+      if (looksLikeMatchListPanel(blob)) return;
+      candidates.push({ el, len: blob.length });
     });
-    anchors.sort((a, b) => a.len - b.len);
 
-    for (const { el } of anchors) {
-      let node = el;
+    for (const anchor of betslipAnchors) {
+      let node = anchor;
       for (let depth = 0; depth < 14 && node; depth += 1) {
         const blob = node.innerText || node.textContent || "";
-        if (hasBetButton(node) && hasOddsPattern(blob)) {
-          return {
-            root: node,
-            anchor: el,
-            selector: buildStableSelector(node),
-            method: "text-anchor",
-          };
+        if (isBetSlipRootCandidate(blob) && !looksLikeMatchListPanel(blob)) {
+          candidates.push({ el: node, len: blob.length });
         }
         node = composedParent(node);
       }
     }
-    return null;
+
+    const seen = new Set();
+    const unique = [];
+    for (const c of candidates) {
+      if (seen.has(c.el)) continue;
+      seen.add(c.el);
+      unique.push(c);
+    }
+    unique.sort((a, b) => a.len - b.len);
+
+    const pick = unique[0];
+    if (!pick) return null;
+    return {
+      root: pick.el,
+      anchor: pick.el,
+      selector: buildStableSelector(pick.el),
+      method: "tight-betslip-container",
+    };
   }
 
   function countSlipItems(root) {
-    if (!root) return { count: 0, items: [] };
-    const candidates = [];
-    walkDeep(root, (el) => {
-      if (el === root || !isWithinRoot(root, el)) return;
-      if (!isVisible(el)) return;
-      const t = (el.innerText || el.textContent || "").trim();
-      if (t.length < 4 || t.length > 700) return;
-      const hasOdds = hasOddsPattern(t);
-      const hasSelection = isSelectionLineText(t);
-      if (!hasOdds && !hasSelection) return;
-      if (/^(베팅슬립|베팅 슬립|싱글|조합)\s*\d*$/i.test(t.replace(/\s+/g, " "))) return;
-      const childWithSignal = [...(el.children || [])].filter((c) => {
-        const ct = c.innerText || c.textContent || "";
-        return hasOddsPattern(ct) || isSelectionLineText(ct);
-      }).length;
-      if (childWithSignal > 1) return;
-      candidates.push(el);
-    });
-    const minimal = candidates.filter(
-      (el, i) => !candidates.some((other, j) => i !== j && el !== other && el.contains(other)),
-    );
+    if (!root) return { count: 0, items: [], header_count: null, warning: "", effective_count: 0 };
+    const cards = findSlipCards(root);
+    const headerCount = parseHeaderSlipCount(root);
+    let warning = "";
+    let effectiveCount = cards.length;
+
+    if (headerCount != null && headerCount !== cards.length) {
+      warning = "item-count-mismatch";
+      if (headerCount === 1 && cards.length > 1) {
+        effectiveCount = 1;
+      }
+    }
+
+    if (headerCount === 1 && cards.length === 0) {
+      effectiveCount = 1;
+    }
+
     return {
-      count: minimal.length,
-      items: minimal.map((el) => ({
+      count: effectiveCount,
+      effective_count: effectiveCount,
+      raw_count: cards.length,
+      header_count: headerCount,
+      warning,
+      items: cards.map((el) => ({
         selector: buildStableSelector(el),
-        innerText: (el.innerText || "").slice(0, 400),
+        innerText: (el.innerText || el.textContent || "").slice(0, 400),
         tagName: el.tagName,
       })),
     };
@@ -422,14 +539,16 @@
     } catch (_logErr) {}
     const root = anchorResult.root;
     const slipItems = countSlipItems(root);
-    if (slipItems.count === 1) {
+    const effectiveCount = slipItems.effective_count ?? slipItems.count;
+    if (effectiveCount === 1) {
       steps.X10_ITEM = "PASS";
       try {
         console.log("[arb] X10 ITEM FOUND");
       } catch (_logErr) {}
     } else {
       steps.X10_ITEM = "FAIL";
-      steps.first_failure = `X10_ITEM / slip_count=${slipItems.count} (expected 1)`;
+      steps.first_failure = `X10_ITEM / slip_count=${effectiveCount} (expected 1)`;
+      if (slipItems.warning) steps.item_warning = slipItems.warning;
     }
 
     let odds = null;
@@ -464,7 +583,21 @@
     }
 
     let status = "odds_missing";
-    if (
+    const canActivate =
+      steps.X10_ROOT === "PASS" &&
+      effectiveCount === 1 &&
+      odds != null &&
+      !["closed", "suspended", "disabled", "closed_pending"].includes(
+        String(statusResultFromRoot(root, odds) || "").toLowerCase(),
+      );
+
+    if (canActivate) {
+      steps.X10_ITEM = "PASS";
+      steps.X10_ODDS = "PASS";
+      steps.X10_STATUS = "ACTIVE";
+      status = "active";
+      steps.first_failure = slipItems.warning ? `warning:${slipItems.warning}` : "";
+    } else if (
       steps.X10_FRAME === "PASS" &&
       steps.X10_ROOT === "PASS" &&
       steps.X10_ITEM === "PASS" &&
@@ -476,13 +609,24 @@
       status = "odds_missing";
     }
 
+    function statusResultFromRoot(slipRoot, extractedOdds) {
+      const blob = slipRoot?.innerText || "";
+      if (/betting\s*closed|마감|배팅\s*닫/i.test(blob)) return "closed";
+      if (/suspended|일시\s*정지/i.test(blob)) return "suspended";
+      if (extractedOdds == null) return "odds_missing";
+      return "active";
+    }
+
     return {
       steps,
       frame,
       root,
       rootSelector: anchorResult.selector,
       anchorMethod: anchorResult.method,
-      slip_count: slipItems.count,
+      slip_count: effectiveCount,
+      slip_count_raw: slipItems.raw_count ?? effectiveCount,
+      header_count: slipItems.header_count,
+      item_warning: slipItems.warning || "",
       slip_items: slipItems.items,
       odds,
       odds_candidates,
@@ -503,12 +647,17 @@
     probeAnchorKeywords,
     findKeywordCandidates,
     findTextAnchorRoot,
+    findSlipCards,
+    parseHeaderSlipCount,
     buildStableSelector,
     countSlipItems,
     captureDomReport,
     buildDebugHtml,
     runPipeline,
     walkDeep,
+    isSelectionLineText,
+    isStandaloneOddsLine,
+    isMoneyZoneLine,
     KEYWORDS,
     BETSLIP_ANCHOR_CHECKS,
   };
