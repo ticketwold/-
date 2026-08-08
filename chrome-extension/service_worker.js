@@ -1,5 +1,5 @@
 import { loadSettings, saveSettings } from "./storage.js";
-import { fxSnapshot, isFxUsable, resolveFxRate, startFxPolling } from "./fx_bithumb.js";
+import { fxSnapshot, isFxUsable, resolveFxRate, startFxPolling, refreshFx } from "./fx_bithumb.js";
 import { computeOddsOnlyMetrics, oddsInRange } from "./profit_engine.js";
 import {
   bothSitesActive,
@@ -42,8 +42,49 @@ function createRuntimeState() {
     stake_sync_message: "",
     metrics: null,
     last_dispatch_at: 0,
+    last_dispatch_error: null,
+    dispatch_steps: [],
+    _watchFx: null,
+    _lastStakeSyncAt: 0,
     settings: null,
   };
+}
+
+let stakeSyncDebounce = null;
+let stakeSyncInFlight = false;
+
+function scheduleSyncBcStake(force = false) {
+  if (!runtime?.settings?.stake_sync_enabled && !force) {
+    return Promise.resolve({ ok: true, skipped: true });
+  }
+  if (force) {
+    if (stakeSyncDebounce) {
+      clearTimeout(stakeSyncDebounce);
+      stakeSyncDebounce = null;
+    }
+    return syncBcStake(true).then((result) => {
+      runtime._lastStakeSyncAt = Date.now();
+      return result;
+    });
+  }
+  return new Promise((resolve) => {
+    if (stakeSyncDebounce) clearTimeout(stakeSyncDebounce);
+    stakeSyncDebounce = setTimeout(async () => {
+      stakeSyncDebounce = null;
+      if (stakeSyncInFlight) {
+        resolve({ ok: true, skipped: true });
+        return;
+      }
+      stakeSyncInFlight = true;
+      try {
+        const result = await syncBcStake(false);
+        runtime._lastStakeSyncAt = Date.now();
+        resolve(result);
+      } finally {
+        stakeSyncInFlight = false;
+      }
+    }, 75);
+  });
 }
 
 async function broadcast() {
@@ -98,6 +139,10 @@ function buildUiState() {
       message: runtime.stake_sync_message,
       target: runtime.last_stake_target,
       actual: runtime.last_stake_actual,
+    },
+    dispatch: {
+      error: runtime.last_dispatch_error,
+      steps: runtime.dispatch_steps || [],
     },
     logs: getLogs(),
   };
@@ -210,7 +255,7 @@ async function syncBcStake(force = false) {
   logStakeStep("CALCULATE", true, "ok", { target });
 
   if (!force && runtime.last_stake_target != null && Math.abs(runtime.last_stake_target - target) < 0.05) {
-    if (runtime.last_stake_actual != null && Math.abs(runtime.last_stake_actual - target) <= 0.15) {
+    if (runtime.last_stake_actual != null && Math.abs(runtime.last_stake_actual - target) <= 0.01) {
       runtime.stake_sync_state = "OK";
       runtime.stake_sync_message = "동기화 완료";
       logStakeStep("ACK", true, "unchanged");
@@ -223,7 +268,7 @@ async function syncBcStake(force = false) {
   logStakeStep("SEND", !!write?.ok, write?.reason || write?.error || "sent");
   logStakeStep("INPUT_FOUND", !!(write?.selector || write?.ok), write?.reason || "");
   logStakeStep("WRITE", write?.actual != null, write?.reason || "", { actual: write?.actual });
-  const verified = write?.actual != null && Math.abs(write.actual - target) <= 0.15;
+  const verified = write?.actual != null && Math.abs(write.actual - target) <= 0.01;
   logStakeStep("VERIFY", verified, verified ? "ok" : "value-not-applied", { target, actual: write?.actual });
 
   if (!write?.ok || !verified) {
@@ -342,33 +387,58 @@ async function executeBetAllFrames(site) {
 
 async function dispatchParallel({ manual = false } = {}) {
   const settings = runtime.settings;
+  runtime.dispatch_steps = [];
+  runtime.last_dispatch_error = null;
+  const addStep = (label) => {
+    runtime.dispatch_steps.push(label);
+    broadcast().catch?.(() => {});
+  };
+
   resetExecutionFlow("BET");
   logBetStep("EXECUTION_START", true, manual ? "manual" : "auto");
+  addStep(manual ? "수동배팅 준비" : "자동배팅 준비");
 
   if (!isFxUsable(settings.fx_max_stale_seconds) && settings.live_execution_enabled) {
+    runtime.last_dispatch_error = { reason: "fx-stale", detail: "fx-stale" };
     logBetStep("RESULT", false, "fx-stale");
-    return { ok: false, reason: "fx-stale" };
+    return { ok: false, reason: "fx-stale", detail: "fx-stale" };
   }
 
   const sites = getAllSiteState();
   if (!bothSitesActive()) {
+    runtime.last_dispatch_error = { reason: "site-not-active", detail: "site-not-active" };
     logBetStep("RESULT", false, "site-not-active");
-    return { ok: false, reason: "site-not-active" };
+    return { ok: false, reason: "site-not-active", detail: "site-not-active" };
   }
 
   const sync = await syncBcStake(true);
   if (settings.stake_sync_enabled && !sync.ok) {
+    const detail = sync.reason || "stake-sync-failed";
+    runtime.last_dispatch_error = { reason: "bc-stake-sync-failed", detail };
+    logBetStep("BC_STAKE_SYNC", false, detail);
     logBetStep("RESULT", false, "bc-stake-sync-failed");
-    return { ok: false, reason: "bc-stake-sync-failed" };
+    addStep(`BC 금액 동기화 실패 (${detail})`);
+    await broadcast();
+    return { ok: false, reason: "bc-stake-sync-failed", detail };
+  }
+  if (settings.stake_sync_enabled) {
+    logBetStep("BC_STAKE_SYNC", true, "ok");
+    addStep("BC 금액 동기화 완료");
   }
 
   const x10Btn = await sendToSiteFrame("x10", { type: "SCAN_BET_BUTTON", site: "x10" });
   const bcBtn = await sendToSiteFrame("bc", { type: "SCAN_BET_BUTTON", site: "bc" });
   logBetStep("X10_BUTTON", !!x10Btn?.ok, x10Btn?.reason || "");
   logBetStep("BC_BUTTON", !!bcBtn?.ok, bcBtn?.reason || "");
+  if (x10Btn?.ok) addStep("X10 버튼 확인");
+  if (bcBtn?.ok) addStep("BC 버튼 확인");
   if (!x10Btn?.ok || !bcBtn?.ok) {
+    const detail = !x10Btn?.ok ? x10Btn?.reason || "x10-button-not-found" : bcBtn?.reason || "bc-button-not-found";
+    runtime.last_dispatch_error = { reason: "button-not-found", detail };
     logBetStep("RESULT", false, "button-not-found");
-    return { ok: false, reason: "button-not-found" };
+    addStep(`버튼 확인 실패 (${detail})`);
+    await broadcast();
+    return { ok: false, reason: "button-not-found", detail };
   }
 
   const metrics = runtime.metrics;
@@ -378,6 +448,7 @@ async function dispatchParallel({ manual = false } = {}) {
     return { ok: false, reason: "target-lost" };
   }
   logBetStep("FINAL_RECHECK", true, "ok");
+  addStep("양쪽 병렬 전송 준비");
 
   if (!settings.live_execution_enabled) {
     logBetStep("DISPATCH", true, "dry-run");
@@ -406,8 +477,14 @@ async function dispatchParallel({ manual = false } = {}) {
   logBetStep("RESULT", outcome === "BOTH_SUCCESS", outcome, { gap_ms: Date.now() - started });
   runtime.last_dispatch_at = Date.now();
   runtime.dispatch_armed = false;
+  if (outcome !== "BOTH_SUCCESS") {
+    runtime.last_dispatch_error = { reason: outcome, detail: outcome };
+  } else {
+    runtime.last_dispatch_error = null;
+    addStep("양쪽 병렬 전송 완료");
+  }
   await broadcast();
-  return { ok: outcome === "BOTH_SUCCESS", outcome, partial };
+  return { ok: outcome === "BOTH_SUCCESS", outcome, partial, steps: runtime.dispatch_steps };
 }
 
 async function handleSlipUpdate(message, sender) {
@@ -425,7 +502,7 @@ async function handleSlipUpdate(message, sender) {
       logOdds(site, prev, next, { revision: ingested.bucket.revision });
     }
     if (runtime.settings?.stake_sync_enabled) {
-      syncBcStake(false).then(() => broadcast());
+      scheduleSyncBcStake(false).then(() => broadcast());
     }
   }
   tickWatch();
@@ -449,10 +526,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       case "stake_input_changed":
-        if (runtime.settings?.stake_sync_enabled) {
-          await syncBcStake(true);
-          await broadcast();
-        }
+        scheduleSyncBcStake(true).then(() => broadcast());
         sendResponse({ ok: true });
         break;
       case "get_state":
@@ -460,7 +534,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       case "save_settings": {
         runtime.settings = await saveSettings(message.settings || {});
-        if (runtime.settings.stake_sync_enabled) await syncBcStake(true);
+        if (runtime.settings.stake_sync_enabled) await scheduleSyncBcStake(true);
         sendResponse({ ok: true, settings: runtime.settings });
         await broadcast();
         break;
@@ -727,7 +801,23 @@ async function init() {
   setInterval(async () => {
     await refreshTabs();
     tickWatch();
-    if (runtime.settings?.stake_sync_enabled) await syncBcStake(false);
+    const prevFx = runtime._watchFx;
+    await refreshFx();
+    if (
+      runtime.settings?.stake_sync_enabled &&
+      prevFx != null &&
+      fxSnapshot.rate != null &&
+      Math.abs(fxSnapshot.rate - prevFx) > 0.01
+    ) {
+      await scheduleSyncBcStake(false);
+    }
+    runtime._watchFx = fxSnapshot.rate;
+    if (
+      runtime.settings?.stake_sync_enabled &&
+      Date.now() - (runtime._lastStakeSyncAt || 0) > 5000
+    ) {
+      await scheduleSyncBcStake(false);
+    }
     await broadcast();
   }, 1500);
   await broadcast();

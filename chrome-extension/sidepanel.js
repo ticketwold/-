@@ -77,6 +77,21 @@ function render(state) {
     $("alert").classList.add("hidden");
   }
 
+  const dispatch = state.dispatch || {};
+  const dispatchPanel = $("dispatchPanel");
+  const dispatchStatus = $("dispatchStatus");
+  if (dispatch.error?.reason) {
+    const detail = dispatch.error.detail ? ` (${dispatch.error.detail})` : "";
+    dispatchStatus.textContent = `배팅 실패: ${dispatch.error.reason}${detail}`;
+    dispatchPanel.className = "dispatch-panel fail";
+  } else if ((dispatch.steps || []).length) {
+    dispatchStatus.textContent = dispatch.steps.join("\n");
+    dispatchPanel.className = "dispatch-panel pass";
+  } else {
+    dispatchStatus.textContent = "—";
+    dispatchPanel.className = "dispatch-panel";
+  }
+
   renderLogs(state);
 }
 
@@ -127,7 +142,19 @@ $("btnStopWatch").addEventListener("click", async () => {
 });
 
 $("btnManualBet").addEventListener("click", async () => {
+  $("dispatchStatus").textContent = "수동배팅 준비...";
+  $("dispatchPanel").className = "dispatch-panel";
   const result = await send("manual_dispatch");
+  if (!result?.ok) {
+    const detail = result?.detail ? ` (${result.detail})` : "";
+    $("dispatchStatus").textContent = `배팅 실패: ${result?.reason || "unknown"}${detail}`;
+    $("dispatchPanel").className = "dispatch-panel fail";
+    $("alert").textContent = `배팅 실패: ${result?.reason || "unknown"}${detail}`;
+    $("alert").classList.remove("hidden");
+  } else if (Array.isArray(result?.steps) && result.steps.length) {
+    $("dispatchStatus").textContent = result.steps.join("\n");
+    $("dispatchPanel").className = "dispatch-panel pass";
+  }
   $("debugResult").textContent = JSON.stringify(result, null, 2);
 });
 
