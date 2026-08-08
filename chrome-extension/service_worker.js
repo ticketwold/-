@@ -7,6 +7,7 @@ import {
   ingestSlipUpdate,
   setTabFound,
   siteLabel,
+  x10FrameScanPriority,
 } from "./odds_engine.js";
 import {
   exportCsv,
@@ -501,38 +502,144 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function probeAllX10Frames() {
+  return rescanX10AllFrames({ probeOnly: true });
+}
+
+function formatX10FrameDebugLine(entry) {
+  const lines = [
+    `FRAME ${entry.frame_id}`,
+    `url=${entry.frame_url || ""}`,
+    `root_found=${entry.root_found === true || entry.root_found === "YES"}`,
+  ];
+  if (entry.slip_count != null) lines.push(`slip_count=${entry.slip_count}`);
+  if (entry.odds != null) lines.push(`odds=${entry.odds}`);
+  if (entry.status) lines.push(`status=${entry.status}`);
+  if (entry.priority != null) lines.push(`priority=${entry.priority}`);
+  if (entry.error) lines.push(`error=${entry.error}`);
+  return lines.join("\n");
+}
+
+function pickBestX10FrameResult(results) {
+  let best = null;
+  for (const entry of results) {
+    if (entry.error) continue;
+    const p = Number(entry.priority || 0);
+    if (!best || p > best.priority || (p === best.priority && entry.frame_id > best.frame_id)) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+async function rescanX10AllFrames({ probeOnly = false } = {}) {
   const { x10Tab } = await refreshTabs();
-  if (!x10Tab?.id) return { frames: [], target: null };
+  if (!x10Tab?.id) {
+    return {
+      ok: false,
+      reason: "x10-tab-not-found",
+      frames_total: 0,
+      frames_scanned: 0,
+      frames: [],
+    };
+  }
+
   const tabId = x10Tab.id;
   const frames = await chrome.webNavigation.getAllFrames({ tabId });
   const results = [];
-  let target = null;
+  const messageType = probeOnly ? "x10_probe" : "RESCAN_X10";
+
   for (const frame of frames) {
-    const base = { frameId: frame.frameId, url: frame.url };
+    const base = { frame_id: frame.frameId, frame_url: frame.url };
     try {
-      const resp = await chrome.tabs.sendMessage(tabId, { type: "x10_probe" }, { frameId: frame.frameId });
+      const resp = await chrome.tabs.sendMessage(
+        tabId,
+        { type: messageType, frame_id: frame.frameId },
+        { frameId: frame.frameId },
+      );
+      const rootFound = resp?.root_found === true || resp?.root_found === "YES" || resp?.slip_root_found === "YES";
+      const slipCount = resp?.slip_count ?? 0;
+      const odds = resp?.extracted_odds ?? resp?.odds ?? resp?.items?.[0]?.odds ?? null;
+      const status = String(resp?.status || resp?.parsed_status || "empty").toUpperCase();
+      const bodyHasKeywords = !!(resp?.body_has_keywords ?? resp?.has_betslip_keyword ?? resp?.hasBetSlipKeyword);
       const entry = {
-        ...base,
-        readyState: resp?.readyState || resp?.document_ready,
-        bodyLength: resp?.bodyLength ?? resp?.body_text_length,
-        hasBetSlipKeyword: !!(resp?.hasBetSlipKeyword ?? resp?.has_betslip_keyword),
+        frame_id: frame.frameId,
+        frame_url: frame.url,
+        frame_depth: resp?.frame_depth ?? null,
+        root_found: rootFound,
+        slip_count: slipCount,
+        odds,
+        status,
+        body_has_keywords: bodyHasKeywords,
+        priority: x10FrameScanPriority({
+          root_found: rootFound,
+          slip_count: slipCount,
+          odds,
+          status,
+          body_has_keywords: bodyHasKeywords,
+        }),
         pipeline_steps: resp?.pipeline_steps || {},
-        root_found: resp?.root_found,
-        slip_count: resp?.slip_count,
-        extracted_odds: resp?.extracted_odds,
-        first_failure: resp?.first_failure,
+        first_failure: resp?.first_failure || "",
+        anchor_hits: resp?.anchor_hits || {},
       };
       results.push(entry);
-      if (entry.pipeline_steps?.X10_ROOT === "PASS") {
-        target = { frameId: frame.frameId, url: frame.url };
-      } else if (!target && entry.hasBetSlipKeyword) {
-        target = { frameId: frame.frameId, url: frame.url };
+
+      if (!probeOnly && resp?.slip) {
+        await handleSlipUpdate(
+          {
+            type: "slip_update",
+            site: "x10",
+            result: resp.slip,
+            frame_url: frame.url,
+            frame_depth: resp.frame_depth,
+          },
+          { tab: { id: tabId }, frameId: frame.frameId },
+        );
       }
     } catch (_err) {
-      results.push({ ...base, error: "no-content-script" });
+      results.push({
+        ...base,
+        frame_depth: null,
+        root_found: false,
+        slip_count: 0,
+        odds: null,
+        status: "NO_SCRIPT",
+        body_has_keywords: false,
+        priority: 0,
+        error: "no-content-script",
+      });
     }
   }
-  return { frames: results, target };
+
+  const keywordFrame = results.find((r) => r.body_has_keywords && !r.error);
+  const rootFrame = results.find((r) => r.root_found && !r.error);
+  const selected = pickBestX10FrameResult(results);
+  const pass = !!(selected?.root_found && selected?.slip_count === 1 && selected?.odds != null);
+  const frameDebug = results.map(formatX10FrameDebugLine).join("\n\n");
+
+  await broadcast();
+
+  return {
+    ok: pass,
+    root_found: !!selected?.root_found,
+    slip_count: selected?.slip_count ?? 0,
+    odds: selected?.odds ?? null,
+    status: selected?.status || "EMPTY",
+    frames_total: frames.length,
+    frames_scanned: results.length,
+    keyword_frame_id: keywordFrame?.frame_id ?? null,
+    betslip_root_frame_id: rootFrame?.frame_id ?? null,
+    selected_frame_id: selected?.frame_id ?? null,
+    frame_summary: {
+      "X10 frames total": frames.length,
+      "frames scanned": results.length,
+      "keyword frame": keywordFrame?.frame_id ?? null,
+      "BetSlip root frame": rootFrame?.frame_id ?? null,
+      "selected frame": selected?.frame_id ?? null,
+    },
+    frame_debug: frameDebug,
+    frames: results,
+    target: selected ? { frameId: selected.frame_id, url: selected.frame_url } : null,
+  };
 }
 
 function buildCombinedCaptureHtml(parts) {
@@ -584,7 +691,7 @@ async function runDebugAction(action) {
   const settings = runtime.settings;
   switch (action) {
     case "rescan_x10":
-      return sendToSiteFrame("x10", { type: "scan_slip", site: "x10" });
+      return rescanX10AllFrames({ probeOnly: false });
     case "rescan_bc":
       return sendToSiteFrame("bc", { type: "scan_slip", site: "bc" });
     case "find_bc_stake":

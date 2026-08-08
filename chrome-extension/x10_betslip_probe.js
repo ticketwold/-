@@ -3,17 +3,82 @@
  * No guessed betslip selectors; discovers root from live DOM keywords.
  */
 (function initX10Probe(global) {
-  const KEYWORDS = ["베팅슬립", "베팅 슬립", "싱글", "조합", "베팅하기", "당첨 예상금액", "배당"];
-  const ANCHOR_RE = /베팅\s*슬립|베팅슬립|베팅하기/;
+  const KEYWORDS = ["베팅슬립", "베팅 슬립", "싱글", "조합", "베팅하기", "당첨 예상금액", "배당", "배당 수락", "배팅 수락"];
+  const ANCHOR_RE = /베팅\s*슬립|베팅슬립|베팅하기|배당\s*수락|배팅\s*수락/;
+  const BETSLIP_ANCHOR_CHECKS = [
+    { key: "베팅슬립", test: (t) => /베팅\s*슬립|베팅슬립/.test(t) },
+    { key: "싱글", test: (t) => /\b싱글\b/.test(t) },
+    { key: "selection", test: (t) => /(오버|언더|Over|Under)\s*\(\s*\d+\.\d+\s*\)/i.test(t) },
+    { key: "odds", test: (t) => /\b\d{1,2}\.\d{2}\b/.test(t) },
+    { key: "bet_accept", test: (t) => /배당\s*수락|배팅\s*수락/i.test(t) },
+  ];
   const HASH_CLASS_RE = /^[a-z]{1,3}[A-Z][a-zA-Z0-9_-]{4,}$|^[a-z]{2,4}-[a-f0-9]{5,}$/i;
   const MAX_HTML_BYTES = 30_000;
 
   function bodyInner() {
     try {
-      return document.body?.innerText || document.body?.textContent || "";
+      const root = document.body || document.documentElement;
+      if (!root) return "";
+      return deepInnerText(root);
     } catch (_err) {
       return "";
     }
+  }
+
+  function composedParent(el) {
+    if (!el) return null;
+    if (el.parentElement) return el.parentElement;
+    const parent = el.parentNode;
+    if (parent && parent.nodeType === 11 && parent.host) return parent.host;
+    return parent;
+  }
+
+  function isWithinRoot(root, el) {
+    if (!root || !el) return false;
+    let node = el;
+    while (node) {
+      if (node === root) return true;
+      node = composedParent(node);
+    }
+    return false;
+  }
+
+  /** document → element.shadowRoot → nested shadowRoot 재귀 탐색 */
+  function walkDeep(start, fn) {
+    if (!start) return;
+    const stack = [start];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current) continue;
+      if (current.nodeType === 1) {
+        fn(current);
+        const children = current.children || [];
+        for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i]);
+        if (current.shadowRoot) stack.push(current.shadowRoot);
+      } else if (current.nodeType === 11) {
+        const children = current.children || [];
+        for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i]);
+      }
+    }
+  }
+
+  function deepInnerText(root) {
+    const parts = [];
+    walkDeep(root, (el) => {
+      if (el.nodeType !== 1) return;
+      const hasElementChild = [...(el.children || [])].some((ch) => ch.nodeType === 1);
+      const hasShadowChild = el.shadowRoot && el.shadowRoot.children?.length > 0;
+      if (hasElementChild || hasShadowChild) return;
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (t) parts.push(t);
+    });
+    return parts.join("\n");
+  }
+
+  function walkElements(fn) {
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    walkDeep(root, fn);
   }
 
   function isVisible(el) {
@@ -27,27 +92,37 @@
     return true;
   }
 
-  function walkElements(fn) {
-    const root = document.body || document.documentElement;
-    if (!root) return;
-    const stack = [root];
-    while (stack.length) {
-      const el = stack.pop();
-      if (!el || el.nodeType !== 1) continue;
-      fn(el);
-      for (const ch of el.children || []) stack.push(ch);
-    }
-  }
-
   function probeFrame() {
     const bodyText = bodyInner();
+    const anchors = probeAnchorKeywords();
     return {
       frame_url: location.href,
       readyState: document.readyState || "unknown",
       bodyLength: bodyText.length,
-      hasBetSlipKeyword: KEYWORDS.some((k) => bodyText.includes(k)),
+      hasBetSlipKeyword: KEYWORDS.some((k) => bodyText.includes(k)) || anchors.has_any,
+      body_has_keywords: anchors.has_any,
+      anchor_hits: anchors.hits,
       bodySnippet: bodyText.slice(0, 1200),
     };
+  }
+
+  function probeAnchorKeywords() {
+    const hits = {};
+    walkElements((el) => {
+      if (!isVisible(el)) return;
+      const inner = (el.innerText || el.textContent || "").trim();
+      if (!inner || inner.length > 2500) return;
+      for (const check of BETSLIP_ANCHOR_CHECKS) {
+        if (hits[check.key]) continue;
+        if (check.test(inner)) {
+          hits[check.key] = {
+            selector: buildStableSelector(el),
+            text: inner.slice(0, 200),
+          };
+        }
+      }
+    });
+    return { hits, has_any: Object.keys(hits).length > 0 };
   }
 
   function findKeywordCandidates() {
@@ -115,18 +190,17 @@
   }
 
   function hasBetButton(root) {
-    let nodes = [];
-    try {
-      nodes = [...root.querySelectorAll("button, [role='button'], input[type='submit']")];
-    } catch (_err) {
-      return false;
-    }
-    for (const b of nodes) {
-      if (!isVisible(b)) continue;
-      const t = (b.innerText || b.textContent || "").toLowerCase();
-      if (/베팅하기|배팅하기|place\s*bet|베팅|배팅/.test(t)) return true;
-    }
-    return false;
+    let found = false;
+    walkDeep(root, (el) => {
+      if (found || el.nodeType !== 1) return;
+      const tag = (el.tagName || "").toLowerCase();
+      if (tag !== "button" && el.getAttribute?.("role") !== "button" && tag !== "input") return;
+      if (tag === "input" && el.getAttribute?.("type") !== "submit") return;
+      if (!isVisible(el)) return;
+      const t = (el.innerText || el.textContent || "").toLowerCase();
+      if (/베팅하기|배팅하기|배당\s*수락|배팅\s*수락|place\s*bet|베팅|배팅/.test(t)) found = true;
+    });
+    return found;
   }
 
   function hasOddsPattern(textBlob) {
@@ -159,7 +233,7 @@
     for (const { el } of anchors) {
       let node = el;
       for (let depth = 0; depth < 14 && node; depth += 1) {
-        const blob = node.innerText || "";
+        const blob = node.innerText || node.textContent || "";
         if (hasBetButton(node) && hasOddsPattern(blob)) {
           return {
             root: node,
@@ -168,7 +242,7 @@
             method: "text-anchor",
           };
         }
-        node = node.parentElement;
+        node = composedParent(node);
       }
     }
     return null;
@@ -177,17 +251,17 @@
   function countSlipItems(root) {
     if (!root) return { count: 0, items: [] };
     const candidates = [];
-    walkElements((el) => {
-      if (el === root || !root.contains(el)) return;
+    walkDeep(root, (el) => {
+      if (el === root || !isWithinRoot(root, el)) return;
       if (!isVisible(el)) return;
-      const t = (el.innerText || "").trim();
+      const t = (el.innerText || el.textContent || "").trim();
       if (t.length < 4 || t.length > 700) return;
       const hasOdds = hasOddsPattern(t);
       const hasSelection = isSelectionLineText(t);
       if (!hasOdds && !hasSelection) return;
       if (/^(베팅슬립|베팅 슬립|싱글|조합)\s*\d*$/i.test(t.replace(/\s+/g, " "))) return;
-      const childWithSignal = [...el.children].filter((c) => {
-        const ct = c.innerText || "";
+      const childWithSignal = [...(el.children || [])].filter((c) => {
+        const ct = c.innerText || c.textContent || "";
         return hasOddsPattern(ct) || isSelectionLineText(ct);
       }).length;
       if (childWithSignal > 1) return;
@@ -426,6 +500,7 @@
 
   global.ArbX10Probe = {
     probeFrame,
+    probeAnchorKeywords,
     findKeywordCandidates,
     findTextAnchorRoot,
     buildStableSelector,
@@ -433,6 +508,8 @@
     captureDomReport,
     buildDebugHtml,
     runPipeline,
+    walkDeep,
     KEYWORDS,
+    BETSLIP_ANCHOR_CHECKS,
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);
