@@ -15,9 +15,11 @@ jobs:
 
       - name: Package extension zip
         run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#arb-extension-v}"
           cd chrome-extension
-          zip -r ../arb-extension-v2.0.0.zip . -x "*.DS_Store" "test_*" "stake_actions.js"
-          ls -lh ../arb-extension-v2.0.0.zip
+          zip -r "../arb-extension-v${VER}.zip" . -x "*.DS_Store" "test_*" "stake_actions.js"
+          ls -lh "../arb-extension-v${VER}.zip"
 
       - name: Upload to GitHub Release
         env:
@@ -25,6 +27,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VER="${TAG#arb-extension-v}"
-          gh release create "$TAG" arb-extension-v2.0.0.zip \
+          ZIP="arb-extension-v${VER}.zip"
+          gh release create "$TAG" "$ZIP" \
             --title "arb-extension v${VER}" \
-            --notes "Standalone Chrome extension — no ArbDesktop.exe required. Load unpacked in chrome://extensions"
+            --notes "Standalone Chrome extension v${VER} — X10 odds fix. Load unpacked in chrome://extensions"
