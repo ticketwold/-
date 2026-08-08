@@ -809,6 +809,7 @@
       document_ready: frameInfo.readyState,
       body_text_length: frameInfo.bodyLength,
       has_betslip_keyword: frameInfo.hasBetSlipKeyword,
+      anchor_hits: frameInfo.anchor_hits || {},
       injected_frame: true,
       target_frame: frameInfo.hasBetSlipKeyword ? location.href : "",
       root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
@@ -1295,7 +1296,7 @@
     const steps = pipeline.steps || {};
     const root = pipeline.root || null;
     const fallbackUsed = !!pipeline.fallback_used;
-    const hasSlipData = pipeline.status === "active" || (pipeline.slip_count === 1 && pipeline.odds != null);
+    const hasSlipData = !!pipeline.ok || pipeline.status === "active" || (pipeline.slip_count === 1 && pipeline.odds != null);
 
     if (!root && !hasSlipData) {
       resetX10SlipState();
@@ -1361,7 +1362,7 @@
       anchor_method: pipeline.anchorMethod || "text-fallback",
     };
 
-    if ((slipStatus === "active" || pipeline.status === "active") && odds != null && itemOk) {
+    if ((pipeline.ok || slipStatus === "active" || pipeline.status === "active") && odds != null && itemOk) {
       const item = enrichItem(
         {
           event: textParsed.event || metaParsed.event || "",

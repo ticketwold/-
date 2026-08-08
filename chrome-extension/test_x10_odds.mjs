@@ -1,121 +1,43 @@
-/** Unit tests for X10 BetSlip text parser (mirrors x10_betslip_probe.js). */
+import fs from "fs";
+import vm from "vm";
+import path from "path";
+import { fileURLToPath } from "url";
 
-function isSelectionLineText(lineText) {
-  const t = String(lineText || "").trim();
-  if (!t) return false;
-  if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
-  if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
-  if (/^W[12]$/i.test(t)) return true;
-  return false;
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function isStandaloneOddsLine(lineText) {
-  const t = String(lineText || "").trim().replace(/,/g, "");
-  const m = t.match(/^@?\s*(\d{1,2}\.\d{2})$/);
-  if (!m) return false;
-  const n = parseFloat(m[1]);
-  return Number.isFinite(n) && n >= 1.01 && n <= 100;
-}
-
-function isMoneyZoneLine(lineText) {
-  const t = String(lineText || "").trim();
-  if (t === "₩" || t === "원") return true;
-  if (/^최대$/.test(t)) return true;
-  if (/^\+[\d,]+/.test(t)) return true;
-  if (/^[\d,]+\s*₩$/.test(t)) return true;
-  if (/당첨\s*예상/.test(t)) return true;
-  if (/^베팅하기$/.test(t)) return true;
-  return false;
-}
-
-function extractLineNumbersFromSelection(selectionText) {
-  const nums = new Set();
-  for (const m of String(selectionText).matchAll(/\(\s*([+-]?\d+(?:\.\d+)?)\s*\)/g)) {
-    nums.add(parseFloat(m[1]));
-  }
-  const hc = String(selectionText).match(/[+-]\s*(\d+(?:\.\d+)?)/);
-  if (hc) nums.add(parseFloat(hc[1]));
-  return nums;
-}
-
-function parseX10SlipText(rawText) {
-  const lines = String(rawText || "")
-    .replace(/\r/g, "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  let slip_count = null;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (!/베팅\s*슬립|베팅슬립/.test(lines[i])) continue;
-    const inline = lines[i].match(/베팅\s*슬립\s*(\d+)|베팅슬립\s*(\d+)/i);
-    if (inline) {
-      slip_count = parseInt(inline[1] || inline[2], 10);
-      break;
-    }
-    if (i + 1 < lines.length && /^\d+$/.test(lines[i + 1])) {
-      slip_count = parseInt(lines[i + 1], 10);
-      break;
-    }
-  }
-
-  let selection = "";
-  let market = "";
-  let line = null;
-  let odds = null;
-  let moneyZone = false;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    if (isMoneyZoneLine(lines[i])) {
-      moneyZone = true;
-      continue;
-    }
-    if (moneyZone) continue;
-    if (!isSelectionLineText(lines[i])) continue;
-    selection = lines[i];
-    const lineNums = extractLineNumbersFromSelection(selection);
-    line = lineNums.size ? [...lineNums][0] : null;
-    if (i > 0 && !isSelectionLineText(lines[i - 1])) market = lines[i - 1];
-    for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
-      if (isMoneyZoneLine(lines[j])) break;
-      if (isSelectionLineText(lines[j])) break;
-      if (!isStandaloneOddsLine(lines[j])) continue;
-      const val = parseFloat(lines[j]);
-      if (lineNums.has(val)) continue;
-      odds = val;
-      break;
-    }
-    break;
-  }
-
-  const closed = /betting\s*closed|마감|suspended/i.test(String(rawText));
-  const effectiveCount = slip_count != null ? slip_count : selection ? 1 : 0;
-  const oddsOk = odds != null && odds >= 1.01 && odds <= 100;
-  const status = closed ? "closed" : oddsOk && effectiveCount === 1 ? "active" : "odds_missing";
-  return { slip_count: effectiveCount, line, odds, selection, market, status, ok: effectiveCount === 1 && oddsOk && !closed };
+function loadProbe() {
+  const code = fs.readFileSync(path.join(__dirname, "x10_betslip_probe.js"), "utf8");
+  const sandbox = { globalThis: {}, window: {}, document: { body: null, readyState: "complete" }, location: { href: "test://" } };
+  sandbox.globalThis = sandbox;
+  sandbox.window = sandbox;
+  vm.runInContext(code, vm.createContext(sandbox));
+  return sandbox.ArbX10Probe;
 }
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-const uefaSlip = `베팅슬립
+const probe = loadProbe();
+const { parseX10BetSlipText, parseX10SlipText, extractBetSlipTextBlock, runPipeline } = probe;
+
+const X10_BETSLIP_TEXT_FIXTURE = `베팅슬립
 1
 싱글
 UEFA 챔피언스 리그 예선 - 여자
 프랭크바로스 TC (W) - KFF Mitrovica (Wom)
 Live
 하프타임 0:0
-토탈 골
+Team 1 - 토탈 골
 오버 (1.5)
-1.45
+1.75
 ₩
 최대
 +10,000 ₩
 +100,000 ₩
 +500,000 ₩
 당첨 예상금액
-14,500 ₩
+17,500 ₩
 베팅하기`;
 
 const pollutedSbCol = `프랭크바로스 TC (W)
@@ -145,36 +67,62 @@ Live
 3.95
 10.00`;
 
-function extractBetSlipTextBlock(rawText) {
-  const t = String(rawText || "").replace(/\r/g, "");
-  const start = t.search(/베팅\s*슬립|베팅슬립/);
-  if (start < 0) return null;
-  const slice = t.slice(start);
-  const endMatch = slice.match(/베팅하기|배당\s*수락(?:\s*및\s*배팅)?/);
-  if (!endMatch || endMatch.index == null) return null;
-  return slice.slice(0, endMatch.index + endMatch[0].length).trim();
-}
-
 const extracted = extractBetSlipTextBlock(pollutedSbCol);
 assert(extracted && /베팅슬립/.test(extracted), "extract block from SBCol");
 assert(!/1\.38/.test(extracted), "match list odds excluded from block");
+
+const fixtureParsed = parseX10BetSlipText(X10_BETSLIP_TEXT_FIXTURE);
+assert(fixtureParsed.ok === true, "parseX10BetSlipText: ok");
+assert(fixtureParsed.odds === 1.75, `parseX10BetSlipText: odds 1.75 got ${fixtureParsed.odds}`);
+assert(fixtureParsed.line === 1.5, `parseX10BetSlipText: line 1.5 got ${fixtureParsed.line}`);
+assert(fixtureParsed.slip_count === 1, `parseX10BetSlipText: slip_count 1 got ${fixtureParsed.slip_count}`);
+assert(fixtureParsed.status === "ACTIVE", `parseX10BetSlipText: status ACTIVE got ${fixtureParsed.status}`);
+
 const fromPolluted = parseX10SlipText(extracted);
 assert(fromPolluted.odds === 1.45, `polluted SBCol odds 1.45 got ${fromPolluted.odds}`);
 
-const parsed = parseX10SlipText(uefaSlip);
-assert(parsed.slip_count === 1, `slip_count=1 got ${parsed.slip_count}`);
-assert(parsed.line === 1.5, `line=1.5 got ${parsed.line}`);
-assert(parsed.odds === 1.45, `odds=1.45 got ${parsed.odds}`);
-assert(parsed.status === "active", `status=active got ${parsed.status}`);
-assert(parsed.selection === "오버 (1.5)", `selection got ${parsed.selection}`);
-assert(parsed.market === "토탈 골", `market got ${parsed.market}`);
-
 const npbSlip = `베팅슬립
+1
 싱글
 NPB
 오버 (6.5)
 1.93
 배팅 수락 및 배팅`;
-assert(parseX10SlipText(npbSlip).odds === 1.93, "NPB slip 1.93");
+assert(parseX10BetSlipText(npbSlip).odds === 1.93, "NPB slip 1.93");
+
+const anchorOnlyFrame = {
+  frame_url: "test://",
+  readyState: "complete",
+  bodyLength: 0,
+  hasBetSlipKeyword: true,
+  body_has_keywords: true,
+  anchor_hits: {
+    베팅슬립: { text: X10_BETSLIP_TEXT_FIXTURE },
+  },
+  bodySnippet: "",
+};
+
+const anchorOnlyResult = runPipeline(null, { frame: anchorOnlyFrame });
+assert(anchorOnlyResult.fallback_attempted === true, "runPipeline: anchor text → fallback_attempted");
+assert(anchorOnlyResult.fallback_used === true, "runPipeline: anchor text → fallback_used");
+assert(anchorOnlyResult.ok === true, "runPipeline: anchor text → ok");
+assert(anchorOnlyResult.odds === 1.75, `runPipeline: anchor text → odds 1.75 got ${anchorOnlyResult.odds}`);
+assert(anchorOnlyResult.slip_count === 1, "runPipeline: anchor text → slip_count 1");
+assert(anchorOnlyResult.root_found === false, "runPipeline: anchor text → root_found false");
+assert(anchorOnlyResult.steps.X10_ROOT === "WARN", "runPipeline: anchor text → X10_ROOT WARN");
+assert(anchorOnlyResult.steps.X10_TEXT_BLOCK === "PASS", "runPipeline: anchor text → X10_TEXT_BLOCK PASS");
+assert(anchorOnlyResult.steps.X10_ITEM === "PASS", "runPipeline: anchor text → X10_ITEM PASS");
+assert(anchorOnlyResult.steps.X10_ODDS === "PASS", "runPipeline: anchor text → X10_ODDS PASS");
+assert(anchorOnlyResult.steps.X10_STATUS === "PASS", "runPipeline: anchor text → X10_STATUS PASS");
+assert(anchorOnlyResult.steps.first_failure === null, "runPipeline: anchor text → first_failure null");
+
+const anchorHits = anchorOnlyFrame.anchor_hits;
+if (
+  anchorHits["베팅슬립"]?.text?.includes("베팅슬립") &&
+  anchorHits["베팅슬립"]?.text?.includes("베팅하기")
+) {
+  assert(anchorOnlyResult.fallback_attempted === true, "regression: anchor text present must attempt fallback");
+  assert(anchorOnlyResult.fallback_used === true, "regression: anchor text present must use fallback");
+}
 
 console.log("test_x10_odds: PASS");
