@@ -435,6 +435,25 @@
           .catch((err) => sendResponse({ ok: false, error: String(err) }));
         return true;
       }
+      if (site === "x10" && message?.type === "x10_probe") {
+        const scanner = global.ArbFrameScanner;
+        const probe = global.ArbX10Probe;
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
+        const frame = probe?.probeFrame?.() || {};
+        sendResponse({ ok: true, frame_url: location.href, frame_depth: frameDepth, ...frame, ...snap });
+        return true;
+      }
+      if (site === "x10" && message?.type === "x10_capture_dom") {
+        const probe = global.ArbX10Probe;
+        if (!probe) {
+          sendResponse({ ok: false, reason: "probe-missing" });
+          return true;
+        }
+        const report = probe.captureDomReport();
+        const html = probe.buildDebugHtml(report);
+        sendResponse({ ok: true, report, html, frame_url: location.href, frame_depth: frameDepth });
+        return true;
+      }
       return false;
     });
 

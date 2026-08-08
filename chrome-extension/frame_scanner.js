@@ -236,17 +236,6 @@
     }
 
     if (extractedOdds == null) {
-      const wasActive =
-        x10SlipState.lastActiveOdds != null &&
-        (x10SlipState.lastStatus === "active" || x10SlipState.lastStatus === "closed_pending");
-      if (wasActive) {
-        const now = Date.now();
-        if (!x10SlipState.oddsMissingSince) x10SlipState.oddsMissingSince = now;
-        if (now - x10SlipState.oddsMissingSince < X10_CLOSED_PENDING_MS) {
-          return finalize("closed_pending", "odds-missing", x10SlipState.lastActiveOdds);
-        }
-        return finalize("closed", "betting-closed", x10SlipState.lastActiveOdds);
-      }
       return finalize("odds_missing", "odds-missing", null);
     }
 
@@ -261,6 +250,31 @@
     try {
       nodes = [...root.querySelectorAll("button, [role='button'], input[type='submit']")];
     } catch (_err) {
+      if (message?.type === "x10_probe") {
+        const scanner = global.ArbFrameScanner;
+        const probe = global.ArbX10Probe;
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
+        const frame = probe?.probeFrame?.() || {};
+        sendResponse({
+          ok: true,
+          frame_url: location.href,
+          frame_depth: frameDepth,
+          ...frame,
+          ...snap,
+        });
+        return true;
+      }
+      if (message?.type === "x10_capture_dom") {
+        const probe = global.ArbX10Probe;
+        if (!probe) {
+          sendResponse({ ok: false, reason: "probe-missing" });
+          return true;
+        }
+        const report = probe.captureDomReport();
+        const html = probe.buildDebugHtml(report);
+        sendResponse({ ok: true, report, html, frame_url: location.href, frame_depth: frameDepth });
+        return true;
+      }
       return false;
     }
     for (const btn of nodes) {
@@ -751,16 +765,22 @@
   }
 
   function buildX10DebugSnapshot(frameDepth) {
-    const roots = findX10SlipRoots();
-    const selectorHits = scanX10DiagnosticSelectors();
-    const bestRoot = pickBestX10Root(roots);
-    const stake = bestRoot ? readX10Stake(bestRoot) : null;
-    const oddsProbe = bestRoot ? extractX10OddsFromRoot(bestRoot, stake) : { odds: null, candidates: [], source: "" };
-    const statusProbe = bestRoot
-      ? resolveX10SlipStatus(bestRoot, text(bestRoot), oddsProbe.odds)
-      : { status: "empty", reason: "no-slip-root", diagnostics: {} };
-    const rootInner = bestRoot ? text(bestRoot).slice(0, 1500) : "";
-    const debugCandidates = (oddsProbe.candidates || []).map((c) => ({
+    const probeApi = global.ArbX10Probe;
+    const frameInfo = probeApi?.probeFrame?.() || {
+      frame_url: location.href,
+      readyState: document.readyState,
+      bodyLength: 0,
+      hasBetSlipKeyword: false,
+    };
+    const pipeline = probeApi?.runPipeline?.((root, stake) => extractX10OddsFromRoot(root, stake)) || {
+      steps: {},
+      root: null,
+      odds: null,
+      slip_count: 0,
+      status: "empty",
+    };
+    const root = pipeline.root || null;
+    const debugCandidates = (pipeline.odds_candidates || []).map((c) => ({
       ...c,
       label: c.selected
         ? `${c.value} SELECTED odds`
@@ -769,31 +789,28 @@
     return {
       site: "x10",
       frame_url: location.href,
-      document_location: location.href,
       frame_depth: frameDepth,
-      document_ready: document.readyState || "unknown",
-      body_text_length: (() => {
-        try {
-          return (document.body?.innerText || document.body?.textContent || "").length;
-        } catch (_err) {
-          return 0;
-        }
-      })(),
-      root_found: roots.length ? "YES" : "NO",
-      slip_root_found: roots.length ? "YES" : "NO",
-      slip_root_count: roots.length,
-      root_selector: bestRoot ? selectorHint(bestRoot) : "",
-      container_selector: bestRoot ? selectorHint(bestRoot) : "",
-      root_inner_text: rootInner,
-      slip_inner_text: rootInner || getX10SlipInnerText(roots),
-      selector_hits: selectorHits,
-      selector_scans: selectorHits,
+      document_ready: frameInfo.readyState,
+      body_text_length: frameInfo.bodyLength,
+      has_betslip_keyword: frameInfo.hasBetSlipKeyword,
+      injected_frame: true,
+      target_frame: frameInfo.hasBetSlipKeyword ? location.href : "",
+      root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+      slip_root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
+      root_selector: pipeline.rootSelector || "",
+      container_selector: pipeline.rootSelector || "",
+      slip_count: pipeline.slip_count ?? 0,
+      slip_items: pipeline.slip_items || [],
+      root_inner_text: pipeline.bodySnippet || frameInfo.bodySnippet || "",
+      slip_inner_text: pipeline.bodySnippet || "",
+      pipeline_steps: pipeline.steps || {},
+      first_failure: pipeline.steps?.first_failure || "",
       odds_candidates: debugCandidates,
-      odds_source: oddsProbe.source || "",
-      extracted_odds: oddsProbe.odds,
-      status_diagnostics: statusProbe.diagnostics || {},
-      parsed_status: statusProbe.status || "empty",
-      status_reason: statusProbe.reason || "",
+      odds_source: pipeline.odds_source || "",
+      extracted_odds: pipeline.odds,
+      parsed_status: pipeline.status || "empty",
+      status_reason: pipeline.steps?.first_failure || pipeline.status || "",
+      keyword_candidates: pipeline.keyword_candidates || [],
       revision: x10RootTracker.revision,
     };
   }
@@ -1008,90 +1025,78 @@
   }
 
   function readX10Slip() {
-    const roots = findX10SlipRoots();
-    const selectorHits = scanX10DiagnosticSelectors();
-    const root = pickBestX10Root(roots);
-    const slipInnerText = root ? text(root).slice(0, 1500) : getX10SlipInnerText(roots);
-
-    if (!root) {
-      resetX10SlipState();
+    const probeApi = global.ArbX10Probe;
+    if (!probeApi?.runPipeline) {
       return {
         ok: false,
         empty: true,
         items: [],
-        reason: "no-slip-root",
+        reason: "x10-probe-missing",
+        frame_url: location.href,
+      };
+    }
+
+    const pipeline = probeApi.runPipeline((root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake));
+    const steps = pipeline.steps || {};
+    const root = pipeline.root || null;
+
+    if (!root) {
+      resetX10SlipState();
+      return {
+        ok: steps.X10_FRAME === "PASS",
+        empty: true,
+        items: [],
+        reason: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "no-slip-root",
         frame_url: location.href,
         slip_root_found: "NO",
-        root_found: "NO",
-        slip_inner_text: slipInnerText,
-        selector_hits: selectorHits,
+        root_found: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+        slip_inner_text: pipeline.bodySnippet || pipeline.frame?.bodySnippet || "",
+        pipeline_steps: steps,
+        first_failure: steps.first_failure || "",
+        keyword_candidates: pipeline.keyword_candidates || [],
         extracted_odds: null,
         revision: x10RootTracker.revision,
+        parsed_status: pipeline.status || "empty",
+        status_reason: steps.first_failure || pipeline.status || "",
       };
     }
 
     const revision = trackX10Root(root);
     const rootText = text(root);
     const stake = readX10Stake(root);
-    const { odds, candidates, source } = extractX10OddsFromRoot(root, stake);
-    const statusResult = resolveX10SlipStatus(root, rootText, odds);
-    let slipStatus = statusResult.status;
+    const odds = pipeline.odds;
+    const candidates = pipeline.odds_candidates || [];
+    const slipCount = pipeline.slip_count ?? 0;
 
-    if (
-      odds != null &&
-      slipStatus !== "closed" &&
-      slipStatus !== "suspended" &&
-      slipStatus !== "disabled"
-    ) {
+    const statusResult = resolveX10SlipStatus(root, rootText, odds);
+    let slipStatus = pipeline.status === "active" ? "active" : statusResult.status;
+    if (odds != null && steps.X10_ODDS === "PASS" && steps.X10_ITEM === "PASS" && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
       slipStatus = "active";
     }
 
     const parsed = parseX10SlipText(rootText);
-    const closedLike = ["closed", "suspended", "disabled", "closed_pending"].includes(slipStatus);
+    const base = {
+      source: "dom",
+      frame_url: location.href,
+      container_selector: pipeline.rootSelector || selectorHint(root),
+      slip_root_found: "YES",
+      root_found: "YES",
+      slip_count: slipCount,
+      slip_inner_text: pipeline.bodySnippet || rootText.slice(0, 1500),
+      pipeline_steps: steps,
+      first_failure: steps.first_failure || "",
+      odds_candidates: candidates,
+      odds_source: pipeline.odds_source || "",
+      extracted_odds: odds,
+      parsed_status: slipStatus,
+      status_reason: steps.first_failure || statusResult.reason || slipStatus,
+      status_diagnostics: statusResult.diagnostics,
+      slip_items: pipeline.slip_items || [],
+      revision,
+      anchor_method: pipeline.anchorMethod || "text-anchor",
+    };
 
-    if (closedLike) {
-      return enrichSlipResult(
-        {
-          ok: true,
-          empty: false,
-          items: [
-            enrichItem(
-              {
-                event: parsed.event,
-                market: parsed.market,
-                selection: parsed.selection,
-                odds: slipStatus === "active" ? odds : null,
-                previous_odds: statusResult.previous_odds ?? null,
-                status: slipStatus,
-                status_reason: statusResult.reason,
-                stake,
-                container_selector: selectorHint(root),
-                status_diagnostics: statusResult.diagnostics,
-              },
-              parsed.event,
-            ),
-          ],
-          source: "dom",
-          frame_url: location.href,
-          container_selector: selectorHint(root),
-          slip_root_found: "YES",
-          root_found: "YES",
-          slip_count: 1,
-          slip_inner_text: slipInnerText,
-          selector_hits: selectorHits,
-          odds_candidates: candidates,
-          odds_source: source,
-          extracted_odds: odds,
-          parsed_status: slipStatus,
-          status_reason: statusResult.reason,
-          status_diagnostics: statusResult.diagnostics,
-          revision,
-        },
-        root,
-      );
-    }
-
-    if (odds != null) {
+    if (slipStatus === "active" && odds != null && slipCount === 1) {
       const item = enrichItem(
         {
           event: parsed.event || "",
@@ -1101,78 +1106,49 @@
           status: "active",
           status_reason: "active",
           stake,
-          container_selector: selectorHint(root),
+          container_selector: pipeline.rootSelector || selectorHint(root),
           dom_hash: domHash(root),
           status_diagnostics: statusResult.diagnostics,
         },
         parsed.event,
       );
+      return enrichSlipResult({ ok: true, empty: false, items: [item], ...base }, root);
+    }
+
+    const closedLike = ["closed", "suspended", "disabled", "closed_pending"].includes(slipStatus);
+    if (closedLike || odds == null || slipCount !== 1) {
       return enrichSlipResult(
         {
           ok: true,
-          empty: false,
-          items: [item],
-          source: "dom",
-          frame_url: location.href,
-          container_selector: selectorHint(root),
-          slip_root_found: "YES",
-          root_found: "YES",
-          slip_count: 1,
-          slip_inner_text: slipInnerText,
-          selector_hits: selectorHits,
-          odds_candidates: candidates,
-          odds_source: source,
-          extracted_odds: odds,
-          parsed_status: "active",
-          status_reason: "active",
-          status_diagnostics: statusResult.diagnostics,
-          revision,
+          empty: slipCount === 0 && odds == null,
+          items:
+            slipCount > 0 || odds != null
+              ? [
+                  enrichItem(
+                    {
+                      event: parsed.event || "",
+                      market: parsed.market || "",
+                      selection: parsed.selection || "",
+                      odds: slipStatus === "active" ? odds : null,
+                      previous_odds: null,
+                      status: slipCount !== 1 ? "odds_missing" : slipStatus,
+                      status_reason: steps.first_failure || statusResult.reason,
+                      stake,
+                      container_selector: pipeline.rootSelector || selectorHint(root),
+                      status_diagnostics: statusResult.diagnostics,
+                    },
+                    parsed.event,
+                  ),
+                ]
+              : [],
+          reason: steps.first_failure || (slipCount !== 1 ? `slip_count=${slipCount}` : "odds-missing"),
+          ...base,
         },
         root,
       );
     }
 
-    return enrichSlipResult(
-      {
-        ok: true,
-        empty: slipStatus === "empty",
-        items:
-          slipStatus === "empty"
-            ? []
-            : [
-                enrichItem(
-                  {
-                    event: parsed.event || "",
-                    market: parsed.market || "",
-                    selection: parsed.selection || "",
-                    odds: null,
-                    status: slipStatus || "odds_missing",
-                    status_reason: statusResult.reason || "odds-missing",
-                    stake,
-                    container_selector: selectorHint(root),
-                    status_diagnostics: statusResult.diagnostics,
-                  },
-                  parsed.event,
-                ),
-              ],
-        reason: slipStatus === "empty" ? "empty-slip" : "odds-missing",
-        frame_url: location.href,
-        container_selector: selectorHint(root),
-        slip_root_found: "YES",
-        root_found: "YES",
-        slip_count: 1,
-        slip_inner_text: slipInnerText,
-        selector_hits: selectorHits,
-        odds_candidates: candidates,
-        odds_source: source,
-        extracted_odds: null,
-        parsed_status: slipStatus || "odds_missing",
-        status_reason: statusResult.reason || "odds-missing",
-        status_diagnostics: statusResult.diagnostics,
-        revision,
-      },
-      root,
-    );
+    return enrichSlipResult({ ok: true, empty: true, items: [], reason: "empty-slip", ...base }, root);
   }
 
   function diagnoseBcFrame() {
