@@ -61,6 +61,7 @@ export function x10SlipPriority(result) {
   const status = String(result.parsed_status || result.items?.[0]?.status || "").toLowerCase();
 
   if (!rootFound) {
+    if (status === "active" && odds != null) return 100;
     const blob = String(result.slip_inner_text || "");
     const hasKw = /베팅\s*슬립|베팅슬립|\b싱글\b|배당\s*수락|배팅\s*수락/i.test(blob);
     return hasKw ? 10 : 0;
@@ -78,7 +79,10 @@ export function x10FrameScanPriority(entry) {
   const odds = entry.odds != null && entry.odds !== "" ? Number(entry.odds) : null;
   const status = String(entry.status || "").toLowerCase();
 
-  if (!rootFound) return entry.body_has_keywords ? 10 : 0;
+  if (!rootFound) {
+    if (status === "ACTIVE" && odds != null && Number.isFinite(odds)) return 100;
+    return entry.body_has_keywords ? 10 : 0;
+  }
   if (status === "active" && odds != null && Number.isFinite(odds)) return 100;
   if (slipCount === 1) return 80;
   if (["closed", "suspended", "disabled", "closed_pending"].includes(status)) return 70;

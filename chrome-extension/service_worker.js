@@ -566,6 +566,7 @@ async function rescanX10AllFrames({ probeOnly = false } = {}) {
         frame_url: frame.url,
         frame_depth: resp?.frame_depth ?? null,
         root_found: rootFound,
+        fallback_used: !!(resp?.fallback_used ?? resp?.slip?.fallback_used),
         slip_count: slipCount,
         odds,
         status,
@@ -613,7 +614,7 @@ async function rescanX10AllFrames({ probeOnly = false } = {}) {
   const keywordFrame = results.find((r) => r.body_has_keywords && !r.error);
   const rootFrame = results.find((r) => r.root_found && !r.error);
   const selected = pickBestX10FrameResult(results);
-  const pass = !!(selected?.root_found && selected?.slip_count === 1 && selected?.odds != null);
+  const pass = !!(selected?.slip_count === 1 && selected?.odds != null && String(selected?.status || "").toUpperCase() === "ACTIVE");
   const frameDebug = results.map(formatX10FrameDebugLine).join("\n\n");
 
   await broadcast();
@@ -621,6 +622,7 @@ async function rescanX10AllFrames({ probeOnly = false } = {}) {
   return {
     ok: pass,
     root_found: !!selected?.root_found,
+    fallback_used: !!selected?.fallback_used,
     slip_count: selected?.slip_count ?? 0,
     odds: selected?.odds ?? null,
     status: selected?.status || "EMPTY",

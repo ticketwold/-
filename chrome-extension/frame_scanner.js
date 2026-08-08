@@ -370,7 +370,7 @@
     return item;
   }
 
-  function parseX10SlipText(rootText) {
+  function parseX10SlipMeta(rootText) {
     const lines = String(rootText || "")
       .split(/\n+/)
       .map((l) => l.replace(/\s+/g, " ").trim())
@@ -786,7 +786,13 @@
         ? `${c.value} SELECTED odds`
         : `${c.value} EXCLUDED ${c.exclude_reason || "rejected"}`,
     }));
-    const rootStatus = pipeline.steps?.X10_ROOT === "PASS" ? "FOUND" : "MISSING";
+    const rootStatus = pipeline.fallback_used
+      ? "FALLBACK"
+      : pipeline.steps?.X10_ROOT === "PASS"
+        ? "FOUND"
+        : pipeline.steps?.X10_TEXT_BLOCK === "PASS"
+          ? "TEXT_BLOCK"
+          : "MISSING";
     const selectionText = pipeline.selection_text || "";
     const oddsText = pipeline.odds_text || "";
     const extracted = pipeline.odds;
@@ -805,8 +811,9 @@
       has_betslip_keyword: frameInfo.hasBetSlipKeyword,
       injected_frame: true,
       target_frame: frameInfo.hasBetSlipKeyword ? location.href : "",
-      root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
-      slip_root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
+      root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+      slip_root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
+      fallback_used: !!pipeline.fallback_used,
       root_selector: pipeline.rootSelector || "",
       container_selector: pipeline.rootSelector || "",
       slip_count: pipeline.slip_count ?? 0,
@@ -1287,17 +1294,20 @@
     const pipeline = probeApi.runPipeline((root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake));
     const steps = pipeline.steps || {};
     const root = pipeline.root || null;
+    const fallbackUsed = !!pipeline.fallback_used;
+    const hasSlipData = pipeline.status === "active" || (pipeline.slip_count === 1 && pipeline.odds != null);
 
-    if (!root) {
+    if (!root && !hasSlipData) {
       resetX10SlipState();
       return {
-        ok: steps.X10_FRAME === "PASS",
+        ok: steps.X10_FRAME === "PASS" && steps.X10_TEXT_BLOCK === "PASS",
         empty: true,
         items: [],
         reason: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "no-slip-root",
         frame_url: location.href,
         slip_root_found: "NO",
-        root_found: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+        root_found: "NO",
+        fallback_used: fallbackUsed,
         slip_inner_text: pipeline.bodySnippet || pipeline.frame?.bodySnippet || "",
         pipeline_steps: steps,
         first_failure: steps.first_failure || "",
@@ -1309,27 +1319,32 @@
       };
     }
 
-    const revision = trackX10Root(root);
-    const rootText = text(root);
-    const stake = readX10Stake(root);
+    const revision = root ? trackX10Root(root) : x10RootTracker.revision;
+    const rootText = root ? text(root) : pipeline.bodySnippet || "";
+    const stake = root ? readX10Stake(root) : null;
     const odds = pipeline.odds;
     const candidates = pipeline.odds_candidates || [];
     const slipCount = pipeline.slip_count ?? 0;
+    const statusBlob = pipeline.text_block || rootText;
 
-    const statusResult = resolveX10SlipStatus(root, rootText, odds);
+    const statusResult = root
+      ? resolveX10SlipStatus(root, rootText, odds)
+      : { status: pipeline.status, reason: pipeline.status, diagnostics: {} };
     let slipStatus = pipeline.status === "active" ? "active" : statusResult.status;
     const itemOk = slipCount === 1;
     if (odds != null && itemOk && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
       slipStatus = "active";
     }
 
-    const parsed = parseX10SlipText(rootText);
+    const textParsed = pipeline.text_parsed || probeApi.parseX10SlipText?.(statusBlob) || {};
+    const metaParsed = parseX10SlipMeta(statusBlob);
     const base = {
-      source: "dom",
+      source: fallbackUsed ? "text-fallback" : "dom",
       frame_url: location.href,
-      container_selector: pipeline.rootSelector || selectorHint(root),
-      slip_root_found: "YES",
-      root_found: "YES",
+      container_selector: pipeline.rootSelector || (root ? selectorHint(root) : ""),
+      slip_root_found: root ? "YES" : "NO",
+      root_found: root ? "YES" : "NO",
+      fallback_used: fallbackUsed,
       slip_count: slipCount,
       slip_inner_text: pipeline.bodySnippet || rootText.slice(0, 1500),
       pipeline_steps: steps,
@@ -1337,60 +1352,61 @@
       odds_candidates: candidates,
       odds_source: pipeline.odds_source || "",
       extracted_odds: odds,
+      line: pipeline.line ?? textParsed.line ?? null,
       parsed_status: slipStatus,
       status_reason: steps.first_failure || statusResult.reason || slipStatus,
       status_diagnostics: statusResult.diagnostics,
       slip_items: pipeline.slip_items || [],
       revision,
-      anchor_method: pipeline.anchorMethod || "text-anchor",
+      anchor_method: pipeline.anchorMethod || "text-fallback",
     };
 
     if ((slipStatus === "active" || pipeline.status === "active") && odds != null && itemOk) {
       const item = enrichItem(
         {
-          event: parsed.event || "",
-          market: parsed.market || pipeline.selection_text || "",
-          selection: parsed.selection || pipeline.selection_text || "",
+          event: textParsed.event || metaParsed.event || "",
+          market: textParsed.market || metaParsed.market || pipeline.selection_text || "",
+          selection: textParsed.selection || metaParsed.selection || pipeline.selection_text || "",
           odds,
           status: "active",
-          status_reason: pipeline.item_warning ? `active:${pipeline.item_warning}` : "active",
+          status_reason: pipeline.item_warning ? `active:${pipeline.item_warning}` : fallbackUsed ? "active:text-fallback" : "active",
           stake,
-          container_selector: pipeline.rootSelector || selectorHint(root),
-          dom_hash: domHash(root),
+          container_selector: pipeline.rootSelector || (root ? selectorHint(root) : ""),
+          dom_hash: root ? domHash(root) : domHash({ innerText: statusBlob }),
           status_diagnostics: statusResult.diagnostics,
         },
-        parsed.event,
+        textParsed.event || metaParsed.event,
       );
       return enrichSlipResult({ ok: true, empty: false, items: [item], ...base }, root);
     }
 
     const closedLike = ["closed", "suspended", "disabled", "closed_pending"].includes(slipStatus);
-    if (closedLike || odds == null || slipCount !== 1) {
+    if (closedLike || odds == null || !itemOk) {
       return enrichSlipResult(
         {
-          ok: true,
+          ok: hasSlipData,
           empty: slipCount === 0 && odds == null,
           items:
             slipCount > 0 || odds != null
               ? [
                   enrichItem(
                     {
-                      event: parsed.event || "",
-                      market: parsed.market || "",
-                      selection: parsed.selection || "",
+                      event: textParsed.event || metaParsed.event || "",
+                      market: textParsed.market || metaParsed.market || "",
+                      selection: textParsed.selection || metaParsed.selection || pipeline.selection_text || "",
                       odds: slipStatus === "active" ? odds : null,
                       previous_odds: null,
-                      status: slipCount !== 1 ? "odds_missing" : slipStatus,
+                      status: !itemOk ? "odds_missing" : slipStatus,
                       status_reason: steps.first_failure || statusResult.reason,
                       stake,
-                      container_selector: pipeline.rootSelector || selectorHint(root),
+                      container_selector: pipeline.rootSelector || "",
                       status_diagnostics: statusResult.diagnostics,
                     },
-                    parsed.event,
+                    textParsed.event || metaParsed.event,
                   ),
                 ]
               : [],
-          reason: steps.first_failure || (slipCount !== 1 ? `slip_count=${slipCount}` : "odds-missing"),
+          reason: steps.first_failure || (!itemOk ? `slip_count=${slipCount}` : "odds-missing"),
           ...base,
         },
         root,

@@ -1,46 +1,16 @@
-/** Unit tests for X10 line vs odds heuristics (mirrors frame_scanner.js / x10_betslip_probe.js). */
+/** Unit tests for X10 BetSlip text parser (mirrors x10_betslip_probe.js). */
 
-function isX10LineValue(val, leafText, parentText, contextBlob) {
-  const blob = `${contextBlob} ${parentText} ${leafText}`.toLowerCase();
-  const valStr = String(val);
-  if (/\(\s*\d+\.\d+\s*\)/.test(leafText) && leafText.includes(valStr)) return true;
-  if (/[+-]\s*\d/.test(leafText) || /[+-]\d/.test(leafText)) {
-    const m = leafText.match(/[+-]\s*(\d+(?:\.\d+)?)/);
-    if (m && Math.abs(parseFloat(m[1]) - val) < 0.001) return true;
-  }
-  if (/(over|under|오버|언더|total|토탈|핸디|handicap|spread|기준)/i.test(blob)) {
-    if (/^\d+\.5$/.test(valStr) && val >= 1.5) return true;
-    if (new RegExp(`(?:over|under|오버|언더)\\s*${valStr.replace(".", "\\.")}`, "i").test(blob)) return true;
-    if (val >= 10 && val < 100 && /^\d+\.\d+$/.test(valStr)) return true;
-  }
-  if (/^\d+\.\d+$/.test(valStr) && val >= 20 && /^\d+\.5$/.test(valStr)) return true;
-  return false;
-}
-
-function assert(cond, msg) {
-  if (!cond) throw new Error(msg);
-}
-
-assert(isX10LineValue(36.5, "36.5", "오버 36.5", "토탈 골"), "36.5 is line on totals");
-assert(!isX10LineValue(1.87, "1.87", "오버 36.5", "토탈 골"), "1.87 is odds not line");
-assert(isX10LineValue(3.5, "+3.5", "A팀 +3.5", "핸디캡"), "3.5 handicap line");
-assert(!isX10LineValue(1.92, "1.92", "A팀 +3.5", "핸디캡"), "1.92 is odds on handicap");
-assert(isX10LineValue(6.5, "6.5", "오버 (6.5)", "NPB 토탈"), "6.5 in parens is line not odds");
-assert(isX10LineValue(1.5, "1.5", "오버 (1.5)", "Team 1 - 토탈 골"), "1.5 in parens is line not odds");
-
-function isX10SelectionLineText(rawText) {
-  const t = String(rawText || "").trim();
-  if (!t || t.length > 120) return false;
-  if (/^(베팅슬립|베팅 슬립|싱글|조합|멀티|더블)$/i.test(t)) return false;
-  if (/배팅\s*수락|베팅하기|배팅하기|당첨/i.test(t)) return false;
-  if (/\d+\.\d+\s*@\s*\d/.test(t)) return false;
+function isSelectionLineText(lineText) {
+  const t = String(lineText || "").trim();
+  if (!t) return false;
   if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
   if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
+  if (/^W[12]$/i.test(t)) return true;
   return false;
 }
 
-function isX10StandaloneOddsLine(rawText) {
-  const t = String(rawText || "").trim().replace(/,/g, "");
+function isStandaloneOddsLine(lineText) {
+  const t = String(lineText || "").trim().replace(/,/g, "");
   const m = t.match(/^@?\s*(\d{1,2}\.\d{2})$/);
   if (!m) return false;
   const n = parseFloat(m[1]);
@@ -52,78 +22,82 @@ function isMoneyZoneLine(lineText) {
   if (t === "₩" || t === "원") return true;
   if (/^최대$/.test(t)) return true;
   if (/^\+[\d,]+/.test(t)) return true;
+  if (/^[\d,]+\s*₩$/.test(t)) return true;
   if (/당첨\s*예상/.test(t)) return true;
+  if (/^베팅하기$/.test(t)) return true;
   return false;
 }
 
-function extractLineNumbers(selectionText) {
+function extractLineNumbersFromSelection(selectionText) {
   const nums = new Set();
   for (const m of String(selectionText).matchAll(/\(\s*([+-]?\d+(?:\.\d+)?)\s*\)/g)) {
     nums.add(parseFloat(m[1]));
   }
+  const hc = String(selectionText).match(/[+-]\s*(\d+(?:\.\d+)?)/);
+  if (hc) nums.add(parseFloat(hc[1]));
   return nums;
 }
 
-function extractOddsFromLines(innerText) {
-  const lines = String(innerText || "")
+function parseX10SlipText(rawText) {
+  const lines = String(rawText || "")
     .replace(/\r/g, "")
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
+
+  let slip_count = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/베팅\s*슬립|베팅슬립/.test(lines[i])) continue;
+    const inline = lines[i].match(/베팅\s*슬립\s*(\d+)|베팅슬립\s*(\d+)/i);
+    if (inline) {
+      slip_count = parseInt(inline[1] || inline[2], 10);
+      break;
+    }
+    if (i + 1 < lines.length && /^\d+$/.test(lines[i + 1])) {
+      slip_count = parseInt(lines[i + 1], 10);
+      break;
+    }
+  }
+
+  let selection = "";
+  let market = "";
+  let line = null;
+  let odds = null;
   let moneyZone = false;
+
   for (let i = 0; i < lines.length; i += 1) {
     if (isMoneyZoneLine(lines[i])) {
       moneyZone = true;
       continue;
     }
     if (moneyZone) continue;
-    if (!isX10SelectionLineText(lines[i])) continue;
-    const lineNums = extractLineNumbers(lines[i]);
+    if (!isSelectionLineText(lines[i])) continue;
+    selection = lines[i];
+    const lineNums = extractLineNumbersFromSelection(selection);
+    line = lineNums.size ? [...lineNums][0] : null;
+    if (i > 0 && !isSelectionLineText(lines[i - 1])) market = lines[i - 1];
     for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
       if (isMoneyZoneLine(lines[j])) break;
-      if (isX10SelectionLineText(lines[j])) break;
-      if (!isX10StandaloneOddsLine(lines[j])) continue;
+      if (isSelectionLineText(lines[j])) break;
+      if (!isStandaloneOddsLine(lines[j])) continue;
       const val = parseFloat(lines[j]);
       if (lineNums.has(val)) continue;
-      return val;
+      odds = val;
+      break;
     }
+    break;
   }
-  return null;
+
+  const closed = /betting\s*closed|마감|suspended/i.test(String(rawText));
+  const effectiveCount = slip_count != null ? slip_count : selection ? 1 : 0;
+  const oddsOk = odds != null && odds >= 1.01 && odds <= 100;
+  const status = closed ? "closed" : oddsOk && effectiveCount === 1 ? "active" : "odds_missing";
+  return { slip_count: effectiveCount, line, odds, selection, market, status, ok: effectiveCount === 1 && oddsOk && !closed };
 }
 
-function countSelectionCards(innerText) {
-  const lines = String(innerText || "")
-    .replace(/\r/g, "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  let count = 0;
-  let moneyZone = false;
-  for (const line of lines) {
-    if (isMoneyZoneLine(line)) moneyZone = true;
-    if (!moneyZone && isX10SelectionLineText(line)) count += 1;
-  }
-  return count;
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
 }
-
-function parseHeaderSlipCountText(innerText) {
-  const blob = String(innerText || "").replace(/\r/g, "");
-  const m =
-    blob.match(/베팅\s*슬립[^\d]*(\d+)[^\n]*\n[^\n]*싱글/i) ||
-    blob.match(/베팅슬립[^\d]*(\d+)[^\n]*\n[^\n]*싱글/i);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-const sampleSlip = `베팅슬립
-싱글
-NPB
-오버 (6.5)
-1.93
-배팅 수락 및 배팅`;
-assert(extractOddsFromLines(sampleSlip) === 1.93, "vertical slip picks 1.93 not 6.5");
-assert(isX10SelectionLineText("오버 (6.5)"), "오버 (6.5) is selection");
-assert(isX10StandaloneOddsLine("1.93"), "1.93 is standalone odds line");
-assert(!isX10SelectionLineText("1.93"), "1.93 is not selection line");
 
 const uefaSlip = `베팅슬립
 1
@@ -131,21 +105,33 @@ const uefaSlip = `베팅슬립
 UEFA 챔피언스 리그 예선 - 여자
 프랭크바로스 TC (W) - KFF Mitrovica (Wom)
 Live
-1 번째 하프 45' 0:0
-Team 1 - 토탈 골
+하프타임 0:0
+토탈 골
 오버 (1.5)
-1.75
+1.45
 ₩
 최대
 +10,000 ₩
 +100,000 ₩
 +500,000 ₩
-당첨 예상금액`;
+당첨 예상금액
+14,500 ₩
+베팅하기`;
 
-assert(parseHeaderSlipCountText(uefaSlip) === 1, "header count is 1");
-assert(countSelectionCards(uefaSlip) === 1, "one selection card");
-assert(extractOddsFromLines(uefaSlip) === 1.75, "UEFA slip odds 1.75 not 1.5");
-assert(extractOddsFromLines(uefaSlip) !== 1.5, "1.5 is line not odds");
-assert(extractOddsFromLines(uefaSlip) !== 10000, "stake chip not odds");
+const parsed = parseX10SlipText(uefaSlip);
+assert(parsed.slip_count === 1, `slip_count=1 got ${parsed.slip_count}`);
+assert(parsed.line === 1.5, `line=1.5 got ${parsed.line}`);
+assert(parsed.odds === 1.45, `odds=1.45 got ${parsed.odds}`);
+assert(parsed.status === "active", `status=active got ${parsed.status}`);
+assert(parsed.selection === "오버 (1.5)", `selection got ${parsed.selection}`);
+assert(parsed.market === "토탈 골", `market got ${parsed.market}`);
+
+const npbSlip = `베팅슬립
+싱글
+NPB
+오버 (6.5)
+1.93
+배팅 수락 및 배팅`;
+assert(parseX10SlipText(npbSlip).odds === 1.93, "NPB slip 1.93");
 
 console.log("test_x10_odds: PASS");

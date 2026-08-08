@@ -466,18 +466,21 @@
         const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
         const frame = probe?.probeFrame?.() || {};
         const rootFound = slip.slip_root_found === "YES" || snap.slip_root_found === "YES";
+        const fallbackUsed = !!(slip.fallback_used ?? snap.fallback_used);
         const slipCount = slip.slip_count ?? snap.slip_count ?? 0;
         const odds = slip.extracted_odds ?? slip.items?.[0]?.odds ?? snap.extracted_odds ?? null;
         const rawStatus = slip.parsed_status || snap.parsed_status || "empty";
         const status =
           rawStatus === "active" && odds != null ? "ACTIVE" : String(rawStatus || "empty").toUpperCase();
         const bodyHasKeywords = !!(frame.body_has_keywords ?? frame.hasBetSlipKeyword);
+        const pass = slipCount === 1 && odds != null && status === "ACTIVE";
         sendResponse({
-          ok: rootFound && slipCount === 1 && odds != null,
+          ok: pass,
           frame_id: message.frame_id ?? null,
           frame_url: location.href,
           frame_depth: frameDepth,
           root_found: rootFound,
+          fallback_used: fallbackUsed,
           slip_count: slipCount,
           odds,
           status,

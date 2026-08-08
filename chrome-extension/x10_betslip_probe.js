@@ -108,6 +108,23 @@
 
   function probeAnchorKeywords() {
     const hits = {};
+    const betslipBlock = findBetSlipAnchorTextBlock();
+
+    if (betslipBlock) {
+      hits["베팅슬립"] = { selector: "(text-block)", text: betslipBlock.slice(0, 800) };
+      const parsed = parseX10SlipText(betslipBlock);
+      if (/\b싱글\b/.test(betslipBlock)) hits["싱글"] = { selector: "(text-block)", text: "싱글" };
+      if (parsed.selection) hits.selection = { selector: "(text-block)", text: parsed.selection };
+      if (parsed.odds != null) hits.odds = { selector: "(text-block)", text: String(parsed.odds) };
+      if (/당첨\s*예상|베팅하기/.test(betslipBlock)) {
+        hits.bet_accept = {
+          selector: "(text-block)",
+          text: /베팅하기/.test(betslipBlock) ? "베팅하기" : "당첨 예상금액",
+        };
+      }
+      return { hits, has_any: true };
+    }
+
     walkElements((el) => {
       if (!isVisible(el)) return;
       const inner = (el.innerText || el.textContent || "").trim();
@@ -216,6 +233,7 @@
     if (!t) return false;
     if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
     if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
+    if (/^W[12]$/i.test(t)) return true;
     return false;
   }
 
@@ -260,7 +278,155 @@
     if (/^\+[\d,]+/.test(t)) return true;
     if (/^[\d,]+\s*₩$/.test(t)) return true;
     if (/당첨\s*예상/.test(t)) return true;
+    if (/^베팅하기$/.test(t)) return true;
     return false;
+  }
+
+  function isBetSlipTextBlock(rawText) {
+    const t = String(rawText || "");
+    return (
+      /베팅\s*슬립|베팅슬립/.test(t) &&
+      /\b싱글\b/.test(t) &&
+      (/베팅하기|당첨\s*예상/.test(t))
+    );
+  }
+
+  function extractLineNumbersFromSelection(selectionText) {
+    const nums = new Set();
+    const t = String(selectionText || "");
+    for (const m of t.matchAll(/\(\s*([+-]?\d+(?:\.\d+)?)\s*\)/g)) {
+      const n = parseFloat(m[1]);
+      if (Number.isFinite(n)) nums.add(n);
+    }
+    const hc = t.match(/[+-]\s*(\d+(?:\.\d+)?)/);
+    if (hc) nums.add(parseFloat(hc[1]));
+    return nums;
+  }
+
+  function extractLineFromSelection(selectionText) {
+    const nums = extractLineNumbersFromSelection(selectionText);
+    if (nums.size) return [...nums][0];
+    return null;
+  }
+
+  /** BetSlip anchor text block — 베팅슬립…베팅하기 (경기목록 제외) */
+  function findBetSlipAnchorTextBlock() {
+    let best = null;
+    let bestLen = Infinity;
+    walkElements((el) => {
+      if (!isVisible(el)) return;
+      const t = (el.innerText || el.textContent || "").replace(/\r/g, "").trim();
+      if (!isBetSlipTextBlock(t)) return;
+      if (looksLikeMatchListPanel(t)) return;
+      if (t.length < bestLen) {
+        bestLen = t.length;
+        best = t;
+      }
+    });
+    return best;
+  }
+
+  /**
+   * parseX10SlipText — BetSlip text block 전용 parser (DOM root 없이 사용 가능)
+   */
+  function parseX10SlipText(rawText) {
+    const lines = String(rawText || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    let slip_count = null;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!/베팅\s*슬립|베팅슬립/.test(lines[i])) continue;
+      const inline = lines[i].match(/베팅\s*슬립\s*(\d+)|베팅슬립\s*(\d+)/i);
+      if (inline) {
+        slip_count = parseInt(inline[1] || inline[2], 10);
+        break;
+      }
+      if (i + 1 < lines.length && /^\d+$/.test(lines[i + 1])) {
+        slip_count = parseInt(lines[i + 1], 10);
+        break;
+      }
+    }
+
+    let selection = "";
+    let market = "";
+    let line = null;
+    let odds = null;
+    let event = "";
+    let moneyZone = false;
+
+    for (let i = 0; i < lines.length; i += 1) {
+      if (isMoneyZoneLine(lines[i])) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
+
+      if (isSelectionLineText(lines[i])) {
+        selection = lines[i];
+        line = extractLineFromSelection(selection);
+        if (i > 0 && !isSelectionLineText(lines[i - 1]) && !/^(베팅슬립|싱글|Live|\d)/i.test(lines[i - 1])) {
+          if (!market) market = lines[i - 1];
+        }
+        const lineNums = extractLineNumbersFromSelection(selection);
+        for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
+          if (isMoneyZoneLine(lines[j])) break;
+          if (isSelectionLineText(lines[j])) break;
+          if (!isStandaloneOddsLine(lines[j])) continue;
+          const val = parseFloat(lines[j]);
+          if (lineNums.has(val)) continue;
+          odds = val;
+          break;
+        }
+        break;
+      }
+    }
+
+    if (!event) {
+      const skip = /^(베팅슬립|베팅 슬립|싱글|\d+|Live)/i;
+      const candidates = lines.filter(
+        (l) => l.length > 8 && !skip.test(l) && !isSelectionLineText(l) && !isStandaloneOddsLine(l) && !isMoneyZoneLine(l),
+      );
+      event = candidates.find((l) => / - /.test(l)) || candidates[0] || "";
+    }
+
+    if (!market) {
+      const idx = lines.indexOf(selection);
+      if (idx > 0) {
+        for (let k = idx - 1; k >= 0; k -= 1) {
+          if (isMoneyZoneLine(lines[k]) || isSelectionLineText(lines[k])) continue;
+          if (/^(Live|베팅|싱글|\d)/i.test(lines[k])) continue;
+          market = lines[k];
+          break;
+        }
+      }
+    }
+
+    const closed = /betting\s*closed|마감|배팅\s*닫|suspended|일시\s*정지/i.test(String(rawText || ""));
+    const effectiveCount = slip_count != null ? slip_count : selection ? 1 : 0;
+    const oddsOk = odds != null && odds >= 1.01 && odds <= 100;
+    const status = closed ? "closed" : oddsOk && effectiveCount === 1 ? "active" : odds == null ? "odds_missing" : "empty";
+
+    return {
+      slip_count: effectiveCount,
+      line,
+      odds,
+      selection,
+      market,
+      event,
+      status,
+      ok: effectiveCount === 1 && oddsOk && !closed,
+    };
+  }
+
+  function slipStatusFromText(rawText, odds) {
+    const blob = String(rawText || "");
+    if (/betting\s*closed|마감|배팅\s*닫/i.test(blob)) return "closed";
+    if (/suspended|일시\s*정지/i.test(blob)) return "suspended";
+    if (odds == null) return "odds_missing";
+    return "active";
   }
 
   function cardHasSelectionAndOdds(lines) {
@@ -484,6 +650,7 @@
     const steps = {
       X10_FRAME: "FAIL",
       X10_ROOT: "FAIL",
+      X10_TEXT_BLOCK: "FAIL",
       X10_ITEM: "FAIL",
       X10_ODDS: "FAIL",
       X10_STATUS: "FAIL",
@@ -491,15 +658,14 @@
     };
 
     const frame = probeFrame();
-    if (frame.hasBetSlipKeyword) {
-      steps.X10_FRAME = "PASS";
-    } else {
+    if (!frame.hasBetSlipKeyword) {
       steps.first_failure = "X10_FRAME / no BetSlip keyword in frame";
       return {
         steps,
         frame,
         root: null,
         rootSelector: "",
+        fallback_used: false,
         slip_count: 0,
         slip_items: [],
         odds: null,
@@ -509,48 +675,18 @@
       };
     }
 
+    steps.X10_FRAME = "PASS";
+
+    const textBlock = findBetSlipAnchorTextBlock();
+    const textParsed = textBlock ? parseX10SlipText(textBlock) : null;
+    if (textBlock && textParsed) {
+      steps.X10_TEXT_BLOCK = "PASS";
+    }
+
     const anchorResult = findTextAnchorRoot();
-    const bodyHasAnchor = ANCHOR_RE.test(bodyInner());
-
-    if (!anchorResult?.root) {
-      steps.X10_ROOT = bodyHasAnchor ? "ROOT_SELECTOR_FAILED" : "FAIL";
-      steps.first_failure = bodyHasAnchor
-        ? "X10_ROOT / ROOT_SELECTOR_FAILED (body has 베팅슬립/베팅하기)"
-        : "X10_ROOT / text-anchor root not found";
-      return {
-        steps,
-        frame,
-        root: null,
-        rootSelector: "",
-        root_reason: steps.first_failure,
-        slip_count: 0,
-        slip_items: [],
-        odds: null,
-        odds_candidates: [],
-        status: bodyHasAnchor ? "ROOT_SELECTOR_FAILED" : "empty",
-        keyword_candidates: findKeywordCandidates(),
-        bodySnippet: frame.bodySnippet,
-      };
-    }
-
-    steps.X10_ROOT = "PASS";
-    try {
-      console.log("[arb] X10 ROOT FOUND");
-    } catch (_logErr) {}
-    const root = anchorResult.root;
-    const slipItems = countSlipItems(root);
-    const effectiveCount = slipItems.effective_count ?? slipItems.count;
-    if (effectiveCount === 1) {
-      steps.X10_ITEM = "PASS";
-      try {
-        console.log("[arb] X10 ITEM FOUND");
-      } catch (_logErr) {}
-    } else {
-      steps.X10_ITEM = "FAIL";
-      steps.first_failure = `X10_ITEM / slip_count=${effectiveCount} (expected 1)`;
-      if (slipItems.warning) steps.item_warning = slipItems.warning;
-    }
-
+    const root = anchorResult?.root || null;
+    let fallback_used = false;
+    let slipItems = { count: 0, effective_count: 0, items: [], warning: "" };
     let odds = null;
     let odds_candidates = [];
     let odds_source = "";
@@ -559,19 +695,72 @@
     let odds_text = "";
     let odds_node = null;
     let odds_method = "";
-    if (typeof oddsExtractor === "function") {
-      const extracted = oddsExtractor(root, null);
-      odds = extracted?.odds ?? null;
-      odds_candidates = extracted?.candidates || [];
-      odds_source = extracted?.source || "";
-      selection_text = extracted?.selection_text || "";
-      selection_node = extracted?.selection_node || null;
-      odds_text = extracted?.odds_text || "";
-      odds_node = extracted?.odds_node || null;
-      odds_method = extracted?.method || odds_source;
+    let line = null;
+    let effectiveCount = 0;
+    let bodySnippet = textBlock || frame.bodySnippet || "";
+
+    if (root) {
+      steps.X10_ROOT = "PASS";
+      try {
+        console.log("[arb] X10 ROOT FOUND");
+      } catch (_logErr) {}
+      slipItems = countSlipItems(root);
+      effectiveCount = slipItems.effective_count ?? slipItems.count;
+      bodySnippet = (root.innerText || "").slice(0, 1500);
+
+      if (typeof oddsExtractor === "function") {
+        const extracted = oddsExtractor(root, null);
+        odds = extracted?.odds ?? null;
+        odds_candidates = extracted?.candidates || [];
+        odds_source = extracted?.source || "";
+        selection_text = extracted?.selection_text || "";
+        selection_node = extracted?.selection_node || null;
+        odds_text = extracted?.odds_text || "";
+        odds_node = extracted?.odds_node || null;
+        odds_method = extracted?.method || odds_source;
+        line = extracted?.line ?? null;
+      }
+    } else {
+      steps.X10_ROOT = textBlock ? "ROOT_SELECTOR_FAILED" : "FAIL";
+      if (!textBlock) {
+        steps.first_failure = "X10_ROOT / no DOM root and no BetSlip text block";
+      }
     }
 
-    if (odds != null) {
+    if (textParsed) {
+      if (effectiveCount !== 1 && textParsed.slip_count === 1) {
+        effectiveCount = 1;
+      } else if (effectiveCount === 0 && textParsed.slip_count === 1) {
+        effectiveCount = 1;
+      }
+      if (odds == null && textParsed.odds != null) {
+        odds = textParsed.odds;
+        odds_text = String(textParsed.odds);
+        odds_source = "text-fallback";
+        odds_method = "text-fallback";
+        selection_text = textParsed.selection || selection_text;
+        line = textParsed.line ?? line;
+        fallback_used = !root || steps.X10_ROOT !== "PASS";
+      } else if (!root) {
+        fallback_used = true;
+      }
+      if (!selection_text) selection_text = textParsed.selection || "";
+      if (line == null) line = textParsed.line;
+      bodySnippet = textBlock || bodySnippet;
+    }
+
+    if (effectiveCount === 1) {
+      steps.X10_ITEM = "PASS";
+      try {
+        console.log("[arb] X10 ITEM FOUND");
+      } catch (_logErr) {}
+    } else if (!steps.first_failure) {
+      steps.X10_ITEM = "FAIL";
+      steps.first_failure = `X10_ITEM / slip_count=${effectiveCount} (expected 1)`;
+      if (slipItems.warning) steps.item_warning = slipItems.warning;
+    }
+
+    if (odds != null && odds >= 1.01 && odds <= 100) {
       steps.X10_ODDS = "PASS";
       try {
         console.log("[arb] X10 ODDS FOUND");
@@ -579,55 +768,45 @@
       } catch (_logErr) {}
     } else if (!steps.first_failure) {
       steps.X10_ODDS = "FAIL";
-      steps.first_failure = "X10_ODDS / odds not found in root";
+      steps.first_failure = "X10_ODDS / odds not found in BetSlip";
     }
 
-    let status = "odds_missing";
+    const statusBlob = textBlock || bodySnippet;
+    const slipStatus = slipStatusFromText(statusBlob, odds);
+    let status = slipStatus;
     const canActivate =
-      steps.X10_ROOT === "PASS" &&
       effectiveCount === 1 &&
       odds != null &&
-      !["closed", "suspended", "disabled", "closed_pending"].includes(
-        String(statusResultFromRoot(root, odds) || "").toLowerCase(),
-      );
+      odds >= 1.01 &&
+      odds <= 100 &&
+      !["closed", "suspended", "disabled"].includes(slipStatus);
 
     if (canActivate) {
       steps.X10_ITEM = "PASS";
       steps.X10_ODDS = "PASS";
       steps.X10_STATUS = "ACTIVE";
       status = "active";
-      steps.first_failure = slipItems.warning ? `warning:${slipItems.warning}` : "";
-    } else if (
-      steps.X10_FRAME === "PASS" &&
-      steps.X10_ROOT === "PASS" &&
-      steps.X10_ITEM === "PASS" &&
-      steps.X10_ODDS === "PASS"
-    ) {
-      steps.X10_STATUS = "ACTIVE";
-      status = "active";
-    } else if (!steps.first_failure && steps.X10_ODDS === "FAIL") {
+      steps.first_failure = slipItems.warning ? `warning:${slipItems.warning}` : steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "warning:root-selector-fallback" : "";
+    } else if (steps.X10_ODDS === "FAIL") {
       status = "odds_missing";
-    }
-
-    function statusResultFromRoot(slipRoot, extractedOdds) {
-      const blob = slipRoot?.innerText || "";
-      if (/betting\s*closed|마감|배팅\s*닫/i.test(blob)) return "closed";
-      if (/suspended|일시\s*정지/i.test(blob)) return "suspended";
-      if (extractedOdds == null) return "odds_missing";
-      return "active";
     }
 
     return {
       steps,
       frame,
       root,
-      rootSelector: anchorResult.selector,
-      anchorMethod: anchorResult.method,
+      root_found: steps.X10_ROOT === "PASS",
+      fallback_used,
+      rootSelector: anchorResult?.selector || "",
+      anchorMethod: anchorResult?.method || (fallback_used ? "text-fallback" : ""),
+      text_block: textBlock || "",
+      text_parsed: textParsed,
       slip_count: effectiveCount,
       slip_count_raw: slipItems.raw_count ?? effectiveCount,
-      header_count: slipItems.header_count,
+      header_count: slipItems.header_count ?? textParsed?.slip_count ?? null,
       item_warning: slipItems.warning || "",
-      slip_items: slipItems.items,
+      line,
+      slip_items: slipItems.items || [],
       odds,
       odds_candidates,
       odds_source,
@@ -638,7 +817,7 @@
       odds_method,
       status,
       keyword_candidates: findKeywordCandidates(),
-      bodySnippet: (root.innerText || "").slice(0, 1500),
+      bodySnippet,
     };
   }
 
@@ -647,8 +826,10 @@
     probeAnchorKeywords,
     findKeywordCandidates,
     findTextAnchorRoot,
+    findBetSlipAnchorTextBlock,
     findSlipCards,
     parseHeaderSlipCount,
+    parseX10SlipText,
     buildStableSelector,
     countSlipItems,
     captureDomReport,
