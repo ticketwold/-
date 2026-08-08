@@ -1,0 +1,186 @@
+:root {
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --blue: #58a6ff;
+  --accent: #238636;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  min-width: 320px;
+}
+
+.header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.ver { color: var(--muted); font-size: 11px; font-weight: 400; }
+.watch-state {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--yellow);
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+}
+.status-grid .card:last-child { grid-column: 1 / -1; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.card-title { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #21262d;
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+.badge.active { color: var(--green); border: 1px solid var(--green); }
+.badge.closed { color: var(--red); border: 1px solid var(--red); }
+.odds { font-size: 20px; font-weight: 700; margin-top: 4px; }
+.stake { font-size: 12px; color: var(--blue); margin-top: 4px; }
+.fx-rate { font-size: 22px; font-weight: 700; }
+
+.profit-panel {
+  text-align: center;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.profit-rate { font-size: 36px; font-weight: 800; color: var(--green); }
+.profit-sub { color: var(--muted); margin-top: 4px; }
+
+.settings {
+  padding: 10px 14px;
+  display: grid;
+  gap: 8px;
+}
+.settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.settings input[type="number"] {
+  width: 110px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.toggle input { margin-right: 6px; }
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 0 14px 10px;
+}
+.actions .btn.warn { grid-column: 1 / -1; }
+
+.btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn:hover { border-color: var(--blue); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.warn { background: #9e6a03; border-color: #9e6a03; color: #fff; }
+.btn.sm { padding: 5px 8px; font-size: 11px; margin: 2px; }
+
+.stake-sync-panel {
+  margin: 0 14px 10px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.tabs {
+  display: flex;
+  border-top: 1px solid var(--border);
+  padding: 0 8px;
+}
+.tab {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 8px 4px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 11px;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--blue); }
+
+.log-panel {
+  height: 160px;
+  overflow: auto;
+  padding: 8px 14px;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.log-line { margin-bottom: 3px; word-break: break-all; }
+.log-line.fail { color: var(--red); }
+.log-line.pass { color: var(--green); }
+
+.debug-panel {
+  padding: 10px 14px;
+}
+.debug-panel.hidden { display: none; }
+#debugResult {
+  margin-top: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  max-height: 120px;
+  overflow: auto;
+}
+
+footer { padding: 8px 14px; }
+
+.alert {
+  position: fixed;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  background: var(--red);
+  color: #fff;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.alert.hidden { display: none; }

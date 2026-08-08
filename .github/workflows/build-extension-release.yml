@@ -1,0 +1,30 @@
+name: Extension Release
+
+on:
+  push:
+    tags:
+      - "arb-extension-v*"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package extension zip
+        run: |
+          cd chrome-extension
+          zip -r ../arb-extension-v2.0.0.zip . -x "*.DS_Store" "test_*" "stake_actions.js"
+          ls -lh ../arb-extension-v2.0.0.zip
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#arb-extension-v}"
+          gh release create "$TAG" arb-extension-v2.0.0.zip \
+            --title "arb-extension v${VER}" \
+            --notes "Standalone Chrome extension — no ArbDesktop.exe required. Load unpacked in chrome://extensions"

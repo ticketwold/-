@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>arb Extension</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>arb Extension <span class="ver">v2.0.0</span></h1>
+    <div id="watchState" class="watch-state">IDLE</div>
+  </header>
+
+  <section class="status-grid">
+    <div class="card" id="x10Card">
+      <div class="card-title">X10</div>
+      <div class="badge" id="x10Found">탭 없음</div>
+      <div class="badge" id="x10Status">—</div>
+      <div class="odds" id="x10Odds">—</div>
+    </div>
+    <div class="card" id="bcCard">
+      <div class="card-title">BC.Game</div>
+      <div class="badge" id="bcFound">탭 없음</div>
+      <div class="badge" id="bcStatus">—</div>
+      <div class="odds" id="bcOdds">—</div>
+      <div class="stake" id="bcStake">—</div>
+    </div>
+    <div class="card" id="fxCard">
+      <div class="card-title">Bithumb USDT/KRW</div>
+      <div class="fx-rate" id="fxRate">—</div>
+      <div class="badge" id="fxStatus">LOADING</div>
+    </div>
+  </section>
+
+  <section class="profit-panel">
+    <div class="profit-rate" id="profitRate">—%</div>
+    <div class="profit-sub" id="profitDelta">목표까지 —</div>
+  </section>
+
+  <section class="settings">
+    <label>목표 수익률 % <input type="number" id="targetProfit" step="0.1" min="0" /></label>
+    <label>텐텐벳 배팅금액 KRW <input type="number" id="btiStake" step="100" min="1000" /></label>
+    <label class="toggle"><input type="checkbox" id="stakeSync" /> BC 금액 자동동기화</label>
+    <label class="toggle"><input type="checkbox" id="autoWatch" /> 자동감시</label>
+    <label class="toggle"><input type="checkbox" id="liveExec" /> 실제배팅</label>
+    <label>안정화 시간(초) <input type="number" id="stabilizeSec" step="0.5" min="0" /></label>
+  </section>
+
+  <section class="actions">
+    <button id="btnStartWatch" class="btn primary">자동감시 시작</button>
+    <button id="btnStopWatch" class="btn">자동감시 중지</button>
+    <button id="btnManualBet" class="btn warn">양쪽 즉시배팅</button>
+  </section>
+
+  <section class="stake-sync-panel" id="stakeSyncPanel">
+    <div>계산: <span id="calcStake">—</span> USDT</div>
+    <div>실제 카트: <span id="actualStake">—</span> USDT</div>
+    <div>상태: <span id="stakeSyncState">—</span></div>
+  </section>
+
+  <section class="tabs">
+    <button class="tab active" data-tab="realtime">실시간</button>
+    <button class="tab" data-tab="odds">배당로그</button>
+    <button class="tab" data-tab="execution">실행로그</button>
+    <button class="tab" data-tab="debug">Debug</button>
+  </section>
+
+  <section class="log-panel" id="logPanel"></section>
+
+  <section class="debug-panel hidden" id="debugPanel">
+    <button class="btn sm" data-action="rescan_x10">X10 카트 재스캔</button>
+    <button class="btn sm" data-action="rescan_bc">BC 카트 재스캔</button>
+    <button class="btn sm" data-action="find_bc_stake">BC Stake Input 찾기</button>
+    <button class="btn sm" data-action="test_bc_stake">BC 1.0 USDT 테스트</button>
+    <button class="btn sm" data-action="find_x10_button">X10 Bet 버튼</button>
+    <button class="btn sm" data-action="find_bc_button">BC Bet 버튼</button>
+    <button class="btn sm" data-action="dry_run_dispatch">Dry-run Dispatch</button>
+    <pre id="debugResult"></pre>
+  </section>
+
+  <footer>
+    <button id="btnExportLogs" class="btn sm">CSV Export</button>
+  </footer>
+
+  <div id="alert" class="alert hidden"></div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

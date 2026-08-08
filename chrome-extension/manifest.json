@@ -1,0 +1,82 @@
+{
+  "manifest_version": 3,
+  "name": "arb Extension",
+  "version": "2.0.0",
+  "description": "BC.Game + X10 arbitrage — standalone Chrome extension (no desktop app)",
+
+  "permissions": ["tabs", "storage", "alarms", "sidePanel", "webNavigation"],
+
+  "host_permissions": [
+    "*://*.bc.game/*",
+    "*://bc.game/*",
+    "*://*.x10x10s.com/*",
+    "*://x10x10s.com/*",
+    "*://*.sptpub.com/*",
+    "*://*.betby.com/*",
+    "*://*.sptsportscdn.com/*",
+    "*://*.biahosted.com/*",
+    "*://*.cocoesports.com/*",
+    "*://*.sportscenter.com/*",
+    "*://*.bti.bet/*",
+    "https://api.bithumb.com/*"
+  ],
+
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+
+  "action": {
+    "default_title": "arb Extension"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bc.game/*",
+        "*://bc.game/*",
+        "*://*.sptpub.com/*",
+        "*://*.betby.com/*",
+        "*://*.sptsportscdn.com/*",
+        "*://*.biahosted.com/*",
+        "*://*.cocoesports.com/*"
+      ],
+      "js": [
+        "bet_type_parser.js",
+        "frame_scanner.js",
+        "debug_trace.js",
+        "bc_stake.js",
+        "bet_executor.js",
+        "frame_agent.js",
+        "content_bc.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": [
+        "*://*.x10x10s.com/*",
+        "*://x10x10s.com/*",
+        "*://*.sportscenter.com/*",
+        "*://*.bti.bet/*"
+      ],
+      "js": [
+        "bet_type_parser.js",
+        "frame_scanner.js",
+        "debug_trace.js",
+        "bc_stake.js",
+        "bet_executor.js",
+        "frame_agent.js",
+        "content_x10.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ]
+}
