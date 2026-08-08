@@ -130,7 +130,19 @@
   }
 
   function hasOddsPattern(textBlob) {
-    return /\b[12]\.\d{2}\b/.test(textBlob || "");
+    const t = textBlob || "";
+    if (/\b\d{1,2}\.\d{2}\b/.test(t)) return true;
+    if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
+    const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines.some((l) => /^\d{1,2}\.\d{2}$/.test(l));
+  }
+
+  function isSelectionLineText(lineText) {
+    const t = String(lineText || "").trim();
+    if (!t) return false;
+    if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
+    if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
+    return false;
   }
 
   function findTextAnchorRoot() {
@@ -169,11 +181,16 @@
       if (el === root || !root.contains(el)) return;
       if (!isVisible(el)) return;
       const t = (el.innerText || "").trim();
-      if (t.length < 10 || t.length > 700) return;
-      if (!hasOddsPattern(t)) return;
+      if (t.length < 4 || t.length > 700) return;
+      const hasOdds = hasOddsPattern(t);
+      const hasSelection = isSelectionLineText(t);
+      if (!hasOdds && !hasSelection) return;
       if (/^(베팅슬립|베팅 슬립|싱글|조합)\s*\d*$/i.test(t.replace(/\s+/g, " "))) return;
-      const childWithOdds = [...el.children].filter((c) => hasOddsPattern(c.innerText || "")).length;
-      if (childWithOdds > 1) return;
+      const childWithSignal = [...el.children].filter((c) => {
+        const ct = c.innerText || "";
+        return hasOddsPattern(ct) || isSelectionLineText(ct);
+      }).length;
+      if (childWithSignal > 1) return;
       candidates.push(el);
     });
     const minimal = candidates.filter(
@@ -326,10 +343,16 @@
     }
 
     steps.X10_ROOT = "PASS";
+    try {
+      console.log("[arb] X10 ROOT FOUND");
+    } catch (_logErr) {}
     const root = anchorResult.root;
     const slipItems = countSlipItems(root);
     if (slipItems.count === 1) {
       steps.X10_ITEM = "PASS";
+      try {
+        console.log("[arb] X10 ITEM FOUND");
+      } catch (_logErr) {}
     } else {
       steps.X10_ITEM = "FAIL";
       steps.first_failure = `X10_ITEM / slip_count=${slipItems.count} (expected 1)`;
@@ -338,15 +361,29 @@
     let odds = null;
     let odds_candidates = [];
     let odds_source = "";
+    let selection_text = "";
+    let selection_node = null;
+    let odds_text = "";
+    let odds_node = null;
+    let odds_method = "";
     if (typeof oddsExtractor === "function") {
       const extracted = oddsExtractor(root, null);
       odds = extracted?.odds ?? null;
       odds_candidates = extracted?.candidates || [];
       odds_source = extracted?.source || "";
+      selection_text = extracted?.selection_text || "";
+      selection_node = extracted?.selection_node || null;
+      odds_text = extracted?.odds_text || "";
+      odds_node = extracted?.odds_node || null;
+      odds_method = extracted?.method || odds_source;
     }
 
     if (odds != null) {
       steps.X10_ODDS = "PASS";
+      try {
+        console.log("[arb] X10 ODDS FOUND");
+        console.log(`[arb] ${odds}`);
+      } catch (_logErr) {}
     } else if (!steps.first_failure) {
       steps.X10_ODDS = "FAIL";
       steps.first_failure = "X10_ODDS / odds not found in root";
@@ -376,6 +413,11 @@
       odds,
       odds_candidates,
       odds_source,
+      selection_text,
+      selection_node,
+      odds_text,
+      odds_node,
+      odds_method,
       status,
       keyword_candidates: findKeywordCandidates(),
       bodySnippet: (root.innerText || "").slice(0, 1500),
