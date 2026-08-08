@@ -118,6 +118,49 @@ Live
 14,500 ₩
 베팅하기`;
 
+const pollutedSbCol = `프랭크바로스 TC (W)
+0
+:
+0
+KFF Mitrovica (Wom)
+베팅슬립
+1
+싱글
+UEFA 챔피언스 리그 예선 - 여자
+프랭크바로스 TC (W) - KFF Mitrovica (Wom)
+Live
+하프타임 0:0
+토탈 골
+오버 (1.5)
+1.45
+₩
+최대
++10,000 ₩
++100,000 ₩
++500,000 ₩
+당첨 예상금액
+14,500 ₩
+베팅하기
+1.38
+3.95
+10.00`;
+
+function extractBetSlipTextBlock(rawText) {
+  const t = String(rawText || "").replace(/\r/g, "");
+  const start = t.search(/베팅\s*슬립|베팅슬립/);
+  if (start < 0) return null;
+  const slice = t.slice(start);
+  const endMatch = slice.match(/베팅하기|배당\s*수락(?:\s*및\s*배팅)?/);
+  if (!endMatch || endMatch.index == null) return null;
+  return slice.slice(0, endMatch.index + endMatch[0].length).trim();
+}
+
+const extracted = extractBetSlipTextBlock(pollutedSbCol);
+assert(extracted && /베팅슬립/.test(extracted), "extract block from SBCol");
+assert(!/1\.38/.test(extracted), "match list odds excluded from block");
+const fromPolluted = parseX10SlipText(extracted);
+assert(fromPolluted.odds === 1.45, `polluted SBCol odds 1.45 got ${fromPolluted.odds}`);
+
 const parsed = parseX10SlipText(uefaSlip);
 assert(parsed.slip_count === 1, `slip_count=1 got ${parsed.slip_count}`);
 assert(parsed.line === 1.5, `line=1.5 got ${parsed.line}`);

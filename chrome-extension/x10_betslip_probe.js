@@ -128,15 +128,22 @@
     walkElements((el) => {
       if (!isVisible(el)) return;
       const inner = (el.innerText || el.textContent || "").trim();
-      if (!inner || inner.length > 2500) return;
+      if (!inner || inner.length > 8000) return;
       for (const check of BETSLIP_ANCHOR_CHECKS) {
         if (hits[check.key]) continue;
-        if (check.test(inner)) {
-          hits[check.key] = {
-            selector: buildStableSelector(el),
-            text: inner.slice(0, 200),
-          };
+        if (!check.test(inner)) continue;
+        if (check.key === "베팅슬립" || check.key === "selection" || check.key === "odds") {
+          const block = extractBetSlipTextBlock(inner);
+          if (!block) continue;
+          if (check.key === "베팅슬립") {
+            hits[check.key] = { selector: buildStableSelector(el), text: block.slice(0, 800) };
+          }
+          continue;
         }
+        hits[check.key] = {
+          selector: buildStableSelector(el),
+          text: inner.slice(0, 200),
+        };
       }
     });
     return { hits, has_any: Object.keys(hits).length > 0 };
@@ -309,20 +316,48 @@
     return null;
   }
 
-  /** BetSlip anchor text block — 베팅슬립…베팅하기 (경기목록 제외) */
+  /** 큰 SBCol/사이드바 텍스트에서 베팅슬립~베팅하기 구간만 잘라냄 */
+  function extractBetSlipTextBlock(rawText) {
+    const t = String(rawText || "").replace(/\r/g, "");
+    const start = t.search(/베팅\s*슬립|베팅슬립/);
+    if (start < 0) return null;
+    const slice = t.slice(start);
+    const endMatch = slice.match(/베팅하기|배당\s*수락(?:\s*및\s*배팅)?/);
+    if (!endMatch || endMatch.index == null) {
+      if (!/당첨\s*예상/.test(slice)) return null;
+      return slice.trim();
+    }
+    const endPos = endMatch.index + endMatch[0].length;
+    return slice.slice(0, endPos).trim();
+  }
+
+  /** BetSlip anchor text block — 베팅슬립…베팅하기 (경기목록/사이드바 제외) */
   function findBetSlipAnchorTextBlock() {
     let best = null;
     let bestLen = Infinity;
+
+    const consider = (raw) => {
+      const block = extractBetSlipTextBlock(raw);
+      if (!block || !isBetSlipTextBlock(block)) return;
+      if (block.length < bestLen) {
+        bestLen = block.length;
+        best = block;
+      }
+    };
+
     walkElements((el) => {
       if (!isVisible(el)) return;
-      const t = (el.innerText || el.textContent || "").replace(/\r/g, "").trim();
-      if (!isBetSlipTextBlock(t)) return;
-      if (looksLikeMatchListPanel(t)) return;
-      if (t.length < bestLen) {
-        bestLen = t.length;
-        best = t;
-      }
+      const raw = el.innerText || el.textContent || "";
+      if (!/베팅\s*슬립|베팅슬립/.test(raw)) return;
+      consider(raw);
     });
+
+    if (!best) {
+      try {
+        consider(bodyInner());
+      } catch (_err) {}
+    }
+
     return best;
   }
 
@@ -827,6 +862,7 @@
     findKeywordCandidates,
     findTextAnchorRoot,
     findBetSlipAnchorTextBlock,
+    extractBetSlipTextBlock,
     findSlipCards,
     parseHeaderSlipCount,
     parseX10SlipText,
