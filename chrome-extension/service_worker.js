@@ -500,6 +500,86 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+async function probeAllX10Frames() {
+  const { x10Tab } = await refreshTabs();
+  if (!x10Tab?.id) return { frames: [], target: null };
+  const tabId = x10Tab.id;
+  const frames = await chrome.webNavigation.getAllFrames({ tabId });
+  const results = [];
+  let target = null;
+  for (const frame of frames) {
+    const base = { frameId: frame.frameId, url: frame.url };
+    try {
+      const resp = await chrome.tabs.sendMessage(tabId, { type: "x10_probe" }, { frameId: frame.frameId });
+      const entry = {
+        ...base,
+        readyState: resp?.readyState || resp?.document_ready,
+        bodyLength: resp?.bodyLength ?? resp?.body_text_length,
+        hasBetSlipKeyword: !!(resp?.hasBetSlipKeyword ?? resp?.has_betslip_keyword),
+        pipeline_steps: resp?.pipeline_steps || {},
+        root_found: resp?.root_found,
+        slip_count: resp?.slip_count,
+        extracted_odds: resp?.extracted_odds,
+        first_failure: resp?.first_failure,
+      };
+      results.push(entry);
+      if (entry.pipeline_steps?.X10_ROOT === "PASS") {
+        target = { frameId: frame.frameId, url: frame.url };
+      } else if (!target && entry.hasBetSlipKeyword) {
+        target = { frameId: frame.frameId, url: frame.url };
+      }
+    } catch (_err) {
+      results.push({ ...base, error: "no-content-script" });
+    }
+  }
+  return { frames: results, target };
+}
+
+function buildCombinedCaptureHtml(parts) {
+  const esc = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  const chunks = [
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>x10-betslip-debug</title></head><body>",
+    `<h1>x10 BetSlip DOM Capture (all frames)</h1><p>${new Date().toISOString()}</p>`,
+  ];
+  for (const p of parts) {
+    chunks.push(`<h2>Frame ${p.frameId} — ${esc(p.url)}</h2>`);
+    if (p.report) {
+      chunks.push(`<pre>${esc(JSON.stringify(p.report, null, 2))}</pre>`);
+    }
+    chunks.push(p.html || "");
+  }
+  chunks.push("</body></html>");
+  return chunks.join("\n");
+}
+
+async function captureX10DomAllFrames() {
+  const { x10Tab } = await refreshTabs();
+  if (!x10Tab?.id) return { ok: false, reason: "x10-tab-not-found" };
+  const tabId = x10Tab.id;
+  const frames = await chrome.webNavigation.getAllFrames({ tabId });
+  const parts = [];
+  for (const frame of frames) {
+    try {
+      const resp = await chrome.tabs.sendMessage(tabId, { type: "x10_capture_dom" }, { frameId: frame.frameId });
+      if (resp?.html || resp?.report) {
+        parts.push({ frameId: frame.frameId, url: frame.url, html: resp.html, report: resp.report });
+      }
+    } catch (_err) {}
+  }
+  if (!parts.length) return { ok: false, reason: "no-frame-capture" };
+  return {
+    ok: true,
+    filename: "x10-betslip-debug.html",
+    html: buildCombinedCaptureHtml(parts),
+    frame_count: parts.length,
+    probe: await probeAllX10Frames(),
+  };
+}
+
 async function runDebugAction(action) {
   const settings = runtime.settings;
   switch (action) {
@@ -518,6 +598,10 @@ async function runDebugAction(action) {
     case "dry_run_dispatch":
       runtime.settings = { ...settings, live_execution_enabled: false };
       return dispatchParallel({ manual: true });
+    case "probe_x10_frames":
+      return probeAllX10Frames();
+    case "capture_x10_dom":
+      return captureX10DomAllFrames();
     default:
       return { ok: false, reason: "unknown-action" };
   }

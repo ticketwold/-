@@ -137,7 +137,17 @@ $("btnManualBet").addEventListener("click", async () => {
 
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", async () => {
-    const result = await send("debug_action", { action: btn.dataset.action });
+    const action = btn.dataset.action;
+    const result = await send("debug_action", { action });
+  if (action === "capture_x10_dom" && result?.html) {
+      const blob = new Blob([result.html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = result.filename || "x10-betslip-debug.html";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
     $("debugResult").textContent = JSON.stringify(result, null, 2);
   });
 });

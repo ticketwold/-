@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "arb Extension",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "BC.Game + X10 arbitrage — standalone Chrome extension (no desktop app)",
 
   "permissions": ["tabs", "storage", "alarms", "sidePanel", "webNavigation"],
@@ -67,6 +67,7 @@
       ],
       "js": [
         "bet_type_parser.js",
+        "x10_betslip_probe.js",
         "frame_scanner.js",
         "debug_trace.js",
         "bc_stake.js",
