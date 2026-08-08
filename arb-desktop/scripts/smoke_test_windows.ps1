@@ -73,4 +73,4 @@ Write-Host "STARTUP log steps: PASS"
 Write-Host "RESULT: Windows exe survival 5min = PASS"
 
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Write-Host "Smoke test completed — process terminated"
+Write-Host "Smoke test completed - process terminated"
