@@ -438,9 +438,63 @@
       if (site === "x10" && message?.type === "x10_probe") {
         const scanner = global.ArbFrameScanner;
         const probe = global.ArbX10Probe;
-        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth) || {};
         const frame = probe?.probeFrame?.() || {};
-        sendResponse({ ok: true, frame_url: location.href, frame_depth: frameDepth, ...frame, ...snap });
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth, frame) || {};
+        const slip = scanner?.readX10Slip?.(frame) || {};
+        const rootFound = snap.slip_root_found === "YES" || snap.root_found === "YES";
+        const odds = snap.extracted_odds ?? null;
+        const status = String(snap.parsed_status || "empty").toUpperCase();
+        sendResponse({
+          ok: true,
+          frame_id: message.frame_id ?? null,
+          frame_url: location.href,
+          frame_depth: frameDepth,
+          root_found: rootFound,
+          slip_count: snap.slip_count ?? 0,
+          odds,
+          status,
+          body_has_keywords: !!(frame.body_has_keywords ?? frame.hasBetSlipKeyword),
+          ...frame,
+          ...snap,
+        });
+        return true;
+      }
+      if (site === "x10" && message?.type === "RESCAN_X10") {
+        const scanner = global.ArbFrameScanner;
+        const probe = global.ArbX10Probe;
+        scan(true);
+        const frame = probe?.probeFrame?.() || {};
+        const slip = scanner?.readX10Slip?.(frame) || {};
+        const snap = scanner?.buildX10DebugSnapshot?.(frameDepth, frame) || {};
+        const rootFound = slip.slip_root_found === "YES" || snap.slip_root_found === "YES";
+        const fallbackUsed = !!(slip.fallback_used ?? snap.fallback_used);
+        const slipCount = slip.slip_count ?? snap.slip_count ?? 0;
+        const odds = slip.extracted_odds ?? slip.items?.[0]?.odds ?? snap.extracted_odds ?? null;
+        const rawStatus = slip.parsed_status || snap.parsed_status || "empty";
+        const status =
+          rawStatus === "active" && odds != null ? "ACTIVE" : String(rawStatus || "empty").toUpperCase();
+        const bodyHasKeywords = !!(frame.body_has_keywords ?? frame.hasBetSlipKeyword);
+        const pass = slipCount === 1 && odds != null && status === "ACTIVE";
+        sendResponse({
+          ok: pass,
+          frame_id: message.frame_id ?? null,
+          frame_url: location.href,
+          frame_depth: frameDepth,
+          root_found: rootFound,
+          fallback_used: fallbackUsed,
+          slip_count: slipCount,
+          odds,
+          status,
+          body_has_keywords: bodyHasKeywords,
+          keyword_frame: bodyHasKeywords,
+          anchor_hits: slip.anchor_hits || frame.anchor_hits || {},
+          pipeline_steps: slip.pipeline_steps || snap.pipeline_steps || {},
+          first_failure: slip.first_failure || snap.first_failure || "",
+          fallback_attempted: !!(slip.fallback_attempted ?? snap.fallback_attempted),
+          odds_locator_debug: snap.odds_locator_debug || "",
+          slip,
+          ...snap,
+        });
         return true;
       }
       if (site === "x10" && message?.type === "x10_capture_dom") {

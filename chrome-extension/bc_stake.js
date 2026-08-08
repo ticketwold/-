@@ -15,20 +15,22 @@
   ];
 
   const BC_INPUT_SELECTORS = [
+    '[data-editor-id*="stake" i]',
+    '[data-testid*="stake" i]',
     '[data-editor-id="betslipStakeInput"]',
     '[data-editor-id*="betslipStake"]',
     '[data-editor-id*="Stake"]',
-    'input[type="text"]',
-    'input[type="number"]',
     'input[inputmode="decimal"]',
     'input[inputmode="numeric"]',
+    'input[type="number"]',
+    'input[type="text"]',
     'input[class*="stake" i]',
     'input[class*="amount" i]',
   ];
 
   const VERIFY_DELAYS_MS = [0, 50, 100, 250];
   const MAX_RETRIES = 2;
-  const TOLERANCE = 0.15;
+  const TOLERANCE = 0.01;
 
   let _lastDebug = null;
   let _stakeObserver = null;
@@ -161,8 +163,8 @@
     };
   }
 
-  function findBcSlipRoot() {
-    for (const sel of BC_SLIP_SELECTORS) {
+  function findBcSelectionElement() {
+    for (const sel of ['[data-editor-id="betslipSelection"]', '[data-editor-id*="betslipSelection"]']) {
       let nodes = [];
       try {
         nodes = [...document.querySelectorAll(sel)];
@@ -170,21 +172,133 @@
         continue;
       }
       for (const el of nodes) {
-        if (visible(el)) return { root: el, selector: sel };
+        if (!visible(el)) continue;
+        const editorId = el.getAttribute("data-editor-id") || "";
+        if (/betslipSelections$/i.test(editorId)) continue;
+        return el;
       }
     }
-    return { root: null, selector: "" };
+    return null;
   }
 
-  function scoreBcStakeInput(input, slip) {
-    let score = 0;
-    if (!slip?.root || !slip.root.contains(input)) return -1;
+  function hasBcStakeInputIn(node) {
+    if (!node) return false;
+    for (const sel of BC_INPUT_SELECTORS) {
+      try {
+        for (const el of node.querySelectorAll(sel)) {
+          if (isEditableInput(el) && visible(el)) return true;
+        }
+      } catch (_err) {}
+    }
+    return false;
+  }
+
+  function hasBcBetButtonIn(node) {
+    if (!node) return false;
+    let nodes = [];
+    try {
+      nodes = [...node.querySelectorAll("button, [role='button']")];
+    } catch (_err) {
+      return false;
+    }
+    return nodes.some((btn) => {
+      if (!visible(btn)) return false;
+      return /bet|베팅|place/i.test(text(btn));
+    });
+  }
+
+  function findBcSlipRoot() {
+    const selection = findBcSelectionElement();
+
+    if (selection) {
+      let node = selection;
+      let best = null;
+      while (node && node !== document.body) {
+        if (hasBcStakeInputIn(node) || hasBcBetButtonIn(node)) {
+          best = node;
+        }
+        node = node.parentElement;
+      }
+      if (best) {
+        return { root: best, selector: "ancestor-of-betslipSelection", selection };
+      }
+
+      node = selection.parentElement;
+      while (node && node !== document.body) {
+        let selectionCount = 0;
+        try {
+          for (const el of node.querySelectorAll(
+            '[data-editor-id="betslipSelection"], [data-editor-id*="betslipSelection"]',
+          )) {
+            if (!visible(el)) continue;
+            const editorId = el.getAttribute("data-editor-id") || "";
+            if (/betslipSelections$/i.test(editorId)) continue;
+            selectionCount += 1;
+          }
+        } catch (_err) {}
+        if (selectionCount >= 1 && (hasBcStakeInputIn(node) || hasBcBetButtonIn(node))) {
+          return { root: node, selector: "ancestor-of-betslipSelection", selection };
+        }
+        node = node.parentElement;
+      }
+    }
+
+    for (const sel of BC_SLIP_SELECTORS) {
+      if (sel.includes("betslipSelection")) continue;
+      let nodes = [];
+      try {
+        nodes = [...document.querySelectorAll(sel)];
+      } catch (_err) {
+        continue;
+      }
+      for (const el of nodes) {
+        if (!visible(el)) continue;
+        return { root: el, selector: sel, selection: findBcSelectionElement() };
+      }
+    }
+    return { root: null, selector: "", selection: selection || null };
+  }
+
+  function getBcStakeSearchRoots(slip) {
+    const roots = [];
+    const seen = new Set();
+    const add = (root, scope) => {
+      if (!root || seen.has(root)) return;
+      seen.add(root);
+      roots.push({ root, scope });
+    };
+
+    if (slip?.root) add(slip.root, "slip-root");
+
+    let node = slip?.selection || null;
+    for (let depth = 0; node && depth < 8; depth += 1) {
+      add(node, depth === 0 ? "selection-card" : "selection-ancestor");
+      if (slip?.root && node === slip.root) break;
+      node = node.parentElement;
+    }
+
+    if (slip?.selection?.parentElement) {
+      let parent = slip.selection.parentElement;
+      for (let depth = 0; parent && depth < 4; depth += 1) {
+        add(parent, "near-selection-parent");
+        if (slip?.root && parent === slip.root) break;
+        parent = parent.parentElement;
+      }
+    }
+
+    return roots;
+  }
+
+  function scoreBcStakeInput(input, searchRoot, scope = "slip-root") {
+    if (!searchRoot?.contains(input)) return -1;
     if (!visible(input)) return -1;
-    if (input.disabled || input.readOnly) score -= 200;
-    if (input.getAttribute("aria-disabled") === "true") score -= 200;
-    const blob = `${input.id} ${input.placeholder} ${input.className} ${input.getAttribute("data-editor-id") || ""} ${input.getAttribute("data-testid") || ""}`.toLowerCase();
-    if (/stake|amount|usdt|counter|decimal|bet/i.test(blob)) score += 100;
-    if (input.getAttribute("data-editor-id")?.includes("Stake")) score += 150;
+    if (input.disabled || input.readOnly) return -200;
+    if (input.getAttribute("aria-disabled") === "true") return -200;
+    let score = scope === "slip-root" ? 40 : 20;
+    const blob = `${input.id} ${input.placeholder} ${input.className} ${input.getAttribute("data-editor-id") || ""} ${input.getAttribute("data-testid") || ""} ${input.getAttribute("name") || ""}`.toLowerCase();
+    if (/stake|amount|usdt|bet/i.test(blob)) score += 100;
+    if (input.getAttribute("data-editor-id")?.toLowerCase().includes("stake")) score += 150;
+    if (input.getAttribute("data-testid")?.toLowerCase().includes("stake")) score += 120;
     if (input.type === "number" || input.getAttribute("inputmode") === "decimal") score += 40;
     if (input.isContentEditable) score += 20;
     return score;
@@ -229,37 +343,45 @@
     }
 
     const seen = new Set();
-    for (const sel of BC_INPUT_SELECTORS) {
-      const nodes = collectInputNodes(slip.root, sel);
-      const count = nodes.length;
-      let sample = null;
-      for (const el of nodes) {
-        if (seen.has(el)) continue;
-        seen.add(el);
-        const meta = inputMeta(el);
-        const score = scoreBcStakeInput(el, slip);
-        if (score < 0) continue;
-        const probeInfo = probe ? probeInput(el) : null;
-        const candidate = {
-          input: el,
-          score,
-          selector: sel,
-          meta,
-          frame_url,
-          probe: probeInfo,
-        };
-        candidates.push(candidate);
-        if (!sample) sample = meta;
-        if (probeInfo) {
-          scanLines.push(
-            `[BC INPUT SCAN] probe selector=${sel} focus=${probeInfo.focus_ok} value=${probeInfo.value} placeholder=${probeInfo.placeholder} disabled=${probeInfo.disabled} readonly=${probeInfo.readonly} aria-disabled=${probeInfo["aria-disabled"]}`
-          );
+    const searchRoots = getBcStakeSearchRoots(slip);
+    for (const { root: searchRoot, scope } of searchRoots) {
+      for (const sel of BC_INPUT_SELECTORS) {
+        const nodes = collectInputNodes(searchRoot, sel);
+        for (const el of nodes) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const meta = inputMeta(el);
+          const score = scoreBcStakeInput(el, searchRoot, scope);
+          if (score < 0) continue;
+          const probeInfo = probe ? probeInput(el) : null;
+          const candidate = {
+            input: el,
+            score,
+            selector: sel,
+            meta,
+            frame_url,
+            probe: probeInfo,
+            scope,
+          };
+          candidates.push(candidate);
+          if (probeInfo) {
+            scanLines.push(
+              `[BC INPUT SCAN] probe selector=${sel} scope=${scope} focus=${probeInfo.focus_ok} value=${probeInfo.value} placeholder=${probeInfo.placeholder} disabled=${probeInfo.disabled} readonly=${probeInfo.readonly} aria-disabled=${probeInfo["aria-disabled"]}`
+            );
+          }
         }
       }
-      const row = {
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    const best = candidates[0] || null;
+    for (const sel of BC_INPUT_SELECTORS) {
+      const matched = candidates.filter((c) => c.selector === sel);
+      const sample = matched[0]?.meta || null;
+      scans.push({
         frame_url,
         selector: sel,
-        count,
+        count: matched.length,
         placeholder: sample?.placeholder || "",
         type: sample?.type || "",
         inputmode: sample?.inputmode || "",
@@ -269,17 +391,14 @@
         readonly: sample?.readonly ?? "",
         "aria-disabled": sample?.["aria-disabled"] || "",
         outerHTML: sample?.outerHTML || "",
-      };
-      scans.push(row);
-      if (debug) {
+      });
+      if (debug && matched.length) {
         scanLines.push(
-          `[BC INPUT SCAN] frame_url=${frame_url} selector=${sel} count=${count} placeholder=${row.placeholder} type=${row.type} inputmode=${row.inputmode} class=${row.class} value=${row.value} outerHTML=${row.outerHTML}`
+          `[BC INPUT SCAN] frame_url=${frame_url} selector=${sel} count=${matched.length} placeholder=${sample?.placeholder || ""} type=${sample?.type || ""}`
         );
       }
     }
 
-    candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0] || null;
     const input_candidates = candidates.map((c) => ({
       selector: c.selector,
       score: c.score,
@@ -330,6 +449,13 @@
       }
       emitStakeDebug("BC INPUT SCAN", report);
       if (found) {
+        emitBcStakeStep("LOCATE_BC_STAKE_INPUT", {
+          input_locator: "PASS",
+          frame_url,
+          selector: found.selector,
+          placeholder: found.placeholder || "",
+          before: found.current_value ?? 0,
+        });
         emitStakeDebug("BC STAKE INPUT FOUND", found);
       } else {
         emitStakeDebug("BC STAKE INPUT NOT FOUND", report);
@@ -653,13 +779,14 @@
   function watchBcStakeInput(onChange) {
     _onStakeDomChange = onChange;
     if (_stakeObserver) _stakeObserver.disconnect();
-    const slip = findBcSlipRoot().root;
-    if (!slip) return;
+    const slip = findBcSlipRoot();
+    const observeRoot = slip.root || slip.selection?.parentElement || document.body;
+    if (!observeRoot) return;
     _stakeObserver = new MutationObserver(() => {
       registerBcStakeLocator();
       if (_onStakeDomChange) _onStakeDomChange();
     });
-    _stakeObserver.observe(slip, {
+    _stakeObserver.observe(observeRoot, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -691,7 +818,6 @@
       try {
         btn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
         btn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-        btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
       } catch (_err) {}
       btn.click();
       return true;
@@ -699,15 +825,27 @@
       setTimeout(() => _clickLocks.delete(lockKey), 500);
     }
   }
+
   function findBcBetButton() {
-    const slip = findBcSlipRoot().root;
-    if (!slip) return null;
-    let nodes = [];
-    try {
-      nodes = [...slip.querySelectorAll("button, [role='button'], a[role='button']")];
-    } catch (_err) {
-      return null;
+    const slip = findBcSlipRoot();
+    const searchRoots = [];
+    const seen = new Set();
+    const addRoot = (node) => {
+      if (!node || seen.has(node)) return;
+      seen.add(node);
+      searchRoots.push(node);
+    };
+    if (slip.root) addRoot(slip.root);
+    if (slip.selection) {
+      let node = slip.selection.parentElement;
+      for (let depth = 0; node && depth < 6; depth += 1) {
+        addRoot(node);
+        if (slip.root && node === slip.root) break;
+        node = node.parentElement;
+      }
     }
+    if (!searchRoots.length) return null;
+
     const patterns = [
       /^베팅하기$/i,
       /^bet$/i,
@@ -717,14 +855,22 @@
       /submit\s*bet/i,
     ];
     let fallback = null;
-    for (const btn of nodes) {
-      if (!visible(btn)) continue;
-      const label = text(btn);
-      if (!label) continue;
-      for (const re of patterns) {
-        if (re.test(label)) return btn;
+    for (const root of searchRoots) {
+      let nodes = [];
+      try {
+        nodes = [...root.querySelectorAll("button, [role='button'], a[role='button']")];
+      } catch (_err) {
+        continue;
       }
-      if (/bet|베팅|place/i.test(label) && !fallback) fallback = btn;
+      for (const btn of nodes) {
+        if (!visible(btn)) continue;
+        const label = text(btn);
+        if (!label) continue;
+        for (const re of patterns) {
+          if (re.test(label)) return btn;
+        }
+        if (/bet|베팅|place/i.test(label) && !fallback) fallback = btn;
+      }
     }
     return fallback;
   }
@@ -794,13 +940,13 @@
   }
 
   async function placeBcBet(executionId) {
-    const slip = findBcSlipRoot().root;
-    if (!slip) {
+    const slip = findBcSlipRoot();
+    if (!slip.root) {
       return { ok: false, reason: "betslip-not-in-frame", deferred: true, frame_url: location.href };
     }
     const btn = findBcBetButton();
     if (!btn) {
-      emitStakeDebug("BET BUTTON FAILED", { site: "bc", reason: "button-not-found", frame_url: location.href });
+      emitStakeDebug("BC BET BUTTON FAILED", { site: "bc", reason: "button-not-found", frame_url: location.href });
       return { ok: false, reason: "bc-bet-button-not-found", deferred: true, frame_url: location.href };
     }
     if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
@@ -808,7 +954,11 @@
     }
     const meta = buttonMeta(btn);
     meta.site = "bc";
-    emitStakeDebug("BET BUTTON FOUND", meta);
+    emitStakeDebug("BC BET BUTTON FOUND", {
+      ...meta,
+      text: text(btn),
+      disabled: !!btn.disabled,
+    });
     const clicked = clickElement(btn, executionId ? `bc:${executionId}` : "bc");
     return {
       ok: clicked,
@@ -870,7 +1020,7 @@
       class: meta.class,
       selector: meta.selector,
     };
-    emitStakeDebug("BET BUTTON FOUND", result);
+    emitStakeDebug(siteKey === "bc" ? "BC BET BUTTON FOUND" : "BET BUTTON FOUND", result);
     return result;
   }
 

@@ -52,6 +52,43 @@ export function slipPriority(result) {
   return 0;
 }
 
+/** X10 multi-frame priority — top EMPTY must not beat iframe ACTIVE */
+export function x10SlipPriority(result) {
+  if (!result) return 0;
+  const rootFound = result.slip_root_found === "YES" || result.root_found === "YES";
+  const slipCount = Number(result.slip_count || 0);
+  const odds = result.extracted_odds ?? result.items?.[0]?.odds ?? null;
+  const status = String(result.parsed_status || result.items?.[0]?.status || "").toLowerCase();
+
+  if (!rootFound) {
+    if (status === "active" && odds != null) return 100;
+    const blob = String(result.slip_inner_text || "");
+    const hasKw = /베팅\s*슬립|베팅슬립|\b싱글\b|배당\s*수락|배팅\s*수락/i.test(blob);
+    return hasKw ? 10 : 0;
+  }
+  if (status === "active" && odds != null) return 100;
+  if (slipCount === 1) return 80;
+  if (["closed", "suspended", "disabled", "closed_pending"].includes(status)) return 70;
+  return 50;
+}
+
+export function x10FrameScanPriority(entry) {
+  if (!entry) return 0;
+  const rootFound = entry.root_found === true || entry.root_found === "YES";
+  const slipCount = Number(entry.slip_count || 0);
+  const odds = entry.odds != null && entry.odds !== "" ? Number(entry.odds) : null;
+  const status = String(entry.status || "").toLowerCase();
+
+  if (!rootFound) {
+    if (status === "ACTIVE" && odds != null && Number.isFinite(odds)) return 100;
+    return entry.body_has_keywords ? 10 : 0;
+  }
+  if (status === "active" && odds != null && Number.isFinite(odds)) return 100;
+  if (slipCount === 1) return 80;
+  if (["closed", "suspended", "disabled", "closed_pending"].includes(status)) return 70;
+  return 50;
+}
+
 function pickBestSiteResult(site) {
   pruneFrameCache();
   let best = null;
@@ -98,7 +135,7 @@ export function ingestSlipUpdate(site, result, meta) {
   }
 
   const cacheKey = frameCacheKey(key, meta.tab_id, meta.frame_id);
-  const priority = slipPriority(result);
+  const priority = key === "x10" ? x10SlipPriority(result) : slipPriority(result);
   frameSlipCache[cacheKey] = {
     result,
     meta,

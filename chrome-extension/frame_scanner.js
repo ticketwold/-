@@ -370,7 +370,7 @@
     return item;
   }
 
-  function parseX10SlipText(rootText) {
+  function parseX10SlipMeta(rootText) {
     const lines = String(rootText || "")
       .split(/\n+/)
       .map((l) => l.replace(/\s+/g, " ").trim())
@@ -764,15 +764,18 @@
     return scanX10DiagnosticSelectors();
   }
 
-  function buildX10DebugSnapshot(frameDepth) {
+  function buildX10DebugSnapshot(frameDepth, frameProbe) {
     const probeApi = global.ArbX10Probe;
-    const frameInfo = probeApi?.probeFrame?.() || {
+    const frameInfo = frameProbe || probeApi?.probeFrame?.() || {
       frame_url: location.href,
       readyState: document.readyState,
       bodyLength: 0,
       hasBetSlipKeyword: false,
     };
-    const pipeline = probeApi?.runPipeline?.((root, stake) => extractX10OddsFromRoot(root, stake)) || {
+    const pipeline = probeApi?.runPipeline?.(
+      (root, stake) => extractX10OddsFromRoot(root, stake),
+      { frame: frameInfo },
+    ) || {
       steps: {},
       root: null,
       odds: null,
@@ -786,6 +789,22 @@
         ? `${c.value} SELECTED odds`
         : `${c.value} EXCLUDED ${c.exclude_reason || "rejected"}`,
     }));
+    const rootStatus = pipeline.fallback_used
+      ? "FALLBACK"
+      : pipeline.steps?.X10_ROOT === "PASS"
+        ? "FOUND"
+        : pipeline.steps?.X10_TEXT_BLOCK === "PASS"
+          ? "TEXT_BLOCK"
+          : "MISSING";
+    const selectionText = pipeline.selection_text || "";
+    const oddsText = pipeline.odds_text || "";
+    const extracted = pipeline.odds;
+    const oddsLocatorDebug = [
+      `Root ${rootStatus}`,
+      selectionText ? `Selection:\n${selectionText}` : "Selection:",
+      oddsText ? `Odds:\n${oddsText}` : "Odds:",
+      extracted != null ? `Extracted:\n${extracted}` : "Extracted:",
+    ].join("\n\n");
     return {
       site: "x10",
       frame_url: location.href,
@@ -793,10 +812,13 @@
       document_ready: frameInfo.readyState,
       body_text_length: frameInfo.bodyLength,
       has_betslip_keyword: frameInfo.hasBetSlipKeyword,
+      anchor_hits: frameInfo.anchor_hits || {},
       injected_frame: true,
       target_frame: frameInfo.hasBetSlipKeyword ? location.href : "",
-      root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
-      slip_root_found: pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
+      root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : pipeline.steps?.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+      slip_root_found: pipeline.fallback_used ? "NO" : pipeline.steps?.X10_ROOT === "PASS" ? "YES" : "NO",
+      fallback_used: !!pipeline.fallback_used,
+      fallback_attempted: !!pipeline.fallback_attempted,
       root_selector: pipeline.rootSelector || "",
       container_selector: pipeline.rootSelector || "",
       slip_count: pipeline.slip_count ?? 0,
@@ -808,6 +830,20 @@
       odds_candidates: debugCandidates,
       odds_source: pipeline.odds_source || "",
       extracted_odds: pipeline.odds,
+      selection_text: selectionText,
+      selection_node: pipeline.selection_node || null,
+      odds_text: oddsText,
+      odds_node: pipeline.odds_node || null,
+      odds_locator: {
+        root: rootStatus,
+        selection_text: selectionText,
+        selection_node: pipeline.selection_node || null,
+        odds_text: oddsText,
+        odds_node: pipeline.odds_node || null,
+        extracted_odds: extracted,
+        method: pipeline.odds_method || pipeline.odds_source || "",
+      },
+      odds_locator_debug: oddsLocatorDebug,
       parsed_status: pipeline.status || "empty",
       status_reason: pipeline.steps?.first_failure || pipeline.status || "",
       keyword_candidates: pipeline.keyword_candidates || [],
@@ -892,6 +928,7 @@
   function isX10LineValue(val, leafText, parentText, contextBlob) {
     const blob = `${contextBlob} ${parentText} ${leafText}`.toLowerCase();
     const valStr = String(val);
+    if (isX10ParenLineValue(leafText, valStr) || isX10ParenLineValue(parentText, valStr)) return true;
     if (/[+-]\s*\d/.test(leafText) || /[+-]\d/.test(leafText)) {
       const m = leafText.match(/[+-]\s*(\d+(?:\.\d+)?)/);
       if (m && Math.abs(parseFloat(m[1]) - val) < 0.001) return true;
@@ -911,10 +948,14 @@
     if (stake != null && Math.abs(val - stake) < 0.001) return "stake";
     if (X10_CHIP_AMOUNTS.has(val)) return "stake";
     if (Number.isInteger(val) && val >= 1000) return "stake";
+    const lt = String(leafText || "").trim().replace(/,/g, "");
+    if (/^\+?[\d,]+$/.test(lt) && val >= 1000) return "stake";
     const blob = `${leafText} ${parentText} ${contextBlob}`;
     if (/당첨\s*예상|예상\s*금액|expected\s*payout|payout/i.test(blob)) return "payout";
     if (/잔액|balance/i.test(blob)) return "balance";
     if (/\+\s*[\d,]+/.test(leafText)) return "stake";
+    if (/^최대$/.test(leafText.trim())) return "stake";
+    if (/^₩$|^원$/.test(leafText.trim())) return "stake";
     if (/^\d{1,2}$/.test(leafText.trim())) return "score";
     if (isX10LineValue(val, leafText, parentText, contextBlob)) return "line";
     if (!/\./.test(leafText) && val < 10 && Number.isInteger(val)) return "inning";
@@ -941,6 +982,196 @@
       });
     }, 0);
     return leaves;
+  }
+
+  function x10NodeDescriptor(node) {
+    if (!node) return null;
+    return {
+      tag: node.tagName?.toLowerCase() || "",
+      className: String(node.className || "").slice(0, 80),
+      text: (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+      selector: selectorHint(node),
+    };
+  }
+
+  /** selection 행: 오버 (6.5) — 괄호 안 6.5는 기준점 */
+  function isX10SelectionLineText(rawText) {
+    const t = String(rawText || "").trim();
+    if (!t || t.length > 120) return false;
+    if (/^(베팅슬립|베팅 슬립|싱글|조합|멀티|더블)$/i.test(t)) return false;
+    if (/배팅\s*수락|베팅하기|배팅하기|당첨/i.test(t)) return false;
+    if (/\d+\.\d+\s*@\s*\d/.test(t)) return false;
+    if (/(오버|언더|Over|Under)/i.test(t) && /\(\s*\d+\.\d+\s*\)/.test(t)) return true;
+    if (/(핸디|핸디캡|Handicap)/i.test(t) && /[+-]?\d+\.?\d*/.test(t)) return true;
+    return false;
+  }
+
+  function isX10ParenLineValue(lineText, token) {
+    const escaped = String(token).replace(".", "\\.");
+    return new RegExp(`\\(\\s*${escaped}\\s*\\)`).test(lineText || "");
+  }
+
+  function isX10StandaloneOddsLine(rawText) {
+    const t = String(rawText || "").trim().replace(/,/g, "");
+    const m = t.match(/^@?\s*(\d{1,2}\.\d{2})$/);
+    if (!m) return false;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= X10_ODDS_MIN && n <= X10_ODDS_MAX;
+  }
+
+  function isX10MoneyZoneLeaf(rawText) {
+    const t = String(rawText || "").trim();
+    if (t === "₩" || t === "원" || /^KRW$/i.test(t)) return true;
+    if (/^최대$/.test(t)) return true;
+    if (/^\+[\d,]+/.test(t)) return true;
+    if (/^[\d,]+\s*₩$/.test(t)) return true;
+    if (/당첨\s*예상/.test(t)) return true;
+    return false;
+  }
+
+  function extractX10LineNumbers(selectionText) {
+    const nums = new Set();
+    const t = String(selectionText || "");
+    for (const m of t.matchAll(/\(\s*([+-]?\d+(?:\.\d+)?)\s*\)/g)) {
+      const n = parseFloat(m[1]);
+      if (Number.isFinite(n)) nums.add(n);
+    }
+    const hc = t.match(/[+-]\s*(\d+(?:\.\d+)?)/);
+    if (hc) nums.add(parseFloat(hc[1]));
+    return nums;
+  }
+
+  function resolveX10OddsScope(root) {
+    const probe = global.ArbX10Probe;
+    const cards = probe?.findSlipCards?.(root) || [];
+    if (cards.length === 1) return cards[0];
+    return root;
+  }
+
+  function buildX10OddsPick(pick, candidates, extra) {
+    return {
+      odds: pick.value,
+      candidates,
+      source: pick.source,
+      selection_text: extra.selection_text || "",
+      selection_node: extra.selection_node || null,
+      odds_text: extra.odds_text || pick.text || String(pick.value),
+      odds_node: extra.odds_node || null,
+      method: extra.method || pick.source,
+    };
+  }
+
+  /** 우선순위 1: slip card 내부 selection → 다음 유효 leaf 배당 */
+  function extractX10OddsFromSelection(root, stake, contextBlob) {
+    if (!root) return { odds: null, candidates: [], source: "" };
+
+    const scope = resolveX10OddsScope(root);
+    const scopeBlob = text(scope);
+    const candidates = [];
+    const leaves = collectX10LeafTexts(scope);
+    let moneyZone = false;
+
+    for (let li = 0; li < leaves.length; li += 1) {
+      const leaf = leaves[li];
+      const lt = leaf.text.trim();
+
+      if (isX10MoneyZoneLeaf(lt)) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
+
+      if (!isX10SelectionLineText(leaf.text)) continue;
+
+      const selectionText = leaf.text.trim();
+      const selectionNode = x10NodeDescriptor(leaf.node);
+      const lineNumbers = extractX10LineNumbers(selectionText);
+
+      for (let fi = li + 1; fi < Math.min(li + 10, leaves.length); fi += 1) {
+        const follow = leaves[fi];
+        const followText = follow.text.trim();
+        if (isX10MoneyZoneLeaf(followText)) break;
+        if (isX10SelectionLineText(followText)) break;
+        if (!isX10StandaloneOddsLine(followText)) continue;
+        const val = parseFloat(followText.replace(/^@/, ""));
+        if (lineNumbers.has(val)) continue;
+        const reason = x10ExcludeReason(
+          val,
+          followText,
+          follow.parentText,
+          `${follow.grandparentText} ${scopeBlob}`,
+          stake,
+        );
+        const entry = {
+          value: val,
+          text: followText,
+          tag: follow.tag,
+          className: follow.className,
+          parentText: follow.parentText,
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: selectionText,
+            selection_node: selectionNode,
+            odds_text: followText,
+            odds_node: x10NodeDescriptor(follow.node),
+            method: "selection_card_leaf",
+            line: [...lineNumbers][0] ?? null,
+          });
+        }
+      }
+    }
+
+    moneyZone = false;
+    const lines = scopeBlob.replace(/\r/g, "").split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length - 1; i += 1) {
+      if (isX10MoneyZoneLeaf(lines[i])) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
+      if (!isX10SelectionLineText(lines[i])) continue;
+      const lineNumbers = extractX10LineNumbers(lines[i]);
+      for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
+        if (isX10MoneyZoneLeaf(lines[j])) break;
+        if (isX10SelectionLineText(lines[j])) break;
+        if (!isX10StandaloneOddsLine(lines[j])) continue;
+        const val = parseFloat(lines[j].replace(/^@/, ""));
+        if (lineNumbers.has(val)) continue;
+        const reason = x10ExcludeReason(val, lines[j], lines[i], scopeBlob, stake);
+        const entry = {
+          value: val,
+          text: lines[j],
+          tag: "",
+          className: "",
+          parentText: lines[i],
+          source: "selection",
+          excluded: Boolean(reason),
+          exclude_reason: reason || "",
+          selected: false,
+        };
+        candidates.push(entry);
+        if (!reason) {
+          entry.selected = true;
+          return buildX10OddsPick(entry, candidates, {
+            selection_text: lines[i],
+            selection_node: null,
+            odds_text: lines[j],
+            odds_node: null,
+            method: "selection_text_lines",
+            line: [...lineNumbers][0] ?? null,
+          });
+        }
+      }
+    }
+
+    return { odds: null, candidates, source: "" };
   }
 
   function extractX10OddsFromDedicated(root, stake, contextBlob) {
@@ -984,13 +1215,32 @@
 
   function extractX10OddsFromRoot(root, stake) {
     const contextBlob = text(root);
-    const dedicated = extractX10OddsFromDedicated(root, stake, contextBlob);
-    if (dedicated.odds != null) return dedicated;
+    const scope = resolveX10OddsScope(root);
+    const fromSelection = extractX10OddsFromSelection(root, stake, contextBlob);
+    if (fromSelection.odds != null) return fromSelection;
 
-    const candidates = [...dedicated.candidates];
-    for (const leaf of collectX10LeafTexts(root)) {
+    const dedicated = extractX10OddsFromDedicated(scope, stake, text(scope));
+    if (dedicated.odds != null) {
+      return {
+        ...dedicated,
+        selection_text: "",
+        selection_node: null,
+        odds_text: dedicated.candidates?.find((c) => c.selected)?.text || String(dedicated.odds),
+        odds_node: null,
+        method: dedicated.source,
+      };
+    }
+
+    const candidates = [...fromSelection.candidates, ...dedicated.candidates];
+    let moneyZone = false;
+    for (const leaf of collectX10LeafTexts(scope)) {
+      if (isX10MoneyZoneLeaf(leaf.text)) {
+        moneyZone = true;
+        continue;
+      }
+      if (moneyZone) continue;
       const normalized = leaf.text.replace(/,/g, "");
-      const m = normalized.match(/^@?\s*([+-]?\d+(?:\.\d{1,4})?)$/);
+      const m = normalized.match(/^@?\s*(\d{1,2}\.\d{2})$/);
       if (!m) continue;
       const val = parseFloat(m[1]);
       const reason = x10ExcludeReason(
@@ -1006,6 +1256,7 @@
         tag: leaf.tag,
         className: leaf.className,
         parentText: leaf.parentText,
+        node: leaf.node,
         source: "leaf",
         excluded: Boolean(reason),
         exclude_reason: reason || "",
@@ -1021,10 +1272,19 @@
       pick.selected = true;
     }
 
-    return { odds, candidates, source: pick?.source || "leaf" };
+    return {
+      odds,
+      candidates,
+      source: pick?.source || "leaf",
+      selection_text: "",
+      selection_node: null,
+      odds_text: pick?.text || (odds != null ? String(odds) : ""),
+      odds_node: pick ? x10NodeDescriptor(pick.node) : null,
+      method: pick?.source || "leaf",
+    };
   }
 
-  function readX10Slip() {
+  function readX10Slip(frameProbe) {
     const probeApi = global.ArbX10Probe;
     if (!probeApi?.runPipeline) {
       return {
@@ -1036,20 +1296,28 @@
       };
     }
 
-    const pipeline = probeApi.runPipeline((root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake));
+    const frameInfo = frameProbe || probeApi.probeFrame?.();
+    const pipeline = probeApi.runPipeline(
+      (root, stake) => extractX10OddsFromRoot(root, readX10Stake(root) ?? stake),
+      { frame: frameInfo },
+    );
     const steps = pipeline.steps || {};
     const root = pipeline.root || null;
+    const fallbackUsed = !!pipeline.fallback_used;
 
-    if (!root) {
+    if (!pipeline.ok && !root) {
       resetX10SlipState();
       return {
-        ok: steps.X10_FRAME === "PASS",
+        ok: false,
         empty: true,
         items: [],
-        reason: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "no-slip-root",
+        reason: pipeline.fallback_attempted ? "fallback-parse-failed" : "no-slip-root",
         frame_url: location.href,
         slip_root_found: "NO",
-        root_found: steps.X10_ROOT === "ROOT_SELECTOR_FAILED" ? "ROOT_SELECTOR_FAILED" : "NO",
+        root_found: "NO",
+        fallback_used: fallbackUsed,
+        fallback_attempted: !!pipeline.fallback_attempted,
+        anchor_hits: pipeline.anchor_hits || frameInfo?.anchor_hits || {},
         slip_inner_text: pipeline.bodySnippet || pipeline.frame?.bodySnippet || "",
         pipeline_steps: steps,
         first_failure: steps.first_failure || "",
@@ -1061,26 +1329,34 @@
       };
     }
 
-    const revision = trackX10Root(root);
-    const rootText = text(root);
-    const stake = readX10Stake(root);
+    const revision = root ? trackX10Root(root) : x10RootTracker.revision;
+    const rootText = root ? text(root) : pipeline.bodySnippet || "";
+    const stake = root ? readX10Stake(root) : null;
     const odds = pipeline.odds;
     const candidates = pipeline.odds_candidates || [];
     const slipCount = pipeline.slip_count ?? 0;
+    const statusBlob = pipeline.text_block || rootText;
 
-    const statusResult = resolveX10SlipStatus(root, rootText, odds);
+    const statusResult = root
+      ? resolveX10SlipStatus(root, rootText, odds)
+      : { status: pipeline.status, reason: pipeline.status, diagnostics: {} };
     let slipStatus = pipeline.status === "active" ? "active" : statusResult.status;
-    if (odds != null && steps.X10_ODDS === "PASS" && steps.X10_ITEM === "PASS" && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
+    const itemOk = slipCount === 1;
+    if (odds != null && itemOk && slipStatus !== "closed" && slipStatus !== "suspended" && slipStatus !== "disabled") {
       slipStatus = "active";
     }
 
-    const parsed = parseX10SlipText(rootText);
+    const textParsed = pipeline.text_parsed || probeApi.parseX10SlipText?.(statusBlob) || {};
+    const metaParsed = parseX10SlipMeta(statusBlob);
     const base = {
-      source: "dom",
+      source: fallbackUsed ? "text-fallback" : "dom",
       frame_url: location.href,
-      container_selector: pipeline.rootSelector || selectorHint(root),
-      slip_root_found: "YES",
-      root_found: "YES",
+      container_selector: pipeline.rootSelector || (root ? selectorHint(root) : ""),
+      slip_root_found: root ? "YES" : "NO",
+      root_found: root ? "YES" : "NO",
+      fallback_used: fallbackUsed,
+      fallback_attempted: !!pipeline.fallback_attempted,
+      anchor_hits: pipeline.anchor_hits || frameInfo?.anchor_hits || {},
       slip_count: slipCount,
       slip_inner_text: pipeline.bodySnippet || rootText.slice(0, 1500),
       pipeline_steps: steps,
@@ -1088,60 +1364,61 @@
       odds_candidates: candidates,
       odds_source: pipeline.odds_source || "",
       extracted_odds: odds,
+      line: pipeline.line ?? textParsed.line ?? null,
       parsed_status: slipStatus,
       status_reason: steps.first_failure || statusResult.reason || slipStatus,
       status_diagnostics: statusResult.diagnostics,
       slip_items: pipeline.slip_items || [],
       revision,
-      anchor_method: pipeline.anchorMethod || "text-anchor",
+      anchor_method: pipeline.anchorMethod || "text-fallback",
     };
 
-    if (slipStatus === "active" && odds != null && slipCount === 1) {
+    if ((pipeline.ok || slipStatus === "active" || pipeline.status === "active") && odds != null && itemOk) {
       const item = enrichItem(
         {
-          event: parsed.event || "",
-          market: parsed.market || "",
-          selection: parsed.selection || "",
+          event: textParsed.event || metaParsed.event || "",
+          market: textParsed.market || metaParsed.market || pipeline.selection_text || "",
+          selection: textParsed.selection || metaParsed.selection || pipeline.selection_text || "",
           odds,
           status: "active",
-          status_reason: "active",
+          status_reason: pipeline.item_warning ? `active:${pipeline.item_warning}` : fallbackUsed ? "active:text-fallback" : "active",
           stake,
-          container_selector: pipeline.rootSelector || selectorHint(root),
-          dom_hash: domHash(root),
+          container_selector: pipeline.rootSelector || (root ? selectorHint(root) : ""),
+          dom_hash: root ? domHash(root) : domHash({ innerText: statusBlob }),
           status_diagnostics: statusResult.diagnostics,
         },
-        parsed.event,
+        textParsed.event || metaParsed.event,
       );
       return enrichSlipResult({ ok: true, empty: false, items: [item], ...base }, root);
     }
 
     const closedLike = ["closed", "suspended", "disabled", "closed_pending"].includes(slipStatus);
-    if (closedLike || odds == null || slipCount !== 1) {
+    if (closedLike || odds == null || !itemOk) {
       return enrichSlipResult(
         {
-          ok: true,
+          ok: hasSlipData,
           empty: slipCount === 0 && odds == null,
           items:
             slipCount > 0 || odds != null
               ? [
                   enrichItem(
                     {
-                      event: parsed.event || "",
-                      market: parsed.market || "",
-                      selection: parsed.selection || "",
+                      event: textParsed.event || metaParsed.event || "",
+                      market: textParsed.market || metaParsed.market || "",
+                      selection: textParsed.selection || metaParsed.selection || pipeline.selection_text || "",
                       odds: slipStatus === "active" ? odds : null,
                       previous_odds: null,
-                      status: slipCount !== 1 ? "odds_missing" : slipStatus,
+                      status: !itemOk ? "odds_missing" : slipStatus,
                       status_reason: steps.first_failure || statusResult.reason,
                       stake,
-                      container_selector: pipeline.rootSelector || selectorHint(root),
+                      container_selector: pipeline.rootSelector || "",
                       status_diagnostics: statusResult.diagnostics,
                     },
-                    parsed.event,
+                    textParsed.event || metaParsed.event,
                   ),
                 ]
               : [],
-          reason: steps.first_failure || (slipCount !== 1 ? `slip_count=${slipCount}` : "odds-missing"),
+          reason: steps.first_failure || (!itemOk ? `slip_count=${slipCount}` : "odds-missing"),
           ...base,
         },
         root,
